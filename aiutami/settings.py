@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import timedelta
 import os
 
 # Percorso base del progetto
@@ -28,7 +29,7 @@ INSTALLED_APPS = [
     "channels",
 
    
-    # "apps.accounts",
+     "apps.accounts",
     # "apps.sessions",
     # "apps.turns",
     # "apps.moderation",
@@ -89,6 +90,9 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
+      "DEFAULT_PERMISSION_CLASSES": (
+        "rest_framework.permissions.IsAuthenticated",
+    ),
 }
 
 # Lingua e fuso orario
@@ -116,3 +120,9 @@ CHANNEL_LAYERS = {
 # Configurazione Celery (per i task periodici e i trigger del moderatore)
 CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "AUTH_HEADER_TYPES": ("Bearer",),
+}
