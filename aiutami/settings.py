@@ -30,7 +30,7 @@ INSTALLED_APPS = [
 
    
      "apps.accounts",
-    # "apps.sessions",
+     "apps.sessions.apps.SessionsConfig",   #label unica per session ->confltto con quella d django
     # "apps.turns",
     # "apps.moderation",
     # "apps.realtime",

@@ -8,6 +8,10 @@ urlpatterns = [
     # Endpoint JWT
     path("api/auth/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("api/auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+
     # Accounts
     path("api/accounts/", include("apps.accounts.urls")),
+
+    # Sessions
+    path("api/sessions/", include("apps.sessions.urls")),
 ]
