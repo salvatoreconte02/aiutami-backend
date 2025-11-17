@@ -298,7 +298,14 @@ class ParticipantItemSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_user(self, obj: SessionParticipant) -> Dict[str, Any]:
-        return {"id": obj.user_id}
+        # Ritorna informazioni pubbliche sul partecipante.
+        u = obj.user
+        return {
+            "id": u.id,
+            "username": u.username,
+            "first_name": u.first_name,
+            "last_name": u.last_name,
+        }
 
 
 class ParticipantsListSerializer(serializers.ListSerializer):
