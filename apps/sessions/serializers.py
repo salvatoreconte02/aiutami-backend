@@ -41,8 +41,16 @@ class SessionCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Session
-        fields = ("id", "title", "context", "state", "min_size", "max_size", "host", "participants_count")
-       
+        fields = (
+            "id",
+            "title",
+            "context",
+            "state",
+            "min_size",
+            "max_size",
+            "host",
+            "participants_count",
+        )
         extra_kwargs = {
             "min_size": {"required": False},
             "max_size": {"required": False},
@@ -60,7 +68,9 @@ class SessionCreateSerializer(serializers.ModelSerializer):
         else:
             # Altri contesti: richiedere esplicitamente min/max se non presenti
             if "min_size" not in attrs or "max_size" not in attrs:
-                raise serializers.ValidationError("Per questo contesto sono richiesti min_size e max_size.")
+                raise serializers.ValidationError(
+                    "Per questo contesto sono richiesti min_size e max_size."
+                )
         return attrs
 
     @transaction.atomic
@@ -71,18 +81,29 @@ class SessionCreateSerializer(serializers.ModelSerializer):
             session.full_clean()
         except Exception as e:
             from django.core.exceptions import ValidationError as DjangoVE
+
             if isinstance(e, DjangoVE):
                 raise serializers.ValidationError(
-                    getattr(e, "message_dict", None) or getattr(e, "messages", None) or str(e)
+                    getattr(e, "message_dict", None)
+                    or getattr(e, "messages", None)
+                    or str(e)
                 )
             raise
         session.save()
-        SessionParticipant.objects.create(session=session, user=user, role=ParticipantRole.HOST)
+        # Host come participant
+        SessionParticipant.objects.create(
+            session=session, user=user, role=ParticipantRole.HOST
+        )
+        # Evento di creazione
         SessionEvent.objects.create(
             session=session,
             type=SessionEventType.CREATED,
             actor=user,
-            payload={"context": session.context, "min_size": session.min_size, "max_size": session.max_size},
+            payload={
+                "context": session.context,
+                "min_size": session.min_size,
+                "max_size": session.max_size,
+            },
         )
         return session
 
@@ -91,7 +112,7 @@ class SessionDetailSerializer(serializers.ModelSerializer):
     participants_count = serializers.IntegerField(read_only=True)
     me = serializers.SerializerMethodField()
     host = serializers.SerializerMethodField()
-    invite_url = serializers.SerializerMethodField()  # << aggiunto
+    invite_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Session
@@ -105,9 +126,8 @@ class SessionDetailSerializer(serializers.ModelSerializer):
             "host",
             "participants_count",
             "me",
-            "invite_url",  # << aggiunto
+            "invite_url",
             "created_at",
-            "published_at",
             "started_at",
             "conclusion_at",
             "ended_at",
@@ -143,33 +163,6 @@ class SessionDetailSerializer(serializers.ModelSerializer):
 # -------------------------
 #  Session transitions
 # -------------------------
-
-class SessionPublishSerializer(serializers.Serializer):
-    """DRAFT -> LOBBY"""
-
-    def validate(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
-        session: Session = self.instance
-        user = self.context["request"].user
-        if session.host_id != user.id:
-            raise serializers.ValidationError("Solo l'host può pubblicare la sessione.")
-        if session.state != SessionState.DRAFT:
-            raise serializers.ValidationError("La sessione non è in stato DRAFT.")
-        return attrs
-
-    @transaction.atomic
-    def save(self, **kwargs: Any) -> Session:
-        session: Session = self.instance
-        session.publish()
-        session.full_clean()
-        session.save(update_fields=["state", "published_at"])
-        SessionEvent.objects.create(
-            session=session,
-            type=SessionEventType.PUBLISHED,
-            actor=self.context["request"].user,
-            payload={"published_at": timezone.now().isoformat()},
-        )
-        return session
-
 
 class SessionStartSerializer(serializers.Serializer):
     """LOBBY -> ACTIVE"""
@@ -315,7 +308,7 @@ class ParticipantsListSerializer(serializers.ListSerializer):
 class MySessionsListSerializer(serializers.ModelSerializer):
     participants_count = serializers.IntegerField(read_only=True)
     role = serializers.SerializerMethodField()
-    invite_url = serializers.SerializerMethodField()  # << aggiunto
+    invite_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Session
@@ -327,7 +320,7 @@ class MySessionsListSerializer(serializers.ModelSerializer):
             "max_size",
             "participants_count",
             "role",
-            "invite_url",  # << aggiunto
+            "invite_url",
             "created_at",
             "started_at",
         )

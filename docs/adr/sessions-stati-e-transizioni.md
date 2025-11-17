@@ -1,38 +1,39 @@
-# ADR 0001 — Stati e Transizioni dell’app Sessions (MVP)
+ADR 0001 — Stati e Transizioni dell’app Sessions (MVP)
+	•	Stato: ACCETTATA
+	•	Data: (inserire data approvazione)
 
-- **Stato**: ACCETTATA
-- **Data**: (inserire data approvazione)
+Contesto
 
-## Contesto
-AIutami gestisce sessioni vocali moderate. È necessario uno schema di stati semplice, prevedibile e coerente con l’MVP, che imponga chi può eseguire le transizioni e quando.
+AIutami gestisce sessioni vocali moderate. È necessario definire un ciclo di vita semplice e prevedibile, compatibile con l’MVP e con il modello operativo concordato, in cui la sessione risulta immediatamente predisposta all’ingresso dei partecipanti.
 
-## Decisione
-1. Stati ammessi: `DRAFT → LOBBY → ACTIVE → CONCLUSION → CLOSED`.
-2. Responsabilità transizioni:
-   - `DRAFT → LOBBY`: solo HOST (pubblicazione).
-   - `LOBBY → ACTIVE`: solo HOST (avvio), **solo** quando la capienza richiesta è raggiunta.
-   - `ACTIVE → CONCLUSION`: **automatica** quando tutti i partecipanti sono “pronti alla conclusione” **oppure** scade il timer.
-   - `CONCLUSION → CLOSED`: **automatica** al termine della fase conclusiva.
-3. Non sono previsti co-host né chiusure forzate in LOBBY/ACTIVE.
-4. L’invito è un token riutilizzabile: l’accesso è regolato dallo stato (`LOBBY`) e dalla capienza disponibile.
+Decisione
+	1.	Stati ammessi: LOBBY → ACTIVE → CONCLUSION → CLOSED.
+	2.	Responsabilità delle transizioni:
+	•	LOBBY → ACTIVE: esclusivamente HOST, e solo quando la capienza prevista è raggiunta.
+	•	ACTIVE → CONCLUSION: automatica, sulla base delle condizioni definite dal servizio applicativo (completamento attività, esito logico o timer).
+	•	CONCLUSION → CLOSED: automatica al termine della fase conclusiva.
+	3.	L’accesso tramite invito è consentito solo in LOBBY, nel rispetto della capienza.
+	4.	Non sono previsti stati intermedi né ruoli aggiuntivi nel ciclo di vita.
 
-## Conseguenze
-- Frontend e backend hanno confini netti: l’HOST controlla solo le prime due transizioni; il resto è guidato da eventi.
-- Gli endpoint sono meno numerosi e più chiari; la logica di concorrenza si concentra su join e avvio.
-- Il debugging degli stati è facilitato grazie all’audit minimo.
+Conseguenze
+	•	La creazione di una sessione produce direttamente lo stato LOBBY, eliminando la precedente fase di bozza.
+	•	La responsabilità dell’HOST si concentra esclusivamente sull’avvio della sessione; tutte le fasi successive sono determinate dal sistema.
+	•	L’architettura degli endpoint risulta più compatta e meno soggetta a errori di sincronizzazione.
+	•	L’audit degli eventi consente la ricostruzione del ciclo di vita con minore complessità operativa.
 
-## Alternative considerate
-- **Co-host**: scartato per semplicità MVP.
-- **Chiusura forzata in LOBBY/ACTIVE**: scartata; la chiusura deve riflettere lo svolgimento naturale (consenso o timer).
-- **Inviti con limiti/scadenze**: scartato per MVP; si demanda a versioni successive.
+Alternative considerate
+	•	Introduzione di uno stato DRAFT: eliminato perché ridondante rispetto alle esigenze attuali.
+	•	Co-host e privilegi aggiuntivi: rinviato a versioni successive per evitare complessità non necessarie nell’MVP.
+	•	Inviti con limiti o scadenza: esclusi in questa fase; la gestione rimane volutamente minimale.
 
-## Rischi e mitigazioni
-- **Rischio**: blocco in ACTIVE se qualcuno non preme “pronto” e il timer non scade.  
-  **Mitigazione**: definire una policy di timer chiara e comunicarla nella UI.
-- **Rischio**: corsa al join in lobby.  
-  **Mitigazione**: politiche di integrità (capienza non superabile, unicità partecipazione).
-- **Rischio**: ambiguità sugli eventi automatici.  
-  **Mitigazione**: specifiche funzionali e audit che registrino trigger e transizioni.
+Rischi e mitigazioni
+	•	Rischio: permanenza prolungata in ACTIVE in assenza delle condizioni di conclusione.
+Mitigazione: utilizzo di timer e trigger applicativi chiari, documentati e verificabili.
+	•	Rischio: saturazione rapida della capienza in LOBBY.
+Mitigazione: applicazione rigorosa delle politiche di integrità e unicità partecipazione.
+	•	Rischio: ambiguità nella gestione degli eventi automatici.
+Mitigazione: definizione puntuale dei trigger e audit strutturato.
 
-## Stato futuro
-Le estensioni (co-host, revoche/scadenze inviti, stati intermedi) potranno essere introdotte con ADR dedicate senza impattare l’impianto di base.
+Stato futuro
+
+Elementi come co-host, revoche di inviti, stati aggiuntivi o logiche avanzate di moderazione potranno essere introdotti tramite ADR dedicate senza modificare la struttura definita.

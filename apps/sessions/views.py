@@ -17,7 +17,6 @@ from .serializers import (
     ParticipantsListSerializer,
     SessionCreateSerializer,
     SessionDetailSerializer,
-    SessionPublishSerializer,
     SessionStartSerializer,
 )
 from .permissions import IsSessionMember
@@ -30,7 +29,7 @@ from .permissions import IsSessionMember
 class SessionCreateView(generics.CreateAPIView):
     """
     POST /api/sessions/
-    Crea una sessione in DRAFT; il chiamante diventa HOST.
+    Crea una sessione direttamente in LOBBY; il chiamante diventa HOST.
     """
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = SessionCreateSerializer
@@ -55,21 +54,6 @@ class SessionDetailView(generics.RetrieveAPIView):
 #  Sessions: transitions
 # ---------------------------
 
-class SessionPublishView(APIView):
-    """
-    POST /api/sessions/{session_id}/publish/
-    Transizione DRAFT -> LOBBY (solo host).
-    """
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request, session_id: str):
-        session = get_object_or_404(Session, pk=session_id)
-        serializer = SessionPublishSerializer(instance=session, data={}, context={"request": request})
-        serializer.is_valid(raise_exception=True)
-        session = serializer.save()
-        return Response({"id": str(session.id), "state": session.state, "published_at": session.published_at}, status=status.HTTP_200_OK)
-
-
 class SessionStartView(APIView):
     """
     POST /api/sessions/{session_id}/start/
@@ -79,10 +63,21 @@ class SessionStartView(APIView):
 
     def post(self, request, session_id: str):
         session = get_object_or_404(Session, pk=session_id)
-        serializer = SessionStartSerializer(instance=session, data={}, context={"request": request})
+        serializer = SessionStartSerializer(
+            instance=session,
+            data={},
+            context={"request": request}
+        )
         serializer.is_valid(raise_exception=True)
         session = serializer.save()
-        return Response({"id": str(session.id), "state": session.state, "started_at": session.started_at}, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "id": str(session.id),
+                "state": session.state,
+                "started_at": session.started_at,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 # ---------------------------
@@ -98,7 +93,11 @@ class InvitationCreateView(APIView):
 
     def post(self, request, session_id: str):
         session = get_object_or_404(Session, pk=session_id)
-        serializer = InvitationCreateSerializer(instance=session, data={}, context={"request": request})
+        serializer = InvitationCreateSerializer(
+            instance=session,
+            data={},
+            context={"request": request},
+        )
         serializer.is_valid(raise_exception=True)
         data = serializer.save()
         return Response(data, status=status.HTTP_200_OK)
@@ -107,7 +106,7 @@ class InvitationCreateView(APIView):
 class JoinByTokenView(generics.CreateAPIView):
     """
     POST /api/sessions/join_by_token/
-    Entra in lobby tramite token; diventa PARTICIPANT se c’è posto.
+    Entra in una sessione in LOBBY tramite token.
     """
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = JoinByTokenSerializer
@@ -125,13 +124,18 @@ class ParticipantsListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated, IsSessionMember]
     serializer_class = ParticipantItemSerializer
     lookup_url_kwarg = "session_id"
-    pagination_class = None  # lista breve; niente paginazione
+    pagination_class = None
 
     def get_queryset(self):
         session = get_object_or_404(Session, pk=self.kwargs[self.lookup_url_kwarg])
-        # object-level permission con IsSessionMember
+        # object-level permission
         self.check_object_permissions(self.request, session)
-        return SessionParticipant.objects.filter(session=session).select_related("user").order_by("joined_at")
+        return (
+            SessionParticipant.objects
+            .filter(session=session)
+            .select_related("user")
+            .order_by("joined_at")
+        )
 
 
 # ---------------------------
@@ -150,10 +154,11 @@ class MySessionsListView(generics.ListAPIView):
     def get_queryset(self):
         user = self.request.user
         qs = Session.objects.filter(participants__user=user).distinct()
+
         state = self.request.query_params.get("state")
         if state:
-            # accetta solo stati validi
             valid_states = {s for s, _ in SessionState.choices}
             if state in valid_states:
                 qs = qs.filter(state=state)
+
         return qs.order_by("-created_at")

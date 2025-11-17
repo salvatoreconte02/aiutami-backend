@@ -9,7 +9,6 @@ from django.utils import timezone
 
 
 class SessionState(models.TextChoices):
-    DRAFT = "DRAFT", "Draft"
     LOBBY = "LOBBY", "Lobby"
     ACTIVE = "ACTIVE", "Active"
     CONCLUSION = "CONCLUSION", "Conclusion"
@@ -30,7 +29,6 @@ class ParticipantRole(models.TextChoices):
 
 class SessionEventType(models.TextChoices):
     CREATED = "CREATED", "Created"
-    PUBLISHED = "PUBLISHED", "Published"
     INVITE_CREATED = "INVITE_CREATED", "Invite created"
     JOINED = "JOINED", "Joined"
     STARTED = "STARTED", "Started"
@@ -42,7 +40,7 @@ class Session(models.Model):
     """
     Contenitore della stanza vocale e del suo ciclo di vita.
     Regole chiave (MVP):
-      - Stati: DRAFT -> LOBBY -> ACTIVE -> CONCLUSION -> CLOSED
+      - Stati: LOBBY -> ACTIVE -> CONCLUSION -> CLOSED
       - Join consentito solo in LOBBY
       - Capienza non superabile
       - Murder Mystery: min_size=max_size=3 (obbligatorio)
@@ -54,7 +52,7 @@ class Session(models.Model):
     title = models.CharField(max_length=200)
     context = models.CharField(max_length=32, choices=SessionContext.choices)
     state = models.CharField(
-        max_length=16, choices=SessionState.choices, default=SessionState.DRAFT
+        max_length=16, choices=SessionState.choices, default=SessionState.LOBBY
     )
 
     # Capienza
@@ -70,7 +68,6 @@ class Session(models.Model):
 
     # Timeline
     created_at = models.DateTimeField(auto_now_add=True)
-    published_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     conclusion_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
@@ -104,13 +101,6 @@ class Session(models.Model):
     def participants_count(self) -> int:
         # Include l'host (creato come participant con ruolo HOST)
         return self.participants.count()
-
-    def publish(self):
-        # Transizione DRAFT -> LOBBY
-        if self.state != SessionState.DRAFT:
-            raise ValidationError("La sessione non è in stato DRAFT.")
-        self.state = SessionState.LOBBY
-        self.published_at = timezone.now()
 
     def start(self):
         # Transizione LOBBY -> ACTIVE (capienza richiesta raggiunta)

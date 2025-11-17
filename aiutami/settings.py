@@ -2,17 +2,11 @@ from pathlib import Path
 from datetime import timedelta
 import os
 
-# Percorso base del progetto
-BASE_DIR = Path(__file__).resolve().parent.parent
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-secret-key-change-me")
 
-# Chiave segreta (usa una variabile d'ambiente in produzione)
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-secret-change-me")
-
-# Modalità debug (True = attiva)
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 
-# Host consentiti
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
 
 # Applicazioni installate
 INSTALLED_APPS = [
@@ -84,15 +78,14 @@ TEMPLATES = [
 # WSGI (per compatibilità)
 WSGI_APPLICATION = "aiutami.wsgi.application"
 
-# Database (PostgreSQL)
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("PGDATABASE", "aiutami"),
-        "USER": os.getenv("PGUSER", "aiutami"),
-        "PASSWORD": os.getenv("PGPASSWORD", "aiutami"),
-        "HOST": os.getenv("PGHOST", "localhost"),
-        "PORT": os.getenv("PGPORT", "5432"),
+        "NAME": os.getenv("POSTGRES_DB", "aiutami"),
+        "USER": os.getenv("POSTGRES_USER", "postgres"),
+        "PASSWORD": os.getenv("POSTGRES_PASSWORD", ""),
+        "HOST": os.getenv("POSTGRES_HOST", "127.0.0.1"),
+        "PORT": os.getenv("POSTGRES_PORT", "5432"),
     }
 }
 
