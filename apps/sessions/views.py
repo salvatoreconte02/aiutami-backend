@@ -7,6 +7,8 @@ from django.db.models import Q
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.conf import settings
+from django.utils import timezone
 
 from .models import Session, SessionParticipant, SessionState
 from .serializers import (
@@ -162,3 +164,38 @@ class MySessionsListView(generics.ListAPIView):
                 qs = qs.filter(state=state)
 
         return qs.order_by("-created_at")
+
+class SessionDebugForceCloseView(APIView):
+    """
+    Endpoint di debug (solo in DEBUG) per forzare una sessione in stato CLOSED.
+    Serve solo per sviluppo/test frontend.
+
+    POST /api/sessions/{id}/debug_force_close/
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, id):
+        # Se non siamo in DEBUG, non esporre l'endpoint
+        if not settings.DEBUG:
+            return Response({"detail": "Not found."}, status=404)
+
+        session = get_object_or_404(Session, id=id)
+
+        # Opzionale ma consigliato: solo l'host può chiudere la propria sessione
+        if session.host_id != request.user.id:
+            return Response(
+                {
+                    "detail": "Solo l'host può forzare la chiusura in ambiente di sviluppo."
+                },
+                status=403,
+            )
+
+        # Se è già CLOSED non fa danni, ma si può evitare di riscrivere
+        if session.state != SessionState.CLOSED:
+            session.state = SessionState.CLOSED
+            session.ended_at = timezone.now()
+            session.save(update_fields=["state", "ended_at"])
+
+        data = SessionDetailSerializer(session, context={"request": request}).data
+        return Response(data)

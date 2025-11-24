@@ -1,4 +1,6 @@
 from django.urls import path
+from django.conf import settings
+
 from .views import (
     InvitationCreateView,
     JoinByTokenView,
@@ -7,6 +9,7 @@ from .views import (
     SessionCreateView,
     SessionDetailView,
     SessionStartView,
+    SessionDebugForceCloseView
 )
 
 urlpatterns = [
@@ -37,3 +40,12 @@ urlpatterns = [
         name="session_join_by_token"
     ),  # POST /join_by_token/
 ]
+
+if settings.DEBUG:
+    urlpatterns += [
+        path(
+            "<uuid:id>/debug_force_close/",
+            SessionDebugForceCloseView.as_view(),
+            name="session-debug-force-close",
+        ),
+    ]
