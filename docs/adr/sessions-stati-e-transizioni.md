@@ -1,6 +1,4 @@
 ADR 0001 — Stati e Transizioni dell’app Sessions (MVP)
-	•	Stato: ACCETTATA
-	•	Data: (inserire data approvazione)
 
 Contesto
 
