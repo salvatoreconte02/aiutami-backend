@@ -60,7 +60,28 @@ class SessionCreateSerializer(serializers.ModelSerializer):
         return {"id": obj.host_id}
 
     def validate(self, attrs):
+        user = self.context["request"].user
+
+        # --- Nuova regola globale ---
+        # L’utente non può creare una sessione se è già membro
+        # di una sessione non-chiusa (LOBBY / ACTIVE / CONCLUSION).
+        active_states = {SessionState.LOBBY, SessionState.ACTIVE, SessionState.CONCLUSION}
+
+        already_in_active = (
+            Session.objects.filter(
+                participants__user=user,
+                state__in=active_states,
+            ).exists()
+        )
+
+        if already_in_active:
+            raise serializers.ValidationError(
+                "Non puoi creare una nuova sessione mentre partecipi ad una sessione già attiva."
+            )
+
+        # --- Logica originale ---
         context = attrs.get("context")
+
         # Caso Murder Mystery: forzare 3/3 anche se non passati
         if context == SessionContext.MURDER_MYSTERY:
             attrs["min_size"] = 3
@@ -71,6 +92,7 @@ class SessionCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     "Per questo contesto sono richiesti min_size e max_size."
                 )
+
         return attrs
 
     @transaction.atomic
@@ -242,12 +264,29 @@ class JoinByTokenSerializer(serializers.Serializer):
         session = invitation.session
         user = self.context["request"].user
 
+        # 1) La sessione target deve essere LOBBY
         if session.state != SessionState.LOBBY:
             raise serializers.ValidationError("La sessione non è in stato LOBBY.")
-        # Utente già partecipante?
+
+        # 2) Utente già parte di questa sessione?
         if SessionParticipant.objects.filter(session=session, user=user).exists():
             raise serializers.ValidationError("Utente già parte della sessione.")
-        # Capienza
+
+        # 3)l’utente non può essere in un’altra sessione non chiusa
+        # (LOBBY, ACTIVE, CONCLUSION)
+        if SessionParticipant.objects.filter(
+            user=user,
+            session__state__in=[
+                SessionState.LOBBY,
+                SessionState.ACTIVE,
+                SessionState.CONCLUSION,
+            ],
+        ).exists():
+            raise serializers.ValidationError(
+                "L'utente è già impegnato in un'altra sessione non chiusa."
+            )
+
+        # 4) Capienza della lobby
         if session.participants_count >= session.max_size:
             raise serializers.ValidationError("Sessione piena.")
 

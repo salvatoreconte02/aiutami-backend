@@ -75,6 +75,7 @@ Filtro opzionale per stato.
 	•	Non membro: nessun accesso, tranne join via token.
 
 7. Concorrenza e integrità (politiche)
+	•	- **Sessione attiva unica per utente**: un utente può essere partecipante attivo in **al massimo una sessione non chiusa** alla volta . Se è già membro di una sessione, non può entrare (join) né creare una nuova sessione fino alla chiusura (`CLOSED`) della precedente.
 	•	Capienza non superabile: join oltre capienza viene respinto.
 	•	Unicità partecipazione: stesso utente non può unirsi due volte.
 	•	Avvio unico: transizione ad ACTIVE eseguibile una sola volta.
