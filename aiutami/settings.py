@@ -26,7 +26,7 @@ INSTALLED_APPS = [
    
      "apps.accounts",
      "apps.sessions.apps.SessionsConfig",   #label unica per session ->confltto con quella d django
-    # "apps.turns",
+     "apps.turns.apps.TurnsConfig",
     # "apps.moderation",
     # "apps.realtime",
     # "apps.asr",
@@ -116,8 +116,7 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [os.getenv("REDIS_URL", "redis://localhost:6379/0")],
-        },
+            "hosts": [("redis", 6379)]        },
     },
 }
 
