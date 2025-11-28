@@ -4,11 +4,15 @@ from typing import Optional
 
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
+from django.conf import settings
+from django.utils import timezone
+
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from django.conf import settings
-from django.utils import timezone
+
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 
 from .models import Session, SessionParticipant, SessionState
 from .serializers import (
@@ -22,6 +26,34 @@ from .serializers import (
     SessionStartSerializer,
 )
 from .permissions import IsSessionMember
+
+
+# -------------------------------------------------------------------
+#  Helper per broadcast WebSocket delle sessioni
+# -------------------------------------------------------------------
+
+def _broadcast_session_event(session_id: str, event_type: str, payload: dict) -> None:
+    """
+    Invia un evento di sessione in broadcast al gruppo WebSocket
+    'sessions_<session_id>'.
+
+    L'handler in SessionsConsumer si aspetta:
+      - type: "session.event"
+      - event_type: stringa logica (es. "STATE_CHANGED")
+      - payload: dizionario serializzabile in JSON
+    """
+    channel_layer = get_channel_layer()
+    if not channel_layer:
+        return
+
+    async_to_sync(channel_layer.group_send)(
+        f"sessions_{session_id}",
+        {
+            "type": "sessions.event",   # deve corrispondere al metodo session_event del consumer
+            "event_type": event_type,
+            "payload": payload,
+        },
+    )
 
 
 # ---------------------------
@@ -68,18 +100,25 @@ class SessionStartView(APIView):
         serializer = SessionStartSerializer(
             instance=session,
             data={},
-            context={"request": request}
+            context={"request": request},
         )
         serializer.is_valid(raise_exception=True)
         session = serializer.save()
-        return Response(
-            {
-                "id": str(session.id),
-                "state": session.state,
-                "started_at": session.started_at,
-            },
-            status=status.HTTP_200_OK,
+
+        # Payload completo della sessione dopo la transizione
+        detail_data = SessionDetailSerializer(
+            session,
+            context={"request": request},
+        ).data
+
+        # Broadcast WS: la sessione ha cambiato stato (es. LOBBY -> ACTIVE)
+        _broadcast_session_event(
+            session_id=str(session.id),
+            event_type="STATE_CHANGED",
+            payload=detail_data,
         )
+
+        return Response(detail_data, status=status.HTTP_200_OK)
 
 
 # ---------------------------
@@ -112,6 +151,35 @@ class JoinByTokenView(generics.CreateAPIView):
     """
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = JoinByTokenSerializer
+
+    def perform_create(self, serializer):
+        """
+        Dopo aver aggiunto il partecipante alla sessione,
+        invia in broadcast lo stato aggiornato della sessione
+        a tutti i client WebSocket collegati a /ws/sessions/<session_id>/.
+        """
+        # Salvataggio effettivo (crea SessionParticipant o equivalente)
+        instance = serializer.save()
+
+        # La sessione è stata valorizzata nel serializer (es. in validate)
+        session = serializer._session
+
+        # Stato aggiornato (partecipants_count, ecc.)
+        session.refresh_from_db()
+
+        detail_data = SessionDetailSerializer(
+            session,
+            context={"request": self.request},
+        ).data
+
+        # Broadcast WS: stato sessione aggiornato (nuovo partecipante in lobby)
+        _broadcast_session_event(
+            session_id=str(session.id),
+            event_type="STATE_CHANGED",
+            payload=detail_data,
+        )
+
+        return instance
 
 
 # ---------------------------
@@ -165,6 +233,7 @@ class MySessionsListView(generics.ListAPIView):
 
         return qs.order_by("-created_at")
 
+
 class SessionDebugForceCloseView(APIView):
     """
     Endpoint di debug (solo in DEBUG) per forzare una sessione in stato CLOSED.
@@ -182,7 +251,7 @@ class SessionDebugForceCloseView(APIView):
 
         session = get_object_or_404(Session, id=id)
 
-        # Opzionale ma consigliato: solo l'host può chiudere la propria sessione
+        # Solo l'host può chiudere la propria sessione (anche in debug)
         if session.host_id != request.user.id:
             return Response(
                 {
@@ -191,11 +260,22 @@ class SessionDebugForceCloseView(APIView):
                 status=403,
             )
 
-        # Se è già CLOSED non fa danni, ma si può evitare di riscrivere
+        # Aggiornamento stato -> CLOSED
         if session.state != SessionState.CLOSED:
             session.state = SessionState.CLOSED
             session.ended_at = timezone.now()
             session.save(update_fields=["state", "ended_at"])
 
-        data = SessionDetailSerializer(session, context={"request": request}).data
-        return Response(data)
+        detail_data = SessionDetailSerializer(
+            session,
+            context={"request": request},
+        ).data
+
+        # Broadcast WS: la sessione è stata chiusa forzatamente (debug)
+        _broadcast_session_event(
+            session_id=str(session.id),
+            event_type="STATE_CHANGED",
+            payload=detail_data,
+        )
+
+        return Response(detail_data)
