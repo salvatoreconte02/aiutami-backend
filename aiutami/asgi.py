@@ -13,14 +13,19 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "aiutami.settings")
 from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
 
-from apps.turns.routing import websocket_urlpatterns
+from apps.turns.routing import websocket_urlpatterns as turns_ws_urlpatterns
+from apps.sessions.routing import websocket_urlpatterns as sessions_ws_urlpatterns
 from apps.turns.ws_auth import JwtAuthMiddlewareStack
 
 
 django_asgi_app = get_asgi_application()
 
+# Routing WebSocket combinato: turns + sessions
+websocket_urlpatterns = turns_ws_urlpatterns + sessions_ws_urlpatterns
+
 application = ProtocolTypeRouter(
     {
+        # HTTP classico (REST)
         "http": django_asgi_app,
 
         # WebSockets autenticati via JWT (?token=<ACCESS_TOKEN>)
