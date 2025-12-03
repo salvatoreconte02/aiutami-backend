@@ -4,11 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.utils import timezone
-
-User = get_user_model()
 
 
 # -------------------------------------------------------------------
@@ -36,6 +33,12 @@ class TurnState:
     current_speaker_user_id: Optional[int] = None
     reservation_user_id: Optional[int] = None
     reservation_expires_at: Optional[datetime] = None
+
+    # Flag di servizio: indica che il backend è in fase di moderazione
+    # (valutazione trigger + eventuale intervento AI) e che quindi
+    # non si accettano nuovi turni umani.
+    moderation_in_progress: bool = False
+
     version: int = 1
 
     def to_dict(self) -> Dict[str, Any]:
@@ -51,6 +54,7 @@ class TurnState:
                 if self.reservation_expires_at
                 else None
             ),
+            "moderation_in_progress": self.moderation_in_progress,
             "version": self.version,
         }
 
@@ -118,7 +122,7 @@ class TurnManager:
     # ----------------------------
 
     @classmethod
-    def get_state(cls, session_id: str, user: User) -> TurnResult:
+    def get_state(cls, session_id: str, user) -> TurnResult:
         """
         Ritorna lo stato corrente dei turni per una sessione,
         applicando se necessario la scadenza di una prenotazione.
@@ -134,12 +138,22 @@ class TurnManager:
         return TurnResult(success=True, state=state, events=events)
 
     @classmethod
-    def request_speak(cls, session_id: str, user: User) -> TurnResult:
+    def request_speak(cls, session_id: str, user) -> TurnResult:
         """
         Richiesta di iniziare a parlare (toggle 'Parla').
         """
         state = cls._load_state(session_id)
         events: List[TurnEvent] = []
+
+        # Se è in corso una fase di moderazione, non si accettano nuovi turni umani.
+        if state.moderation_in_progress:
+            return TurnResult(
+                success=False,
+                state=state,
+                events=events,
+                error_code="MODERATION_IN_PROGRESS",
+                error_detail="È in corso una fase di moderazione: attendere che il moderatore termini.",
+            )
 
         expired_event = cls._expire_reservation_if_needed(state)
         if expired_event is not None:
@@ -216,7 +230,7 @@ class TurnManager:
         )
 
     @classmethod
-    def end_speak(cls, session_id: str, user: User) -> TurnResult:
+    def end_speak(cls, session_id: str, user) -> TurnResult:
         """
         Termine dell'intervento umano (toggle 'Termina').
         """
@@ -272,12 +286,22 @@ class TurnManager:
         return TurnResult(success=True, state=state, events=events)
 
     @classmethod
-    def request_reserve(cls, session_id: str, user: User) -> TurnResult:
+    def request_reserve(cls, session_id: str, user) -> TurnResult:
         """
         Richiesta di prenotazione (alzata di mano).
         """
         state = cls._load_state(session_id)
         events: List[TurnEvent] = []
+
+        # Durante la moderazione non si impostano nuove prenotazioni.
+        if state.moderation_in_progress:
+            return TurnResult(
+                success=False,
+                state=state,
+                events=events,
+                error_code="MODERATION_IN_PROGRESS",
+                error_detail="È in corso una fase di moderazione: attendere che il moderatore termini.",
+            )
 
         if state.state != TURN_STATE_HUMAN_SPEAKING:
             return TurnResult(
@@ -445,3 +469,23 @@ class TurnManager:
                 "expired_at": now.isoformat(),
             },
         )
+
+    # -------------------------------------------------------------------
+    #  API per la fase di moderazione
+    # -------------------------------------------------------------------
+
+    @classmethod
+    def set_moderation_in_progress(cls, session_id: str, value: bool) -> TurnState:
+        """
+        Imposta il flag moderation_in_progress per la sessione indicata.
+
+        Viene usato dallo strato WebSocket per:
+        - impostare a True all'inizio della fase di moderazione post-turno umano;
+        - riportare a False al termine della moderazione (dopo eventuale intervento AI).
+        """
+        state = cls._load_state(session_id)
+        if state.moderation_in_progress != value:
+            state.moderation_in_progress = value
+            state.version += 1
+            cls._save_state(session_id, state)
+        return state

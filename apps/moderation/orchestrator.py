@@ -1,0 +1,87 @@
+# apps/moderation/orchestrator.py
+
+from dataclasses import dataclass
+from typing import List, Optional
+
+from .state import load_moderation_state
+from .service import (
+    ModerationService,
+    ModerationResult,
+    HardModerationAction,
+)
+from .triggers import (
+    evaluate_triggers_on_human_turn_end,
+    TriggerEvaluationResult,
+)
+
+
+@dataclass
+class FullModerationDecision:
+    """
+    Risultato completo della moderazione alla fine di un turno umano.
+
+    Contiene:
+    - static_messages_to_speak: lista di messaggi fissi (senza LLM)
+    - ai_should_speak: se il moderatore AI deve parlare
+    - ai_message: contenuto eventuale del messaggio AI
+    - hard_action: NONE / FORCED_SUMMARY / FORCED_CONCLUSION
+    """
+    static_messages_to_speak: List[str]
+    ai_should_speak: bool
+    ai_message: Optional[str]
+    hard_action: HardModerationAction
+
+
+class ModerationOrchestrator:
+    """
+    Punto di ingresso unico per la moderazione alla fine di un turno umano.
+
+    Sequenza gestita:
+      1. Carica lo stato corrente di moderazione
+      2. Valuta i trigger post–turno (hard + statici)
+      3. Chiama ModerationService per la parte LLM
+      4. Restituisce una FullModerationDecision
+    """
+
+    @classmethod
+    def handle_human_turn_end(
+        cls,
+        *,
+        session_id: int | str,
+        user_id: int | str,
+        last_turn_text: str,
+        session_phase: str,          # es. "ACTIVE", "CONCLUSION"
+        speaker_name: Optional[str] = None,
+    ) -> FullModerationDecision:
+        """
+        Deve essere chiamato subito dopo che un turno umano è
+        terminato, durante la finestra di moderazione (microfoni chiusi).
+        """
+
+        # 1) Carica stato moderazione
+        moderation_state = load_moderation_state(session_id)
+
+        # 2) Trigger post-turno (hard action + messaggi statici)
+        trigger_result: TriggerEvaluationResult = evaluate_triggers_on_human_turn_end(
+            session_id=session_id,
+            user_id=user_id,
+            session_phase=session_phase,
+            moderation_state=moderation_state,
+        )
+
+        # 3) Parte LLM (hard/soft) – aggiorna summary + decide intervento AI
+        moderation_result: ModerationResult = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=user_id,
+            last_turn_text=last_turn_text,
+            session_phase=session_phase,
+            hard_action=trigger_result.hard_action,
+        )
+
+        # 4) Decisione finale
+        return FullModerationDecision(
+            static_messages_to_speak=trigger_result.static_messages_to_speak,
+            ai_should_speak=moderation_result.ai_should_speak,
+            ai_message=moderation_result.ai_message,
+            hard_action=trigger_result.hard_action,
+        )

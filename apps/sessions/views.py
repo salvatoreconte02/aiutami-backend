@@ -27,6 +27,9 @@ from .serializers import (
 )
 from .permissions import IsSessionMember
 
+# 🔹 import per i timer di moderazione
+from apps.moderation.timers_state import mark_session_started
+
 
 # -------------------------------------------------------------------
 #  Helper per broadcast WebSocket delle sessioni
@@ -105,6 +108,10 @@ class SessionStartView(APIView):
         serializer.is_valid(raise_exception=True)
         session = serializer.save()
 
+        # 🔹 La sessione è appena entrata in ACTIVE:
+        #    si inizializzano i timer di moderazione (NO PUSH, TIMER 25'/30').
+        mark_session_started(session_id=session.id)
+
         # Payload completo della sessione dopo la transizione
         detail_data = SessionDetailSerializer(
             session,
@@ -112,6 +119,69 @@ class SessionStartView(APIView):
         ).data
 
         # Broadcast WS: la sessione ha cambiato stato (es. LOBBY -> ACTIVE)
+        _broadcast_session_event(
+            session_id=str(session.id),
+            event_type="STATE_CHANGED",
+            payload=detail_data,
+        )
+
+        return Response(detail_data, status=status.HTTP_200_OK)
+
+
+class SessionReadyToConcludeView(APIView):
+    """
+    POST /api/sessions/{session_id}/ready_to_conclude/
+    Permette al partecipante corrente di indicare se è pronto (o meno) alla conclusione.
+
+    Body esemplificativo:
+    {
+        "ready": true
+    }
+    """
+    permission_classes = [permissions.IsAuthenticated, IsSessionMember]
+
+    def post(self, request, session_id: str):
+        # Recupera la sessione e verifica che l'utente sia membro
+        session = get_object_or_404(Session, pk=session_id)
+        self.check_object_permissions(request, session)
+
+        # Lettura del flag "ready" dal body; default True se non specificato
+        ready = request.data.get("ready", True)
+        ready = bool(ready)
+
+        # Aggiorna il record SessionParticipant dell'utente corrente
+        participant = get_object_or_404(
+            SessionParticipant,
+            session=session,
+            user=request.user,
+        )
+        if participant.ready_to_conclude != ready:
+            participant.ready_to_conclude = ready
+            participant.save(update_fields=["ready_to_conclude"])
+
+        # Ricalcolo dei conteggi "pronti / totali"
+        qs = SessionParticipant.objects.filter(session=session)
+        total_count = qs.count()
+        ready_count = qs.filter(ready_to_conclude=True).count()
+
+        # Se tutti sono pronti e la sessione è ancora ACTIVE,
+        # si porta lo stato in CONCLUSION.
+        if (
+            session.state == SessionState.ACTIVE
+            and total_count > 0
+            and ready_count == total_count
+        ):
+            session.state = SessionState.CONCLUSION
+            session.conclusion_at = timezone.now()
+            session.save(update_fields=["state", "conclusion_at"])
+
+        # Serializza lo stato aggiornato della sessione
+        detail_data = SessionDetailSerializer(
+            session,
+            context={"request": request},
+        ).data
+
+        # Broadcast WS: la sessione (o il conteggio "pronti") è cambiato
         _broadcast_session_event(
             session_id=str(session.id),
             event_type="STATE_CHANGED",

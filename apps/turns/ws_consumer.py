@@ -1,9 +1,12 @@
-# apps/turns/ws_consumer.py
-
 from __future__ import annotations
 
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
+
+# 🔹 import moderazione: timer NO PUSH / tempo sessione / inattivo
+from apps.moderation.timers_state import mark_any_activity, mark_user_spoke
+from apps.moderation.orchestrator import ModerationOrchestrator
+from apps.moderation.triggers import evaluate_time_based_triggers
 
 
 class TurnsConsumer(AsyncJsonWebsocketConsumer):
@@ -92,6 +95,11 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             await self._handle_ai_end(content)
             return
 
+        if message_type == "turns.ping":
+            # Polling periodico del frontend (es. ogni 5s) per i trigger a tempo
+            await self._handle_ping(content)
+            return
+
         # Default: tipo non riconosciuto
         await self.send_json(
             {
@@ -169,6 +177,11 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         result = TurnManager.request_speak(self.session_id, user)
 
+        # 🔹 Se il turno umano è effettivamente partito, si aggiorna lo stato dei timer.
+        if result.success:
+            await self._mark_any_activity()
+            await self._mark_user_spoke(user.id)
+
         # Broadcast degli eventi (HUMAN_STARTED, eventuale RESERVATION_EXPIRED, ecc.)
         await self._broadcast_events(result.events)
 
@@ -184,20 +197,25 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         """
         Gestisce il messaggio: { "type": "turns.end_speak" }.
 
-        Richiede la chiusura dello speaking umano per l’utente corrente.
+        Pipeline:
+        1. chiude il turno umano (TurnManager)
+        2. aggiorna i timer NO PUSH
+        3. imposta moderation_in_progress = True
+        4. esegue la moderazione completa (trigger + LLM) tramite ModerationOrchestrator
+        5. apre/chiude eventuali turni AI per i messaggi del moderatore
+        6. ripristina moderation_in_progress = False
+        7. restituisce lo stato finale dei turni.
         """
         user = self.scope.get("user")
         if not user or not user.is_authenticated:
-            await self.send_json(
-                {
-                    "type": "turns.state",
-                    "payload": {
-                        "success": False,
-                        "error_code": "UNAUTHENTICATED",
-                        "error_detail": "Utente non autenticato sulla connessione WS.",
-                    },
-                }
-            )
+            await self.send_json({
+                "type": "turns.state",
+                "payload": {
+                    "success": False,
+                    "error_code": "UNAUTHENTICATED",
+                    "error_detail": "Utente non autenticato sulla connessione WS.",
+                },
+            })
             return
 
         if not await self._ensure_session_active():
@@ -205,18 +223,101 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         from apps.turns.services import TurnManager
 
+        # 1) Chiusura del turno umano
         result = TurnManager.end_speak(self.session_id, user)
 
-        # Broadcast degli eventi (HUMAN_ENDED, eventuale RESERVATION_WINDOW_STARTED)
-        await self._broadcast_events(result.events)
-
-        # Risposta diretta al chiamante
-        await self.send_json(
-            {
+        if not result.success:
+            await self.send_json({
                 "type": "turns.state",
                 "payload": result.to_state_dict(),
-            }
-        )
+            })
+            return
+
+        # 2) Attività ai fini del NO PUSH
+        await self._mark_any_activity()
+
+        # Broadcast degli eventi generati dalla chiusura
+        await self._broadcast_events(result.events)
+
+        # 3) Entrata nella fase di moderazione: blocco nuovi turni umani
+        await self._set_moderation_in_progress(True)
+
+        from apps.turns.services import TurnManager as TM  # alias locale
+
+        try:
+            # 4) Esecuzione moderazione completa (trigger + LLM)
+            try:
+                session_phase = await self._get_session_state(self.session_id)
+            except Exception:
+                session_phase = "ACTIVE"
+
+            # Testo dell'ultimo turno (placeholder in attesa di ASR)
+            last_turn_text = content.get("transcript", "") or ""
+
+            # Nome parlante (display_name se presente, altrimenti username)
+            speaker_name = getattr(user, "display_name", None) or user.get_username()
+
+            decision = await self._run_moderation_orchestrator(
+                user_id=user.id,
+                last_turn_text=last_turn_text,
+                session_phase=session_phase,
+                speaker_name=speaker_name,
+            )
+
+            # --- DEBUG: invio diretto del messaggio del moderatore LLM al chiamante ---
+            if decision.ai_should_speak and decision.ai_message:
+                await self.send_json(
+                    {
+                        "type": "moderation.ai_message",
+                        "payload": {"text": decision.ai_message},
+                    }
+                )
+            # ---------------------------------------------------------------------------
+
+            # 5) Esecuzione dei messaggi statici (senza LLM) come veri turni AI
+            for msg in decision.static_messages_to_speak:
+                ai_start_res = TM.ai_start(self.session_id)
+                if ai_start_res.success:
+                    await self._mark_any_activity()
+                    await self._broadcast_events(ai_start_res.events)
+
+                    # Messaggio del moderatore verso il client (per TTS / UI)
+                    await self.send_json({
+                        "type": "turns.ai_message",
+                        "payload": {"text": msg},
+                    })
+
+                    ai_end_res = TM.ai_end(self.session_id)
+                    await self._mark_any_activity()
+                    await self._broadcast_events(ai_end_res.events)
+
+            # 6) Eventuale intervento AI proposto dall'LLM
+            if decision.ai_should_speak and decision.ai_message:
+                ai_start_res = TM.ai_start(self.session_id)
+                if ai_start_res.success:
+                    await self._mark_any_activity()
+                    await self._broadcast_events(ai_start_res.events)
+
+                    await self.send_json({
+                        "type": "turns.ai_message",
+                        "payload": {"text": decision.ai_message},
+                    })
+
+                    ai_end_res = TM.ai_end(self.session_id)
+                    await self._mark_any_activity()
+                    await self._broadcast_events(ai_end_res.events)
+
+        finally:
+            # 7) Uscita dalla fase di moderazione: si riapre ai turni umani
+            await self._set_moderation_in_progress(False)
+
+            # Stato finale dei turni dopo la moderazione
+            final_state = TM.get_state(self.session_id, user)
+
+            await self.send_json({
+                "type": "turns.state",
+                "payload": final_state.to_state_dict(),
+            })
 
     async def _handle_request_reserve(self, content):
         """
@@ -283,6 +384,10 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         result = TurnManager.ai_start(self.session_id)
 
+        # 🔹 Inizio intervento AI: anche questo resetta il timer NO PUSH.
+        if result.success:
+            await self._mark_any_activity()
+
         # Broadcast: AI_STARTED a tutti
         await self._broadcast_events(result.events)
 
@@ -321,6 +426,10 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         result = TurnManager.ai_end(self.session_id)
 
+        # 🔹 Fine intervento AI: anche questo è attività.
+        if result.success:
+            await self._mark_any_activity()
+
         # Broadcast degli eventi (AI_ENDED)
         await self._broadcast_events(result.events)
 
@@ -329,6 +438,75 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             {
                 "type": "turns.state",
                 "payload": result.to_state_dict(),
+            }
+        )
+
+    async def _handle_ping(self, content):
+        """
+        Gestisce il messaggio: { "type": "turns.ping" }.
+
+        Viene pensato per essere chiamato periodicamente dal frontend
+        (es. ogni 5 secondi) per valutare i trigger basati sul tempo:
+        - NO PUSH
+        - UTENTE INATTIVO
+        - TIMER 25'/30'
+
+        Se non ci sono messaggi da dire, risponde soltanto con un ack leggero.
+        Se ci sono messaggi, apre e chiude un turno AI per ciascuno.
+        """
+        user = self.scope.get("user")
+        if not user or not user.is_authenticated:
+            # Per il ping si può anche semplicemente ignorare in caso di anonimo.
+            return
+
+        # Si prova a leggere lo stato sessione; se non esiste, si termina.
+        try:
+            session_phase = await self._get_session_state(self.session_id)
+        except Exception:
+            return
+
+        from apps.turns.services import TurnManager
+
+        # Valutazione trigger a tempo (lazy, senza LLM)
+        trig_result = evaluate_time_based_triggers(
+            session_id=self.session_id,
+            session_phase=session_phase,
+        )
+
+        if not trig_result.static_messages_to_speak:
+            # Ack leggero (opzionale, utile per debug)
+            await self.send_json(
+                {
+                    "type": "turns.ping_ok",
+                    "payload": {"has_messages": False},
+                }
+            )
+            return
+
+        # Ci sono uno o più messaggi statici da pronunciare
+        for msg in trig_result.static_messages_to_speak:
+            ai_start_res = TurnManager.ai_start(self.session_id)
+            if ai_start_res.success:
+                await self._mark_any_activity()
+                await self._broadcast_events(ai_start_res.events)
+
+                await self.send_json(
+                    {
+                        "type": "turns.ai_message",
+                        "payload": {"text": msg},
+                    }
+                )
+
+                ai_end_res = TurnManager.ai_end(self.session_id)
+                await self._mark_any_activity()
+                await self._broadcast_events(ai_end_res.events)
+
+        # Stato finale dopo eventuali interventi AI
+        final_state = TurnManager.get_state(self.session_id, user)
+        await self.send_json(
+            {
+                "type": "turns.state",
+                "payload": final_state.to_state_dict(),
             }
         )
 
@@ -421,3 +599,50 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             return False
 
         return True
+
+    # -------------------------------------------------------------------------
+    # WRAPPER SYNC → ASYNC per i timer di moderazione e l'orchestratore
+    # -------------------------------------------------------------------------
+
+    @database_sync_to_async
+    def _mark_any_activity(self) -> None:
+        """
+        Wrapper async per mark_any_activity (cache/Redis).
+        """
+        mark_any_activity(self.session_id)
+
+    @database_sync_to_async
+    def _mark_user_spoke(self, user_id: int) -> None:
+        """
+        Wrapper async per mark_user_spoke.
+        """
+        mark_user_spoke(self.session_id, user_id)
+
+    @database_sync_to_async
+    def _run_moderation_orchestrator(
+        self,
+        *,
+        user_id: int,
+        last_turn_text: str,
+        session_phase: str,
+        speaker_name: str,
+    ):
+        """
+        Wrapper sincrono→asincrono per la chiamata a ModerationOrchestrator.
+        """
+        return ModerationOrchestrator.handle_human_turn_end(
+            session_id=self.session_id,
+            user_id=user_id,
+            last_turn_text=last_turn_text,
+            session_phase=session_phase,
+            speaker_name=speaker_name,
+        )
+
+    @database_sync_to_async
+    def _set_moderation_in_progress(self, value: bool) -> None:
+        """
+        Wrapper async per impostare il flag moderation_in_progress
+        nello stato turni della sessione corrente.
+        """
+        from apps.turns.services import TurnManager
+        TurnManager.set_moderation_in_progress(self.session_id, value)
