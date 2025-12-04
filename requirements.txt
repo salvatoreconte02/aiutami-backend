@@ -9,3 +9,7 @@ redis
 pydantic
 django-cors-headers
 uvicorn[standard]==0.30.1
+openai>=1.60.0
+daphne
+aiortc
+numpy

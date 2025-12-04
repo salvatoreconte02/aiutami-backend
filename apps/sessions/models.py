@@ -136,6 +136,8 @@ class SessionParticipant(models.Model):
     )
     joined_at = models.DateTimeField(auto_now_add=True)
 
+    ready_to_conclude = models.BooleanField(default=False)
+
     class Meta:
         db_table = "session_participant"
         unique_together = ("session", "user")

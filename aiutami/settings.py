@@ -29,7 +29,7 @@ INSTALLED_APPS = [
      "apps.turns.apps.TurnsConfig",
     # "apps.moderation",
     # "apps.realtime",
-    # "apps.asr",
+     "apps.asr.apps.AsrConfig",
     # "apps.notifications",
     # "apps.audit",
     # "apps.exports",

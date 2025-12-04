@@ -9,7 +9,8 @@ from .views import (
     SessionCreateView,
     SessionDetailView,
     SessionStartView,
-    SessionDebugForceCloseView
+    SessionDebugForceCloseView,
+    SessionReadyToConcludeView,   # ⬅️ nuovo import
 )
 
 urlpatterns = [
@@ -18,6 +19,13 @@ urlpatterns = [
     path("mine/", MySessionsListView.as_view(), name="session_mine"),                 # GET /mine/
     path("<uuid:session_id>/", SessionDetailView.as_view(), name="session_detail"),   # GET /<id>/
     path("<uuid:session_id>/start/", SessionStartView.as_view(), name="session_start"),  # POST /<id>/start/
+
+    # NUOVO ENDPOINT: pronto alla conclusione
+    path(
+        "<uuid:session_id>/ready_to_conclude/",
+        SessionReadyToConcludeView.as_view(),
+        name="session_ready_to_conclude",
+    ),  # POST /<id>/ready_to_conclude/
 
     # Partecipanti
     path(
