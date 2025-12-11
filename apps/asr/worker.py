@@ -7,13 +7,10 @@ from typing import Optional
 
 import numpy as np
 from django.conf import settings
-from django.contrib.auth import get_user_model
 
 from .azure_client import AzureStreamingClient
-from .models import ASRTranscript
 
 logger = logging.getLogger(__name__)
-User = get_user_model()
 
 
 class ASRStreamWorker:
@@ -80,12 +77,6 @@ class ASRStreamWorker:
             )
 
         def _on_final(text: str) -> None:
-            """
-            Callback invocato da Azure quando viene restituito
-            un segmento di trascrizione finale.
-            - logga il testo,
-            - lo salva nel modello ASRTranscript.
-            """
             if not text:
                 return
 
@@ -96,19 +87,39 @@ class ASRStreamWorker:
                 text,
             )
 
-            # Persistenza nel DB (best-effort, gli errori non bloccano il flusso)
+            # Import lazy per evitare problemi di AppRegistryNotReady
             try:
-                user = User.objects.filter(pk=self.user_id).first()
+                from django.utils import timezone
+                from django.apps import apps as django_apps
+
+                ASRTranscript = django_apps.get_model("asr", "ASRTranscript")
+                Session = django_apps.get_model("sessions", "Session")
+
+                session_obj = Session.objects.filter(id=self.session_id).first()
+                if session_obj is None:
+                    logger.warning(
+                        "[ASR][AZURE][final] Session non trovata, skip salvataggio transcript "
+                        "session=%s user=%s",
+                        self.session_id,
+                        self.user_id,
+                    )
+                    return
+
                 ASRTranscript.objects.create(
-                    session_id=self.session_id,
-                    user=user,
+                    session=session_obj,
+                    user_id=self.user_id,
                     text=text,
-                    is_final=True,
-                    source="azure",
+                    created_at=timezone.now(),
+                )
+
+                logger.info(
+                    "[ASR][AZURE][final] Transcript salvato su DB session=%s user=%s",
+                    self.session_id,
+                    self.user_id,
                 )
             except Exception:
                 logger.exception(
-                    "[ASR] Errore nel salvataggio ASRTranscript "
+                    "[ASR][AZURE][final] Errore nel salvataggio transcript su DB "
                     "session=%s user=%s",
                     self.session_id,
                     self.user_id,
