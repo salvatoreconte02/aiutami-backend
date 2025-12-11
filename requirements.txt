@@ -13,3 +13,4 @@ openai>=1.60.0
 daphne
 aiortc
 numpy
+azure-cognitiveservices-speech==1.38.0

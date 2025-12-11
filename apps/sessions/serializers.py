@@ -333,7 +333,7 @@ class ParticipantItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SessionParticipant
-        fields = ("user", "role", "joined_at")
+        fields = ("user", "role", "joined_at", "ready_to_conclude")
         read_only_fields = fields
 
     def get_user(self, obj: SessionParticipant) -> Dict[str, Any]:
