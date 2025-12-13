@@ -22,13 +22,21 @@ services:
   web:
     build: .
     container_name: aiutami-web
-    command: daphne -b 0.0.0.0 -p 8000 aiutami.asgi:application    
+    command: daphne -b 0.0.0.0 -p 8000 aiutami.asgi:application
     volumes:
       - .:/app
     ports:
-      - "8000:8000"
+      # HTTP / WebSocket signaling
+      - "8000:8000/tcp"
+
+      # WebRTC media (RTP/RTCP via aiortc)
+      - "10000-20000:10000-20000/udp"
     env_file:
       - .env
+    environment:
+      # Limiti espliciti per aiortc / aioice
+      - AIOICE_ICE_PORT_MIN=10000
+      - AIOICE_ICE_PORT_MAX=20000
     depends_on:
       - db
       - redis
