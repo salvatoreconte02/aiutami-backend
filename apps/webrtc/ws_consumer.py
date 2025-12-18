@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Optional
 
+from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
@@ -26,14 +28,15 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
     """
     WebSocket Consumer per WebRTC signaling.
 
-    - Autenticazione JWT (middleware già predisposto nel progetto)
-    - Verifica membership sessione
-    - Gestione offer/answer
-    - Trickle ICE:
-        * server -> browser (invia i candidati generati dal server)
-        * browser -> server (accetta i candidati del browser)
-    - Riceve audio WebRTC e lo inoltra al modulo ASR
+    Correzione principale:
+    - NON avviare ASR appena arriva la track.
+    - Avviare/ingestire ASR solo quando lo stato turni indica che l'utente corrente
+      è lo speaker (HUMAN_SPEAKING e current_speaker_user_id == self.user.id).
     """
+
+    # per evitare query ad ogni frame (50fps), si rivaluta la “gate condition”
+    # al massimo ogni 250ms.
+    GATE_CHECK_INTERVAL_SEC = 0.25
 
     async def connect(self):
         self.session_id = self.scope["url_route"]["kwargs"]["session_id"]
@@ -41,7 +44,11 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
 
         self.pc: Optional[RTCPeerConnection] = None
         self._reader_task: Optional[asyncio.Task] = None
+
+        # gate ASR
         self._asr_started: bool = False
+        self._gate_open: bool = False
+        self._last_gate_check_ts: float = 0.0
 
         if not self.user.is_authenticated:
             await self.close(code=4001)
@@ -104,9 +111,6 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
         if self.pc is not None:
             await self._cleanup(reason="new_offer")
 
-        # ICE config:
-        # - STUN: serve a ottenere candidate “srflx” (pubblici) dal container/VM.
-        # - TURN: verrà aggiunto in futuro per robustezza (tesi / prodotto finale).
         config = RTCConfiguration(
             iceServers=[
                 RTCIceServer(urls=["stun:stun.l.google.com:19302"]),
@@ -115,7 +119,6 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
 
         self.pc = RTCPeerConnection(configuration=config)
 
-        # --- Eventi di stato (log utili in VM) ---
         @self.pc.on("icegatheringstatechange")
         async def on_ice_gathering_state_change():
             try:
@@ -142,15 +145,10 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             except Exception:
                 logger.exception("[WebRTC] connectionstatechange error user=%s session=%s", self.user.id, self.session_id)
 
-        # --- Trickle ICE: server -> browser ---
         @self.pc.on("icecandidate")
         async def on_icecandidate(candidate):
-            """
-            Invia al browser i candidati generati dal server.
-            """
             try:
                 if candidate is None:
-                    # Fine candidati (end-of-candidates)
                     await self.send_json({"type": "webrtc.ice_candidate", "candidate": None})
                     return
 
@@ -167,7 +165,6 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             except Exception:
                 logger.exception("[WebRTC] send ICE to browser failed user=%s session=%s", self.user.id, self.session_id)
 
-        # --- Ricezione track ---
         @self.pc.on("track")
         async def on_track(track):
             logger.info("[WebRTC] Track received kind=%s user=%s session=%s", track.kind, self.user.id, self.session_id)
@@ -175,16 +172,40 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             if track.kind != "audio":
                 return
 
-            # Avvio ASR (una sola volta)
-            if not self._asr_started:
-                self._asr_started = True
-                asr_stream_manager.start_stream(self.session_id, self.user.id)
-
             async def reader():
                 try:
                     while True:
                         frame = await track.recv()
-                        asr_stream_manager.ingest_frame(self.session_id, self.user.id, frame)
+
+                        # Gate: ingestire solo se l'utente è speaker secondo TurnManager
+                        gate_open = await self._is_current_speaker_gate()
+
+                        if gate_open:
+                            if not self._asr_started:
+                                self._asr_started = True
+                                try:
+                                    asr_stream_manager.start_stream(self.session_id, self.user.id)
+                                    logger.info("[ASR] START worker session=%s user=%s", self.session_id, self.user.id)
+                                except Exception:
+                                    logger.exception("[ASR] start_stream failed session=%s user=%s", self.session_id, self.user.id)
+                                    self._asr_started = False
+
+                            if self._asr_started:
+                                try:
+                                    asr_stream_manager.ingest_frame(self.session_id, self.user.id, frame)
+                                except Exception:
+                                    logger.exception("[ASR] ingest_frame failed session=%s user=%s", self.session_id, self.user.id)
+                        else:
+                            # Se la gate si chiude mentre lo stream è aperto, si stoppa.
+                            if self._asr_started:
+                                try:
+                                    asr_stream_manager.stop_stream(self.session_id, self.user.id)
+                                    logger.info("[ASR] STOP worker session=%s user=%s reason=gate_closed", self.session_id, self.user.id)
+                                except Exception:
+                                    logger.exception("[ASR] stop_stream failed session=%s user=%s", self.session_id, self.user.id)
+                                finally:
+                                    self._asr_started = False
+
                 except asyncio.CancelledError:
                     logger.info("[WebRTC] Reader cancelled user=%s session=%s", self.user.id, self.session_id)
                 except Exception:
@@ -193,13 +214,13 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
                     if self._asr_started:
                         try:
                             asr_stream_manager.stop_stream(self.session_id, self.user.id)
+                            logger.info("[ASR] STOP worker session=%s user=%s reason=reader_finally", self.session_id, self.user.id)
                         except Exception:
                             logger.exception("[WebRTC] stop_stream failed (finally) user=%s session=%s", self.user.id, self.session_id)
                         self._asr_started = False
 
             self._reader_task = asyncio.create_task(reader())
 
-        # --- Applico offer e creo answer ---
         offer = RTCSessionDescription(type=sdp_type, sdp=sdp)
         await self.pc.setRemoteDescription(offer)
 
@@ -213,28 +234,70 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
                 "type_sdp": self.pc.localDescription.type,
             }
         )
-
         logger.info("[WebRTC] Answer sent user=%s session=%s", self.user.id, self.session_id)
+
+    # ------------------------------------------------------------------ #
+    # Gate speaker (TurnManager)
+    # ------------------------------------------------------------------ #
+
+    async def _is_current_speaker_gate(self) -> bool:
+        """
+        True solo quando:
+        - state == HUMAN_SPEAKING
+        - current_speaker_user_id == self.user.id
+        - moderation_in_progress == False
+
+        Per ridurre carico, ricalcola al massimo ogni GATE_CHECK_INTERVAL_SEC.
+        """
+        now = time.time()
+        if (now - self._last_gate_check_ts) < self.GATE_CHECK_INTERVAL_SEC:
+            return self._gate_open
+
+        self._last_gate_check_ts = now
+
+        try:
+            from apps.turns.services import TurnManager, TURN_STATE_HUMAN_SPEAKING
+
+            # TurnManager è sync; lo si esegue in threadpool
+            result = await sync_to_async(TurnManager.get_state, thread_sensitive=True)(self.session_id, self.user)
+            state = result.state
+
+            gate_open = (
+                state.state == TURN_STATE_HUMAN_SPEAKING
+                and state.current_speaker_user_id == self.user.id
+                and not state.moderation_in_progress
+            )
+
+            # log solo quando cambia (per non spam)
+            if gate_open != self._gate_open:
+                logger.info(
+                    "[WebRTC] ASR gate change user=%s session=%s open=%s state=%s current_speaker=%s moderation=%s",
+                    self.user.id,
+                    self.session_id,
+                    gate_open,
+                    state.state,
+                    state.current_speaker_user_id,
+                    state.moderation_in_progress,
+                )
+
+            self._gate_open = gate_open
+            return gate_open
+
+        except Exception:
+            logger.exception("[WebRTC] Gate check failed user=%s session=%s", self.user.id, self.session_id)
+            self._gate_open = False
+            return False
 
     # ------------------------------------------------------------------ #
     # ICE (browser -> server)
     # ------------------------------------------------------------------ #
 
     async def _handle_ice_candidate(self, content: dict):
-        """
-        Accetta ICE candidate dal browser in due formati:
-
-        A) {"type": "...", "candidate": {"candidate": "...", "sdpMid": "...", "sdpMLineIndex": 0}}
-        B) {"type": "...", "candidate": "candidate:...", "sdpMid": "...", "sdpMLineIndex": 0}
-
-        Supporta candidate=None (end-of-candidates).
-        """
         if self.pc is None:
             return
 
         cand = content.get("candidate", None)
 
-        # end-of-candidates
         if cand is None:
             try:
                 await self.pc.addIceCandidate(None)
@@ -243,7 +306,6 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
                 logger.exception("[WebRTC] addIceCandidate(None) failed user=%s session=%s", self.user.id, self.session_id)
             return
 
-        # Normalizzazione
         if isinstance(cand, str):
             candidate_sdp = cand
             sdp_mid = content.get("sdpMid")
@@ -287,12 +349,6 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
     # ------------------------------------------------------------------ #
 
     async def _cleanup(self, reason: str):
-        """
-        Cleanup robusto e idempotente:
-        - cancella reader task
-        - stop ASR (se attivo)
-        - chiude PeerConnection
-        """
         try:
             logger.info(
                 "[WebRTC] Cleanup reason=%s user=%s session=%s",
@@ -310,6 +366,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
         if self._asr_started:
             try:
                 asr_stream_manager.stop_stream(self.session_id, self.user.id)
+                logger.info("[ASR] STOP worker session=%s user=%s reason=cleanup", self.session_id, self.user.id)
             except Exception:
                 logger.exception("[WebRTC] stop_stream failed (cleanup) user=%s session=%s", self.user.id, self.session_id)
             self._asr_started = False
@@ -328,5 +385,4 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
     @database_sync_to_async
     def _is_session_member(self, session_id, user_id: int) -> bool:
         from apps.sessions.models import Session
-
         return Session.objects.filter(id=session_id, participants__user_id=user_id).exists()
