@@ -207,9 +207,10 @@ class ASRStreamWorker:
     def ingest_frame(self, frame) -> None:
         """
         Riceve un frame audio da aiortc (tipicamente av.AudioFrame),
-        lo converte in PCM int16 mono, lo logga, e se disponibile
+        lo converte in PCM int16 mono, lo logga (throttled), e se disponibile
         lo invia al client Azure in streaming.
         """
+        import time
 
         # Estrazione metadati dal frame
         try:
@@ -222,23 +223,9 @@ class ASRStreamWorker:
         if self.sample_rate is None and frame_sample_rate is not None:
             self.sample_rate = int(frame_sample_rate)
 
-        # ------------------------------------------------------------------
-        # FIX: alcune versioni di PyAV non supportano frame.to_ndarray(format="s16")
-        #      Si usa to_ndarray() e si normalizza manualmente a int16.
-        # ------------------------------------------------------------------
+        # Conversione in ndarray (alcune versioni PyAV non supportano format=)
         try:
             pcm = frame.to_ndarray()
-            pcm = np.asarray(pcm)
-
-            # Normalizzazione tipo -> int16
-            if pcm.dtype != np.int16:
-                if np.issubdtype(pcm.dtype, np.floating):
-                    # tipicamente float32 [-1, 1]
-                    pcm = np.clip(pcm, -1.0, 1.0)
-                    pcm = (pcm * 32767.0).astype(np.int16)
-                else:
-                    pcm = pcm.astype(np.int16, copy=False)
-
         except Exception:
             logger.exception(
                 "[ASR] Errore in to_ndarray session=%s user=%s",
@@ -249,42 +236,49 @@ class ASRStreamWorker:
 
         # Gestione mono / multi-canale
         if pcm.ndim == 1:
-            # Già mono: shape (samples,)
-            pcm_mono = pcm.astype(np.int16, copy=False)
+            pcm_mono = pcm
             channels = 1
         else:
-            # shape (channels, samples) -> downmix a mono
             channels = pcm.shape[0]
-            if channels == 1:
-                pcm_mono = pcm[0].astype(np.int16, copy=False)
+            pcm_mono = pcm.mean(axis=0)
+
+        # Normalizzazione a int16
+        if pcm_mono.dtype != np.int16:
+            # Se float in [-1,1], porta a int16
+            if np.issubdtype(pcm_mono.dtype, np.floating):
+                pcm_mono = np.clip(pcm_mono, -1.0, 1.0)
+                pcm_mono = (pcm_mono * 32767.0).astype(np.int16)
             else:
-                # media in int32 per evitare overflow, poi cast a int16
-                pcm_mono = pcm.astype(np.int32).mean(axis=0).astype(np.int16)
+                pcm_mono = pcm_mono.astype(np.int16, copy=False)
+        else:
+            pcm_mono = pcm_mono.astype(np.int16, copy=False)
 
         self.channels = channels
 
-        # Conversione in bytes (PCM 16-bit little endian)
         pcm_bytes = pcm_mono.tobytes()
-        num_samples = pcm_mono.shape[-1]
+        num_samples = int(pcm_mono.shape[-1])
         num_bytes = len(pcm_bytes)
 
         self.total_samples += num_samples
         self.total_bytes += num_bytes
 
-        # Logging del chunk corrente
-        logger.info(
-            "[ASR] PCM chunk session=%s user=%s samples=%d bytes=%d "
-            "sr=%s layout=%s ch=%s",
-            self.session_id,
-            self.user_id,
-            num_samples,
-            num_bytes,
-            self.sample_rate,
-            frame_layout,
-            self.channels,
-        )
+        # Log throttling: massimo 1 log/secondo per worker
+        now = time.monotonic()
+        last = getattr(self, "_last_pcm_log_ts", 0.0)
+        if now - last >= 1.0:
+            setattr(self, "_last_pcm_log_ts", now)
+            logger.info(
+                "[ASR] PCM chunk session=%s user=%s samples=%d bytes=%d sr=%s layout=%s ch=%s total_bytes=%d",
+                self.session_id,
+                self.user_id,
+                num_samples,
+                num_bytes,
+                self.sample_rate,
+                frame_layout,
+                self.channels,
+                self.total_bytes,
+            )
 
-        # Invio al servizio ASR streaming (se attivo)
         if self._azure_client is not None:
             try:
                 self._azure_client.push_audio(pcm_bytes)
