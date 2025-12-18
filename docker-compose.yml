@@ -30,13 +30,13 @@ services:
       - "8000:8000/tcp"
 
       # WebRTC media (RTP/RTCP via aiortc)
-      - "10000-20000:10000-20000/udp"
+      - "10000-10050:10000-10050/udp"
     env_file:
       - .env
     environment:
       # Limiti espliciti per aiortc / aioice
       - AIOICE_ICE_PORT_MIN=10000
-      - AIOICE_ICE_PORT_MAX=20000
+      - AIOICE_ICE_PORT_MAX=10050
     depends_on:
       - db
       - redis
