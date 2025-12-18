@@ -222,9 +222,23 @@ class ASRStreamWorker:
         if self.sample_rate is None and frame_sample_rate is not None:
             self.sample_rate = int(frame_sample_rate)
 
-        # Conversione in ndarray int16
+        # ------------------------------------------------------------------
+        # FIX: alcune versioni di PyAV non supportano frame.to_ndarray(format="s16")
+        #      Si usa to_ndarray() e si normalizza manualmente a int16.
+        # ------------------------------------------------------------------
         try:
-            pcm = frame.to_ndarray(format="s16")
+            pcm = frame.to_ndarray()
+            pcm = np.asarray(pcm)
+
+            # Normalizzazione tipo -> int16
+            if pcm.dtype != np.int16:
+                if np.issubdtype(pcm.dtype, np.floating):
+                    # tipicamente float32 [-1, 1]
+                    pcm = np.clip(pcm, -1.0, 1.0)
+                    pcm = (pcm * 32767.0).astype(np.int16)
+                else:
+                    pcm = pcm.astype(np.int16, copy=False)
+
         except Exception:
             logger.exception(
                 "[ASR] Errore in to_ndarray session=%s user=%s",
@@ -239,9 +253,13 @@ class ASRStreamWorker:
             pcm_mono = pcm.astype(np.int16, copy=False)
             channels = 1
         else:
-            # shape (channels, samples) -> media sui canali
+            # shape (channels, samples) -> downmix a mono
             channels = pcm.shape[0]
-            pcm_mono = pcm.mean(axis=0).astype(np.int16)
+            if channels == 1:
+                pcm_mono = pcm[0].astype(np.int16, copy=False)
+            else:
+                # media in int32 per evitare overflow, poi cast a int16
+                pcm_mono = pcm.astype(np.int32).mean(axis=0).astype(np.int16)
 
         self.channels = channels
 
