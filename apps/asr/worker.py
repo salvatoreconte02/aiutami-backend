@@ -12,16 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 class ASRStreamWorker:
-    """
-    Stream ASR per (session_id, user_id).
-
-    - riceve frame audio WebRTC (PyAV)
-    - converte correttamente in PCM int16 mono
-    - resampla a 16kHz per Azure
-    - invia chunk ad Azure Speech
-    """
-
     AZURE_TARGET_SR = 16000
+
+    # invio verso Azure ogni ~200ms @16kHz mono int16
+    AZURE_PUSH_MS = 200
+    AZURE_PUSH_BYTES = int(AZURE_TARGET_SR * (AZURE_PUSH_MS / 1000.0) * 2)  # 16k * 0.2 * 2 = 6400 bytes
 
     def __init__(self, session_id: str, user_id: int) -> None:
         self.session_id = str(session_id)
@@ -34,6 +29,8 @@ class ASRStreamWorker:
         self.started: bool = False
 
         self._azure_client: Optional[AzureStreamingClient] = None
+        self._push_buf = bytearray()
+        self._logged_audio_stats = False  # log “diagnostico” una volta per sessione
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -45,52 +42,17 @@ class ASRStreamWorker:
         language = getattr(settings, "AZURE_SPEECH_LANGUAGE", "it-IT")
 
         if not key or not region:
-            logger.warning(
-                "[ASR] Azure Speech non configurato (key/region mancanti)"
-            )
+            logger.warning("[ASR] Azure Speech non configurato (key/region mancanti)")
             return
 
         def _on_partial(text: str) -> None:
             if text:
-                logger.info(
-                    "[ASR][AZURE][partial] session=%s user=%s text=%r",
-                    self.session_id,
-                    self.user_id,
-                    text,
-                )
+                logger.info("[ASR][AZURE][partial] session=%s user=%s text=%r", self.session_id, self.user_id, text)
 
         def _on_final(text: str) -> None:
             if not text:
                 return
-
-            logger.info(
-                "[ASR][AZURE][final] session=%s user=%s text=%r",
-                self.session_id,
-                self.user_id,
-                text,
-            )
-
-            try:
-                from django.utils import timezone
-                from django.apps import apps as django_apps
-
-                ASRTranscript = django_apps.get_model("asr", "ASRTranscript")
-                Session = django_apps.get_model("sessions", "Session")
-
-                session_obj = Session.objects.filter(id=self.session_id).first()
-                if session_obj:
-                    ASRTranscript.objects.create(
-                        session=session_obj,
-                        user_id=self.user_id,
-                        text=text,
-                        created_at=timezone.now(),
-                    )
-            except Exception:
-                logger.exception(
-                    "[ASR] Errore salvataggio transcript session=%s user=%s",
-                    self.session_id,
-                    self.user_id,
-                )
+            logger.info("[ASR][AZURE][final] session=%s user=%s text=%r", self.session_id, self.user_id, text)
 
         self._azure_client = AzureStreamingClient(
             key=key,
@@ -108,15 +70,27 @@ class ASRStreamWorker:
             return
 
         self.started = True
+        self._push_buf.clear()
+        self._logged_audio_stats = False
+
         logger.info("[ASR] Worker avviato session=%s user=%s", self.session_id, self.user_id)
 
         self._init_azure_client()
         if self._azure_client:
             self._azure_client.start()
+            logger.info("[ASR] AzureStreamingClient avviato session=%s user=%s", self.session_id, self.user_id)
 
     def stop(self) -> None:
         if not self.started:
             return
+
+        # flush buffer residuo verso Azure
+        if self._azure_client and self._push_buf:
+            try:
+                self._azure_client.push_audio(bytes(self._push_buf))
+            except Exception:
+                logger.exception("[ASR] Errore flush buffer a Azure session=%s user=%s", self.session_id, self.user_id)
+            self._push_buf.clear()
 
         if self._azure_client:
             self._azure_client.stop()
@@ -133,34 +107,51 @@ class ASRStreamWorker:
         self._azure_client = None
 
     # ------------------------------------------------------------------ #
-    # Conversione PCM
+    # Conversione PCM robusta
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _to_mono_int16(pcm: np.ndarray) -> tuple[np.ndarray, int]:
-        """
-        Converte PCM float/int in mono int16 CORRETTO.
-        """
+    def _to_mono(pcm: np.ndarray) -> tuple[np.ndarray, int]:
         if pcm.ndim == 1:
-            mono = pcm
-            channels = 1
-        else:
-            channels = int(pcm.shape[0])
-            mono = pcm.mean(axis=0)
+            return pcm, 1
+        channels = int(pcm.shape[0])
+        return pcm.mean(axis=0), channels
 
-        # FLOAT -> INT16 (CASO CRITICO FIXATO)
-        if mono.dtype.kind == "f":
-            mono_f = mono.astype(np.float32, copy=False)
-            mono_i16 = np.clip(mono_f * 32767.0, -32768, 32767).astype(np.int16)
-            return mono_i16, channels
-
-        # INT16 diretto
+    @staticmethod
+    def _mono_to_int16_robust(mono: np.ndarray) -> np.ndarray:
+        """
+        Conversione robusta:
+        - int16: ritorna
+        - float:
+            * se max_abs <= 1.2 -> scala [-1,1] => int16
+            * se 1.2 < max_abs <= 40000 -> assume già in scala “int16-like”, clip/cast
+            * altrimenti -> normalizza su max_abs
+        - altri int: clip/cast
+        """
         if mono.dtype == np.int16:
-            return mono, channels
+            return mono
 
-        # altri interi
-        mono_i16 = mono.astype(np.int16, copy=False)
-        return mono_i16, channels
+        if mono.dtype.kind == "f":
+            x = mono.astype(np.float32, copy=False)
+            max_abs = float(np.max(np.abs(x))) if x.size else 0.0
+
+            if max_abs <= 1.2:
+                y = x * 32767.0
+            elif max_abs <= 40000.0:
+                # già “quasi int16”
+                y = x
+            else:
+                # valori fuori scala: normalizza
+                if max_abs > 0:
+                    y = (x / max_abs) * 32767.0
+                else:
+                    y = x
+
+            return np.clip(y, -32768, 32767).astype(np.int16)
+
+        # interi (int32, int64, ecc.)
+        x = mono.astype(np.int32, copy=False)
+        return np.clip(x, -32768, 32767).astype(np.int16)
 
     def _resample_to_16k(self, pcm_int16: np.ndarray, src_sr: int) -> tuple[np.ndarray, int]:
         if src_sr == self.AZURE_TARGET_SR:
@@ -213,35 +204,61 @@ class ASRStreamWorker:
             logger.exception("[ASR] Errore to_ndarray session=%s user=%s", self.session_id, self.user_id)
             return
 
-        pcm_mono, channels = self._to_mono_int16(pcm)
-        self.channels = channels
+        mono, ch = self._to_mono(pcm)
+        self.channels = ch
 
-        pcm_16k, out_sr = self._resample_to_16k(pcm_mono, src_sr)
+        # log diagnostico “una tantum” per capire davvero cosa arriva da PyAV
+        if not self._logged_audio_stats:
+            try:
+                m_dtype = str(mono.dtype)
+                m_kind = mono.dtype.kind
+                m_max = float(np.max(mono)) if mono.size else 0.0
+                m_min = float(np.min(mono)) if mono.size else 0.0
+                m_abs = float(np.max(np.abs(mono))) if mono.size else 0.0
+                logger.info(
+                    "[ASR][DIAG] incoming mono dtype=%s kind=%s min=%.3f max=%.3f max_abs=%.3f layout=%s sr_in=%s",
+                    m_dtype, m_kind, m_min, m_max, m_abs, frame_layout, src_sr
+                )
+            except Exception:
+                logger.exception("[ASR][DIAG] errore nel calcolo stats input")
+            self._logged_audio_stats = True
 
-        # ---- LIVELLO AUDIO (DEBUG CHIAVE) ----
+        mono_i16 = self._mono_to_int16_robust(mono)
+        pcm_16k, out_sr = self._resample_to_16k(mono_i16, src_sr)
+
         peak = int(np.max(np.abs(pcm_16k))) if pcm_16k.size else 0
         rms = float(np.sqrt(np.mean(pcm_16k.astype(np.float32) ** 2))) if pcm_16k.size else 0.0
 
         pcm_bytes = pcm_16k.tobytes()
-        num_samples = pcm_16k.shape[0]
-        num_bytes = len(pcm_bytes)
+        num_samples = int(pcm_16k.shape[0])
+        num_bytes = int(len(pcm_bytes))
 
         self.total_samples += num_samples
         self.total_bytes += num_bytes
 
-        logger.info(
-            "[ASR] PCM chunk session=%s user=%s samples=%d bytes=%d sr_in=%s sr_out=%s "
-            "peak=%d rms=%.1f total_bytes=%d",
-            self.session_id,
-            self.user_id,
-            num_samples,
-            num_bytes,
-            src_sr,
-            out_sr,
-            peak,
-            rms,
-            self.total_bytes,
-        )
+        # log meno “spam”: solo ogni buffer flush o se clipping evidente
+        clipping = (peak >= 32767)
+        self._push_buf.extend(pcm_bytes)
 
-        if self._azure_client:
-            self._azure_client.push_audio(pcm_bytes)
+        if clipping or len(self._push_buf) >= self.AZURE_PUSH_BYTES:
+            logger.info(
+                "[ASR] PCM buf session=%s user=%s add_samples=%d add_bytes=%d sr_in=%s sr_out=%s peak=%d rms=%.1f buf_bytes=%d total_bytes=%d",
+                self.session_id,
+                self.user_id,
+                num_samples,
+                num_bytes,
+                src_sr,
+                out_sr,
+                peak,
+                rms,
+                len(self._push_buf),
+                self.total_bytes,
+            )
+
+        # invio a blocchi verso Azure
+        if self._azure_client and len(self._push_buf) >= self.AZURE_PUSH_BYTES:
+            try:
+                self._azure_client.push_audio(bytes(self._push_buf))
+            except Exception:
+                logger.exception("[ASR] Errore invio buffer a Azure session=%s user=%s", self.session_id, self.user_id)
+            self._push_buf.clear()
