@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
+import wave
 from typing import Optional
 
 import numpy as np
@@ -20,9 +22,9 @@ class ASRStreamWorker:
     AZURE_PUSH_BYTES = int(AZURE_TARGET_SR * (AZURE_PUSH_MS / 1000.0) * 2)  # 9600 bytes
 
     # --- IMPORTANTISSIMO PER DEBUG: disattivati per togliere variabili ---
-    WARMUP_MS = 0  # prima era 500: ora 0
-    SILENCE_RMS_GATE = 0.0  # prima 40.0: ora 0 (disattiva gate)
-    SILENCE_PEAK_GATE = 0   # prima 250: ora 0 (disattiva gate)
+    WARMUP_MS = 0
+    SILENCE_RMS_GATE = 0.0
+    SILENCE_PEAK_GATE = 0
 
     # stop “gentile”
     DRAIN_TIMEOUT_S = 2.0
@@ -34,16 +36,9 @@ class ASRStreamWorker:
     # ------------------------------- #
     # GAIN (AMPLIFICAZIONE) LATO WORKER
     # ------------------------------- #
-    # Fattore di gain lineare. 2.0 = +6dB, 3.16 ≈ +10dB, 4.0 ≈ +12dB
-    # Suggerimento pratico: iniziare da 3.16 (≈ +10dB).
+    # Nota: dai log, il volume NON sembra basso; questo resta qui per riproducibilità.
     GAIN = 3.16
-
-    # Soft clip: evita saturazione “dura” quando si amplifica
-    # 0.98 lascia un piccolo margine per evitare picchi a 32767 costanti
     SOFTCLIP_LEVEL = 0.98
-
-    # Log "una tantum" anche del gain
-    _logged_gain_stats: bool = False
 
     def __init__(self, session_id: str, user_id: int) -> None:
         self.session_id = str(session_id)
@@ -71,6 +66,14 @@ class ASRStreamWorker:
 
         self._sent_bytes = 0
 
+        # ------------------------------- #
+        # DEBUG WAV DUMP (POST-GAIN)
+        # ------------------------------- #
+        self._dbg_wav_enabled = os.getenv("ASR_DEBUG_WAV", "0") == "1"
+        self._dbg_pcm = bytearray()
+        self._dbg_max_bytes = 5 * self.AZURE_TARGET_SR * 2  # 5s @16kHz mono int16
+        self._dbg_wav_path = f"/tmp/asr_debug_{self.session_id}.wav"
+
     # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #
@@ -94,7 +97,6 @@ class ASRStreamWorker:
                 )
 
         def _on_final(text: str) -> None:
-            # qui logghiamo anche gli empty, perché è il problema che stiamo inseguendo
             logger.info(
                 "[ASR][AZURE][final] session=%s user=%s text=%r",
                 self.session_id,
@@ -136,6 +138,9 @@ class ASRStreamWorker:
         self.total_samples = 0
         self.total_bytes = 0
 
+        if self._dbg_wav_enabled:
+            self._dbg_pcm.clear()
+
         logger.info("[ASR] Worker avviato session=%s user=%s", self.session_id, self.user_id)
 
         self._init_azure_client()
@@ -144,10 +149,6 @@ class ASRStreamWorker:
             logger.info("[ASR] AzureStreamingClient avviato session=%s user=%s", self.session_id, self.user_id)
 
     def _try_signal_end_of_stream(self) -> None:
-        """
-        Best-effort: se AzureStreamingClient espone un metodo per “chiudere” lo stream,
-        lo invoca. In caso contrario non fa nulla.
-        """
         c = self._azure_client
         if c is None:
             return
@@ -193,6 +194,19 @@ class ASRStreamWorker:
         if last_q is not None:
             logger.info("[ASR] Drain timeout: queue_size=%s session=%s user=%s", last_q, self.session_id, self.user_id)
 
+    def _save_debug_wav(self) -> None:
+        if not self._dbg_wav_enabled or not self._dbg_pcm:
+            return
+        try:
+            with wave.open(self._dbg_wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)  # int16
+                wf.setframerate(self.AZURE_TARGET_SR)
+                wf.writeframes(bytes(self._dbg_pcm))
+            logger.info("[ASR][DEBUG] Salvato WAV: %s bytes=%d", self._dbg_wav_path, len(self._dbg_pcm))
+        except Exception:
+            logger.exception("[ASR][DEBUG] Errore salvataggio WAV")
+
     def stop(self) -> None:
         if not self.started:
             return
@@ -205,6 +219,9 @@ class ASRStreamWorker:
             except Exception:
                 logger.exception("[ASR] Errore flush buffer a Azure session=%s user=%s", self.session_id, self.user_id)
             self._push_buf.clear()
+
+        # salva WAV di debug prima di chiudere tutto
+        self._save_debug_wav()
 
         # segnala fine stream (se supportato dal client)
         self._try_signal_end_of_stream()
@@ -300,28 +317,17 @@ class ASRStreamWorker:
         return float(np.sqrt(np.mean(xf * xf)))
 
     def _apply_gain_softclip(self, pcm_16k_i16: np.ndarray) -> np.ndarray:
-        """
-        Applica un gain lineare e un soft-clip simmetrico.
-        - Gain su float32.
-        - Soft-clip tipo tanh per evitare saturazione dura.
-        - Ritorna int16.
-        """
         if self.GAIN <= 1.0001:
             return pcm_16k_i16
 
         x = pcm_16k_i16.astype(np.float32)
-
-        # gain
         x *= float(self.GAIN)
 
-        # soft-clip: tanh normalizzato per stare entro [-SOFTCLIP_LEVEL*32767, +...]
         limit = float(self.SOFTCLIP_LEVEL) * 32767.0
         if limit <= 0:
             limit = 32767.0
 
-        # normalizzazione per tanh
         y = np.tanh(x / limit) * limit
-
         return np.clip(y, -32768.0, 32767.0).astype(np.int16)
 
     # ------------------------------------------------------------------ #
@@ -381,10 +387,9 @@ class ASRStreamWorker:
         peak = int(np.max(np.abs(pcm_16k_g)))
         rms = self._rms_i16(pcm_16k_g)
 
-        # Log “una tantum” del gain effettivo
         if not self._logged_gain_stats:
             logger.info(
-                "[ASR][GAIN] session=%s user=%s gain=%.3f softclip=%.2f peak_pre=%d rms_pre=%.1f peak_post=%d rms_post=%.1f",
+                "[ASR][GAIN] session=%s user=%s gain=%.3f softclip=%.2f peak_pre=%d rms_pre=%.1f peak_post=%d rms_post=%.1f debug_wav=%s",
                 self.session_id,
                 self.user_id,
                 float(self.GAIN),
@@ -393,6 +398,7 @@ class ASRStreamWorker:
                 rms_pre,
                 peak,
                 rms,
+                "ON" if self._dbg_wav_enabled else "OFF",
             )
             self._logged_gain_stats = True
 
@@ -400,7 +406,7 @@ class ASRStreamWorker:
         if now < self._warmup_until:
             return
 
-        # diagnostica aggregata 1Hz (post-gain, perché è ciò che manda ad Azure)
+        # diagnostica aggregata 1Hz (post-gain)
         x = pcm_16k_g.astype(np.float32)
         self._rms_acc += float(np.mean(x * x))
         self._rms_n += 1
@@ -422,6 +428,11 @@ class ASRStreamWorker:
 
         pcm_bytes = pcm_16k_g.tobytes()
         num_bytes = int(len(pcm_bytes))
+
+        # DEBUG: accumula i primi 5 secondi dell'audio effettivamente inviato ad Azure
+        if self._dbg_wav_enabled and len(self._dbg_pcm) < self._dbg_max_bytes:
+            take = min(num_bytes, self._dbg_max_bytes - len(self._dbg_pcm))
+            self._dbg_pcm.extend(pcm_bytes[:take])
 
         # gate silenzio (disattivato se soglie a 0)
         if self.SILENCE_RMS_GATE > 0.0 or self.SILENCE_PEAK_GATE > 0:
@@ -446,5 +457,6 @@ class ASRStreamWorker:
 
             logger.info(
                 "[ASR] PUSH session=%s user=%s sr_in=%s sr_out=%s peak=%d rms=%.1f sent_bytes=%d buf_rem=%d total_bytes=%d",
-                self.session_id, self.user_id, src_sr, out_sr, peak, rms, self._sent_bytes, len(self._push_buf), self.total_bytes
+                self.session_id, self.user_id, src_sr, out_sr, peak, rms,
+                self._sent_bytes, len(self._push_buf), self.total_bytes
             )
