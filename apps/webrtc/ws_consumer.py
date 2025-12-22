@@ -16,6 +16,9 @@ from aiortc import (
 )
 from aiortc.sdp import candidate_from_sdp
 
+# PyAV resampler (hard normalize audio)
+from av.audio.resampler import AudioResampler
+
 from apps.asr.service import asr_stream_manager
 from apps.turns.services import (
     TurnManager,
@@ -43,6 +46,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
 
         self.pc: Optional[RTCPeerConnection] = None
         self._reader_task: Optional[asyncio.Task] = None
+        self._stats_task: Optional[asyncio.Task] = None
 
         # Stato turni "shadow" in questo consumer (aggiornato via eventi del gruppo turns)
         self._turn_state: str = TURN_STATE_IDLE
@@ -207,6 +211,53 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
                 self._asr_started = False
 
     # ------------------------------------------------------------------ #
+    # WEBRTC STATS (per capire robotico = packet loss/jitter)
+    # ------------------------------------------------------------------ #
+
+    async def _stats_loop(self):
+        """
+        Logga 1Hz le stats inbound-rtp audio dal PeerConnection.
+        Serve per diagnosticare packet loss/jitter che producono audio "robotico".
+        """
+        try:
+            while True:
+                await asyncio.sleep(1.0)
+                if not self.pc:
+                    continue
+
+                try:
+                    stats = await self.pc.getStats()
+                except Exception:
+                    logger.exception("[WebRTC][STATS] getStats failed user=%s session=%s", self.user.id, self.session_id)
+                    continue
+
+                # aiortc: stats è un dict-like di report
+                for report in stats.values():
+                    # inbound RTP audio
+                    if getattr(report, "type", None) == "inbound-rtp" and getattr(report, "kind", None) == "audio":
+                        packets_received = getattr(report, "packetsReceived", None)
+                        packets_lost = getattr(report, "packetsLost", None)
+                        jitter = getattr(report, "jitter", None)
+                        bytes_received = getattr(report, "bytesReceived", None)
+                        ssrc = getattr(report, "ssrc", None)
+
+                        logger.info(
+                            "[WebRTC][STATS] user=%s session=%s ssrc=%s packetsReceived=%s packetsLost=%s jitter=%s bytesReceived=%s",
+                            self.user.id,
+                            self.session_id,
+                            ssrc,
+                            packets_received,
+                            packets_lost,
+                            jitter,
+                            bytes_received,
+                        )
+                        break
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("[WebRTC][STATS] loop error user=%s session=%s", self.user.id, self.session_id)
+
+    # ------------------------------------------------------------------ #
     # OFFER / ANSWER
     # ------------------------------------------------------------------ #
 
@@ -226,6 +277,12 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             iceServers=[RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
         )
         self.pc = RTCPeerConnection(configuration=config)
+
+        # Avvio loop stats (1Hz)
+        if self._stats_task is not None:
+            self._stats_task.cancel()
+            self._stats_task = None
+        self._stats_task = asyncio.create_task(self._stats_loop())
 
         @self.pc.on("icegatheringstatechange")
         async def on_ice_gathering_state_change():
@@ -281,10 +338,23 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             if track.kind != "audio":
                 return
 
+            # Resampler “hard normalize”: mono + s16 + 48k
+            # (Così si elimina variabilità di frame/layout/dtype/rate)
+            resampler = AudioResampler(format="s16", layout="mono", rate=48000)
+
             async def reader():
                 try:
                     while True:
                         frame = await track.recv()
+
+                        # Normalizzazione audio prima di ASR
+                        try:
+                            out_frames = resampler.resample(frame)
+                            if out_frames:
+                                frame = out_frames[0]
+                        except Exception:
+                            logger.exception("[WebRTC] Resample error user=%s session=%s", self.user.id, self.session_id)
+                            continue
 
                         # Ingest ASR SOLO se gated ON (speaker corrente)
                         if self._asr_started:
@@ -394,6 +464,10 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
         if self._reader_task is not None:
             self._reader_task.cancel()
             self._reader_task = None
+
+        if self._stats_task is not None:
+            self._stats_task.cancel()
+            self._stats_task = None
 
         if self._asr_started:
             try:
