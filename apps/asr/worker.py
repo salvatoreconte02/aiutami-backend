@@ -71,6 +71,9 @@ class ASRStreamWorker:
         self._debug_wav_buf = bytearray()
         self._debug_wav_max_bytes = int(self.AZURE_TARGET_SR * self.DEBUG_WAV_SECONDS * 2)
 
+        # diag: log una tantum su shape input
+        self._logged_shape = False
+
     # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #
@@ -111,6 +114,7 @@ class ASRStreamWorker:
 
         self._push_buf.clear()
         self._logged_audio_stats = False
+        self._logged_shape = False
 
         self._warmup_until = now + (self.WARMUP_MS / 1000.0)
         self._diag_next = now + (1.0 / self.DIAG_HZ)
@@ -230,7 +234,6 @@ class ASRStreamWorker:
 
     @staticmethod
     def _guess_channels(frame_layout) -> Optional[int]:
-        # PyAV: frame.layout può esporre .channels
         try:
             ch = getattr(frame_layout, "channels", None)
             if ch:
@@ -241,30 +244,52 @@ class ASRStreamWorker:
 
     @staticmethod
     def _to_mono(pcm: np.ndarray) -> tuple[np.ndarray, int]:
+        if pcm.ndim == 1:
+            return pcm, 1
+        if pcm.ndim != 2:
+            x = np.asarray(pcm).reshape(-1)
+            return x, 1
+        # fallback semplice: media sull'asse 0
+        return pcm.mean(axis=0), int(pcm.shape[0])
+
+    @staticmethod
+    def _to_mono_robust(pcm: np.ndarray, expected_ch: Optional[int] = None) -> tuple[np.ndarray, int]:
         """
-        Normalizza qualsiasi layout PCM in mono in modo deterministico.
-        Supporta:
-        - (N,)        mono
-        - (2, N)      stereo channels-first
-        - (N, 2)      stereo channels-last
+        Downmix robusto:
+        - gestisce (ch, n) e (n, ch)
+        - usa expected_ch se disponibile per scegliere l’asse canali
         """
+        if pcm is None:
+            return np.zeros((0,), dtype=np.float32), 0
+
         if pcm.ndim == 1:
             return pcm, 1
 
         if pcm.ndim != 2:
-            raise ValueError(f"PCM shape non supportato: {pcm.shape}")
+            x = np.asarray(pcm).reshape(-1)
+            return x, 1
 
-        # stereo channels-first: (2, N)
-        if pcm.shape[0] == 2 and pcm.shape[1] > 2:
-            return pcm.mean(axis=0), 2
+        a, b = int(pcm.shape[0]), int(pcm.shape[1])
 
-        # stereo channels-last: (N, 2)
-        if pcm.shape[1] == 2 and pcm.shape[0] > 2:
-            return pcm.mean(axis=1), 2
+        # scelta asse canali
+        if expected_ch in (1, 2):
+            if a == expected_ch and b != expected_ch:
+                ch_axis = 0
+                ch = a
+            elif b == expected_ch and a != expected_ch:
+                ch_axis = 1
+                ch = b
+            else:
+                # ambiguo: "plausibilità" (canali piccoli, samples grandi)
+                ch_axis = 0 if a <= 8 and b > a else 1
+                ch = a if ch_axis == 0 else b
+        else:
+            ch_axis = 0 if a <= 8 and b > a else 1
+            ch = a if ch_axis == 0 else b
 
-        # fallback difensivo
-        return pcm.mean(axis=0), pcm.shape[0]
-    
+        mono = pcm.mean(axis=0) if ch_axis == 0 else pcm.mean(axis=1)
+        return mono, int(ch)
+
     @staticmethod
     def _mono_to_int16_robust(mono: np.ndarray) -> np.ndarray:
         if mono.dtype == np.int16:
@@ -288,6 +313,16 @@ class ASRStreamWorker:
         if src_sr == self.AZURE_TARGET_SR or src_sr <= 0:
             return pcm_int16, src_sr
 
+        # caso comune WebRTC: 48k -> 16k (decimazione 3:1 con media)
+        if src_sr == 48000:
+            n = (len(pcm_int16) // 3) * 3
+            if n <= 0:
+                return pcm_int16, src_sr
+            x = pcm_int16[:n].astype(np.float32)
+            y = x.reshape(-1, 3).mean(axis=1)
+            return y.astype(np.int16), self.AZURE_TARGET_SR
+
+        # fallback generico: interpolazione lineare
         x = pcm_int16.astype(np.float32)
         src_len = len(x)
         if src_len < 2:
@@ -341,9 +376,25 @@ class ASRStreamWorker:
             logger.exception("[ASR] Errore to_ndarray session=%s user=%s", self.session_id, self.user_id)
             return
 
-        expected_ch = self._guess_channels(frame_layout) or 1
+        expected_ch = self._guess_channels(frame_layout)  # può essere None
         mono, ch = self._to_mono_robust(pcm, expected_ch)
         self.channels = ch
+
+        # log una tantum: shape input per capire asse canali
+        if not self._logged_shape:
+            try:
+                logger.info(
+                    "[ASR][SHAPE] session=%s user=%s pcm_shape=%s expected_ch=%s inferred_ch=%s dtype=%s",
+                    self.session_id,
+                    self.user_id,
+                    getattr(pcm, "shape", None),
+                    expected_ch,
+                    ch,
+                    getattr(pcm, "dtype", None),
+                )
+            except Exception:
+                logger.exception("[ASR][SHAPE] errore log shape")
+            self._logged_shape = True
 
         if not self._logged_audio_stats:
             try:
