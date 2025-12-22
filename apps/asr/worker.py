@@ -240,40 +240,31 @@ class ASRStreamWorker:
         return None
 
     @staticmethod
-    def _to_mono_robust(pcm: np.ndarray, expected_ch: int) -> tuple[np.ndarray, int]:
+    def _to_mono(pcm: np.ndarray) -> tuple[np.ndarray, int]:
         """
-        Gestisce:
-        - planar: (channels, samples)
-        - packed: (samples, channels)
-        - interleaved: (samples*channels,) con expected_ch>1
+        Normalizza qualsiasi layout PCM in mono in modo deterministico.
+        Supporta:
+        - (N,)        mono
+        - (2, N)      stereo channels-first
+        - (N, 2)      stereo channels-last
         """
-        if pcm is None:
-            return np.array([], dtype=np.float32), 0
-
         if pcm.ndim == 1:
-            if expected_ch and expected_ch > 1 and pcm.size % expected_ch == 0:
-                x = pcm.reshape(-1, expected_ch)
-                return x.mean(axis=1), expected_ch
             return pcm, 1
 
-        if pcm.ndim == 2:
-            a, b = pcm.shape
-            if a == expected_ch and a <= 8:  # (ch, samples)
-                return pcm.mean(axis=0), a
-            if b == expected_ch and b <= 8:  # (samples, ch)
-                return pcm.mean(axis=1), b
+        if pcm.ndim != 2:
+            raise ValueError(f"PCM shape non supportato: {pcm.shape}")
 
-            # fallback euristico
-            if a <= 8 and b > a:
-                return pcm.mean(axis=0), a
-            if b <= 8 and a > b:
-                return pcm.mean(axis=1), b
+        # stereo channels-first: (2, N)
+        if pcm.shape[0] == 2 and pcm.shape[1] > 2:
+            return pcm.mean(axis=0), 2
 
-            return pcm.reshape(-1), 1
+        # stereo channels-last: (N, 2)
+        if pcm.shape[1] == 2 and pcm.shape[0] > 2:
+            return pcm.mean(axis=1), 2
 
-        # fallback per ndim > 2
-        return pcm.reshape(-1), 1
-
+        # fallback difensivo
+        return pcm.mean(axis=0), pcm.shape[0]
+    
     @staticmethod
     def _mono_to_int16_robust(mono: np.ndarray) -> np.ndarray:
         if mono.dtype == np.int16:
