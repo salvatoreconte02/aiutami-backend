@@ -1,10 +1,10 @@
-# apps/asr/azure_client.py
-
 from __future__ import annotations
 
 import logging
-import threading
 import queue
+import threading
+import time
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 import azure.cognitiveservices.speech as speechsdk
@@ -12,16 +12,21 @@ import azure.cognitiveservices.speech as speechsdk
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class _Stats:
+    pushed_bytes_total: int = 0
+    write_failures: int = 0
+
+
 class AzureStreamingClient:
     """
-    Adapter per Azure Speech-To-Text in modalità streaming continua.
-    - riceve chunk PCM (bytes)
-    - li invia ad Azure tramite PushAudioInputStream
-    - espone callback per partial / final
+    Client Azure Speech-to-Text streaming via PushAudioInputStream.
 
-    IMPORTANTE:
-    - Il formato dichiarato qui (sample rate / channels) deve combaciare con quello dei bytes inviati.
-    - Se dichiari 16kHz ma mandi 48kHz, Azure interpreterà male il segnale.
+    Interfaccia attesa dal worker:
+      - start()
+      - push_audio(pcm_bytes: bytes)
+      - stop()
+      - (opzionale) queue_size property
     """
 
     def __init__(
@@ -31,7 +36,6 @@ class AzureStreamingClient:
         language: str = "it-IT",
         on_partial: Optional[Callable[[str], None]] = None,
         on_final: Optional[Callable[[str], None]] = None,
-        *,
         sample_rate_hz: int = 16000,
         channels: int = 1,
         bits_per_sample: int = 16,
@@ -39,7 +43,6 @@ class AzureStreamingClient:
         self.key = key
         self.region = region
         self.language = language
-
         self.on_partial = on_partial
         self.on_final = on_final
 
@@ -47,29 +50,31 @@ class AzureStreamingClient:
         self.channels = int(channels)
         self.bits_per_sample = int(bits_per_sample)
 
-        self._audio_queue: "queue.Queue[bytes]" = queue.Queue()
-        self._stop_flag = threading.Event()
-        self._worker_thread: Optional[threading.Thread] = None
+        self._audio_q: "queue.Queue[Optional[bytes]]" = queue.Queue(maxsize=200)
+        self._writer_thread: Optional[threading.Thread] = None
+        self._running = False
 
-        self._stream: Optional[speechsdk.audio.PushAudioInputStream] = None
+        self._stats = _Stats()
+
+        self._speech_config: Optional[speechsdk.SpeechConfig] = None
+        self._push_stream: Optional[speechsdk.audio.PushAudioInputStream] = None
+        self._audio_cfg: Optional[speechsdk.audio.AudioConfig] = None
         self._recognizer: Optional[speechsdk.SpeechRecognizer] = None
 
-        # stats / debug
-        self._pushed_bytes_total: int = 0
-        self._write_failures: int = 0
-        self._started: bool = False
+        self._lock = threading.Lock()
 
-    # ----------------------------------------------------------
-    # PUBLIC API
-    # ----------------------------------------------------------
+    @property
+    def queue_size(self) -> int:
+        try:
+            return int(self._audio_q.qsize())
+        except Exception:
+            return 0
 
     def start(self) -> None:
-        """
-        Avvia la sessione Azure + thread che invia i chunk dalla coda.
-        Blocca finché la continuous recognition non è effettivamente partita.
-        """
-        if self._started:
-            return
+        with self._lock:
+            if self._running:
+                return
+            self._running = True
 
         logger.info(
             "[AZURE-ASR] Avvio client streaming (region=%s, language=%s, sr=%s, ch=%s, bps=%s)",
@@ -80,95 +85,69 @@ class AzureStreamingClient:
             self.bits_per_sample,
         )
 
-        # Configurazione di base
-        speech_config = speechsdk.SpeechConfig(
-            subscription=self.key,
-            region=self.region,
-        )
-        speech_config.speech_recognition_language = self.language
+        # Speech config
+        self._speech_config = speechsdk.SpeechConfig(subscription=self.key, region=self.region)
+        self._speech_config.speech_recognition_language = self.language
+        # Output dettagliato aiuta diagnosi (non cambia la trascrizione)
+        self._speech_config.output_format = speechsdk.OutputFormat.Detailed
 
-        # Formato audio dichiarato allo stream (DEVE combaciare con i bytes inviati)
-        audio_format = speechsdk.audio.AudioStreamFormat(
+        # Audio stream format (PCM raw)
+        fmt = speechsdk.audio.AudioStreamFormat(
             samples_per_second=self.sample_rate_hz,
             bits_per_sample=self.bits_per_sample,
             channels=self.channels,
         )
-        self._stream = speechsdk.audio.PushAudioInputStream(audio_format)
-        audio_config = speechsdk.audio.AudioConfig(stream=self._stream)
+        self._push_stream = speechsdk.audio.PushAudioInputStream(stream_format=fmt)
+        self._audio_cfg = speechsdk.audio.AudioConfig(stream=self._push_stream)
 
-        self._recognizer = speechsdk.SpeechRecognizer(
-            speech_config=speech_config,
-            audio_config=audio_config,
-        )
+        # Recognizer
+        self._recognizer = speechsdk.SpeechRecognizer(speech_config=self._speech_config, audio_config=self._audio_cfg)
 
-        # EVENTI ------------------------------------------------
-
+        # Handlers
         def _on_recognizing(evt: speechsdk.SpeechRecognitionEventArgs) -> None:
-            # partial
             try:
-                res = evt.result
-                text = res.text or ""
-                reason = getattr(res, "reason", None)
-                if text:
-                    logger.info("[AZURE-ASR][partial] reason=%s text=%r", reason, text)
-                else:
-                    # utile per capire se sta “girando” ma senza testo
-                    logger.debug("[AZURE-ASR][partial] reason=%s (empty text)", reason)
+                txt = evt.result.text or ""
+                if txt and self.on_partial:
+                    self.on_partial(txt)
+                logger.info("[AZURE-ASR][partial] reason=%s text=%r", evt.result.reason, txt)
             except Exception:
-                logger.exception("[AZURE-ASR][partial] handler error")
-
-            if self.on_partial and text:
-                try:
-                    self.on_partial(text)
-                except Exception:
-                    logger.exception("[AZURE-ASR] on_partial callback error")
+                logger.exception("[AZURE-ASR] Errore handler recognizing")
 
         def _on_recognized(evt: speechsdk.SpeechRecognitionEventArgs) -> None:
-            # final / no-match
             try:
                 res = evt.result
-                text = res.text or ""
-                reason = getattr(res, "reason", None)
+                txt = res.text or ""
+                logger.info("[AZURE-ASR][final] reason=%s text=%r", res.reason, txt)
 
-                # Il reason è la cosa più importante da loggare per debug:
-                # - RecognizedSpeech: testo valido
-                # - NoMatch: niente riconosciuto
-                logger.info("[AZURE-ASR][final] reason=%s text=%r", reason, text)
-
-                # In caso di NoMatch, spesso è sample rate errato o audio troppo basso / silenzioso.
-                if reason == speechsdk.ResultReason.NoMatch:
+                # Se arriva vuoto, è cruciale capire se è NoMatch o altro
+                if res.reason == speechsdk.ResultReason.NoMatch:
                     try:
-                        nm = speechsdk.NoMatchDetails.from_result(res)
-                        logger.warning("[AZURE-ASR][final] NoMatchDetails=%r", nm)
+                        details = speechsdk.NoMatchDetails.from_result(res)
+                        logger.warning("[AZURE-ASR][nomatch] %s", details)
                     except Exception:
-                        logger.warning("[AZURE-ASR][final] NoMatchDetails non disponibili")
-            except Exception:
-                logger.exception("[AZURE-ASR][final] handler error")
-                text = ""
+                        logger.exception("[AZURE-ASR] Errore nel leggere NoMatchDetails")
 
-            if self.on_final and text:
-                try:
-                    self.on_final(text)
-                except Exception:
-                    logger.exception("[AZURE-ASR] on_final callback error")
+                if self.on_final:
+                    self.on_final(txt)
+            except Exception:
+                logger.exception("[AZURE-ASR] Errore handler recognized")
 
         def _on_canceled(evt: speechsdk.SpeechRecognitionCanceledEventArgs) -> None:
             try:
-                details = evt.result.cancellation_details
                 logger.error(
-                    "[AZURE-ASR] CANCELED: reason=%s error_code=%s error_details=%r",
-                    details.reason,
-                    getattr(details, "error_code", None),
-                    details.error_details,
+                    "[AZURE-ASR][canceled] reason=%s error_code=%s details=%r",
+                    evt.reason,
+                    getattr(evt, "error_code", None),
+                    getattr(evt, "error_details", None),
                 )
             except Exception:
-                logger.error("[AZURE-ASR] CANCELED (raw evt=%r)", evt)
+                logger.exception("[AZURE-ASR] Errore handler canceled")
 
         def _on_session_started(evt: speechsdk.SessionEventArgs) -> None:
-            logger.info("[AZURE-ASR] Session started: %r", evt)
+            logger.info("[AZURE-ASR] Session started: %s", evt)
 
         def _on_session_stopped(evt: speechsdk.SessionEventArgs) -> None:
-            logger.info("[AZURE-ASR] Session stopped: %r", evt)
+            logger.info("[AZURE-ASR] Session stopped: %s", evt)
 
         self._recognizer.recognizing.connect(_on_recognizing)
         self._recognizer.recognized.connect(_on_recognized)
@@ -176,100 +155,98 @@ class AzureStreamingClient:
         self._recognizer.session_started.connect(_on_session_started)
         self._recognizer.session_stopped.connect(_on_session_stopped)
 
-        # Avvio effettivo della continuous recognition
-        start_future = self._recognizer.start_continuous_recognition_async()
+        # Writer thread (scrive sul push stream)
+        self._writer_thread = threading.Thread(target=self._audio_loop, name="azure-asr-audio-loop", daemon=True)
+        self._writer_thread.start()
+        logger.info("[AZURE-ASR] Audio loop avviato")
+
+        # Start continuous recognition
         try:
-            start_future.get()
+            self._recognizer.start_continuous_recognition_async().get()
             logger.info("[AZURE-ASR] Continuous recognition avviata correttamente")
         except Exception:
-            logger.exception("[AZURE-ASR] Errore in start_continuous_recognition_async")
-            return
-
-        self._started = True
-
-        # Thread che consuma i chunk dalla coda e li scrive nello stream
-        self._worker_thread = threading.Thread(
-            target=self._audio_loop,
-            name="azure-asr-audio-loop",
-            daemon=True,
-        )
-        self._worker_thread.start()
-
-    def stop(self) -> None:
-        """
-        Chiude stream + thread.
-        """
-        logger.info(
-            "[AZURE-ASR] Stop client streaming (pushed_bytes_total=%d write_failures=%d queue_size=%d)",
-            self._pushed_bytes_total,
-            self._write_failures,
-            self._audio_queue.qsize(),
-        )
-
-        self._stop_flag.set()
-
-        if self._recognizer is not None:
-            try:
-                stop_future = self._recognizer.stop_continuous_recognition_async()
-                stop_future.get()
-            except Exception:
-                logger.exception("[AZURE-ASR] Errore in stop_continuous_recognition_async")
-
-        if self._stream is not None:
-            try:
-                self._stream.close()
-            except Exception:
-                logger.exception("[AZURE-ASR] Errore chiudendo PushAudioInputStream")
-
-        self._started = False
+            logger.exception("[AZURE-ASR] Errore avvio continuous recognition")
+            self._running = False
+            raise
 
     def push_audio(self, pcm_bytes: bytes) -> None:
-        """
-        Chiamata dal tuo ASRStreamWorker per accodare audio PCM.
-        """
-        if self._stop_flag.is_set() or not self._started:
-            return
         if not pcm_bytes:
             return
-        self._audio_queue.put(pcm_bytes)
+        if not self._running:
+            return
+        try:
+            # Non bloccare indefinitamente: se la coda è piena, si scarta e si logga
+            self._audio_q.put(pcm_bytes, timeout=0.2)
+            self._stats.pushed_bytes_total += len(pcm_bytes)
+        except queue.Full:
+            self._stats.write_failures += 1
+            logger.warning("[AZURE-ASR] Queue full: drop chunk bytes=%d", len(pcm_bytes))
+        except Exception:
+            self._stats.write_failures += 1
+            logger.exception("[AZURE-ASR] Errore enqueue audio")
 
-    # ----------------------------------------------------------
-    # PRIVATE LOOP — invio chunk
-    # ----------------------------------------------------------
+    def stop(self) -> None:
+        with self._lock:
+            if not self._running:
+                return
+            self._running = False
+
+        # chiusura: sentinel al writer
+        try:
+            self._audio_q.put(None, timeout=0.2)
+        except Exception:
+            pass
+
+        # attende writer
+        if self._writer_thread:
+            self._writer_thread.join(timeout=2.0)
+
+        # chiude stream (segnala EOF ad Azure)
+        try:
+            if self._push_stream:
+                self._push_stream.close()
+        except Exception:
+            logger.exception("[AZURE-ASR] Errore chiusura push stream")
+
+        # breve grace (consente finalizzazione)
+        time.sleep(0.4)
+
+        # stop recognition
+        try:
+            if self._recognizer:
+                self._recognizer.stop_continuous_recognition_async().get()
+        except Exception:
+            logger.exception("[AZURE-ASR] Errore stop continuous recognition")
+
+        logger.info(
+            "[AZURE-ASR] Stop client streaming (pushed_bytes_total=%d write_failures=%d queue_size=%d)",
+            self._stats.pushed_bytes_total,
+            self._stats.write_failures,
+            self.queue_size,
+        )
+
+        self._recognizer = None
+        self._audio_cfg = None
+        self._push_stream = None
+        self._speech_config = None
+        self._writer_thread = None
 
     def _audio_loop(self) -> None:
         """
-        Invia allo stream Azure tutti i chunk PCM presenti in coda.
+        Consuma bytes PCM dalla queue e li scrive su PushAudioInputStream.
         """
-        logger.info("[AZURE-ASR] Audio loop avviato")
-
-        while not self._stop_flag.is_set():
-            try:
-                chunk = self._audio_queue.get(timeout=0.2)
-            except queue.Empty:
-                continue
-
-            if not chunk:
-                continue
-
-            try:
-                # self._stream può essere None solo se start() non è riuscito
-                if self._stream is None:
+        try:
+            while True:
+                item = self._audio_q.get()
+                if item is None:
+                    break
+                if not item:
                     continue
-
-                self._stream.write(chunk)
-                self._pushed_bytes_total += len(chunk)
-
-                # Debug “leggero”: ogni ~1MB
-                if self._pushed_bytes_total % (1024 * 1024) < len(chunk):
-                    logger.debug(
-                        "[AZURE-ASR] pushed_bytes_total=%d queue_size=%d",
-                        self._pushed_bytes_total,
-                        self._audio_queue.qsize(),
-                    )
-
-            except Exception:
-                self._write_failures += 1
-                logger.exception("[AZURE-ASR] Errore scrittura stream")
-
-        logger.info("[AZURE-ASR] Audio loop terminato")
+                try:
+                    if self._push_stream:
+                        self._push_stream.write(item)
+                except Exception:
+                    self._stats.write_failures += 1
+                    logger.exception("[AZURE-ASR] Errore write su push stream")
+        finally:
+            logger.info("[AZURE-ASR] Audio loop terminato")
