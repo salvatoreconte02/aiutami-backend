@@ -35,7 +35,7 @@ class ASRStreamWorker:
     DEBUG_WAV_ENV = "ASR_DEBUG_WAV"
     DEBUG_WAV_SECONDS = 8.0  # max durata dump
 
-    # GAIN: per ora spento (il segnale va prima reso “corretto”)
+    # GAIN: spento finché non è “pulito”
     GAIN = 1.0
     SOFTCLIP_LEVEL = 0.98
 
@@ -54,6 +54,7 @@ class ASRStreamWorker:
 
         self._push_buf = bytearray()
         self._logged_audio_stats = False
+        self._logged_shape = False
 
         self._warmup_until = 0.0
         self._diag_next = 0.0
@@ -67,12 +68,13 @@ class ASRStreamWorker:
 
         # debug wav
         self._debug_wav_enabled = False
-        self._debug_wav_path: Optional[str] = None
-        self._debug_wav_buf = bytearray()
-        self._debug_wav_max_bytes = int(self.AZURE_TARGET_SR * self.DEBUG_WAV_SECONDS * 2)
-
-        # diag: log una tantum su shape input
-        self._logged_shape = False
+        self._debug_wav_raw_path: Optional[str] = None
+        self._debug_wav_16k_path: Optional[str] = None
+        self._debug_wav_raw_buf = bytearray()
+        self._debug_wav_16k_buf = bytearray()
+        self._debug_wav_max_bytes_16k = int(self.AZURE_TARGET_SR * self.DEBUG_WAV_SECONDS * 2)
+        self._debug_wav_max_bytes_raw = int(48000 * self.DEBUG_WAV_SECONDS * 2)  # cap “alto”, poi si riduce
+        self._debug_wav_raw_sr: Optional[int] = None
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -130,8 +132,15 @@ class ASRStreamWorker:
 
         # debug wav
         self._debug_wav_enabled = os.getenv(self.DEBUG_WAV_ENV, "0") == "1"
-        self._debug_wav_buf.clear()
-        self._debug_wav_path = f"/tmp/asr_debug_{self.session_id}.wav" if self._debug_wav_enabled else None
+        self._debug_wav_raw_buf.clear()
+        self._debug_wav_16k_buf.clear()
+        self._debug_wav_raw_sr = None
+        if self._debug_wav_enabled:
+            self._debug_wav_raw_path = f"/tmp/asr_debug_raw_{self.session_id}.wav"
+            self._debug_wav_16k_path = f"/tmp/asr_debug_16k_{self.session_id}.wav"
+        else:
+            self._debug_wav_raw_path = None
+            self._debug_wav_16k_path = None
 
         logger.info("[ASR] Worker avviato session=%s user=%s", self.session_id, self.user_id)
 
@@ -180,18 +189,24 @@ class ASRStreamWorker:
                 return
             time.sleep(0.02)
 
-    def _write_debug_wav(self) -> None:
-        if not self._debug_wav_enabled or not self._debug_wav_path:
-            return
+    def _write_wav(self, path: str, sr: int, pcm_bytes: bytes) -> None:
         try:
-            with wave.open(self._debug_wav_path, "wb") as wf:
+            with wave.open(path, "wb") as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)
-                wf.setframerate(self.AZURE_TARGET_SR)
-                wf.writeframes(bytes(self._debug_wav_buf))
-            logger.info("[ASR][DEBUG] Salvato WAV: %s bytes=%d", self._debug_wav_path, len(self._debug_wav_buf))
+                wf.setframerate(int(sr))
+                wf.writeframes(pcm_bytes)
+            logger.info("[ASR][DEBUG] Salvato WAV: %s sr=%s bytes=%d", path, sr, len(pcm_bytes))
         except Exception:
-            logger.exception("[ASR][DEBUG] Errore salvataggio WAV")
+            logger.exception("[ASR][DEBUG] Errore salvataggio WAV: %s", path)
+
+    def _write_debug_wavs(self) -> None:
+        if not self._debug_wav_enabled:
+            return
+        if self._debug_wav_raw_path and self._debug_wav_raw_sr and self._debug_wav_raw_buf:
+            self._write_wav(self._debug_wav_raw_path, self._debug_wav_raw_sr, bytes(self._debug_wav_raw_buf))
+        if self._debug_wav_16k_path and self._debug_wav_16k_buf:
+            self._write_wav(self._debug_wav_16k_path, self.AZURE_TARGET_SR, bytes(self._debug_wav_16k_buf))
 
     def stop(self) -> None:
         if not self.started:
@@ -213,7 +228,7 @@ class ASRStreamWorker:
         if self._azure_client:
             self._azure_client.stop()
 
-        self._write_debug_wav()
+        self._write_debug_wavs()
 
         logger.info(
             "[ASR] Worker terminato session=%s user=%s total_samples=%d total_bytes=%d sent_bytes=%d debug_wav=%s",
@@ -244,51 +259,34 @@ class ASRStreamWorker:
 
     @staticmethod
     def _to_mono(pcm: np.ndarray) -> tuple[np.ndarray, int]:
+        """
+        Supporta:
+        - (N,)        mono
+        - (C, N)      channels-first
+        - (N, C)      channels-last
+        """
         if pcm.ndim == 1:
             return pcm, 1
+
         if pcm.ndim != 2:
-            x = np.asarray(pcm).reshape(-1)
-            return x, 1
-        # fallback semplice: media sull'asse 0
+            raise ValueError(f"PCM shape non supportato: {pcm.shape}")
+
+        # channels-first
+        if pcm.shape[0] in (1, 2) and pcm.shape[1] > 2:
+            return pcm.mean(axis=0), int(pcm.shape[0])
+
+        # channels-last
+        if pcm.shape[1] in (1, 2) and pcm.shape[0] > 2:
+            return pcm.mean(axis=1), int(pcm.shape[1])
+
+        # fallback
         return pcm.mean(axis=0), int(pcm.shape[0])
 
     @staticmethod
-    def _to_mono_robust(pcm: np.ndarray, expected_ch: Optional[int] = None) -> tuple[np.ndarray, int]:
-        """
-        Downmix robusto:
-        - gestisce (ch, n) e (n, ch)
-        - usa expected_ch se disponibile per scegliere l’asse canali
-        """
-        if pcm is None:
-            return np.zeros((0,), dtype=np.float32), 0
-
-        if pcm.ndim == 1:
-            return pcm, 1
-
-        if pcm.ndim != 2:
-            x = np.asarray(pcm).reshape(-1)
-            return x, 1
-
-        a, b = int(pcm.shape[0]), int(pcm.shape[1])
-
-        # scelta asse canali
-        if expected_ch in (1, 2):
-            if a == expected_ch and b != expected_ch:
-                ch_axis = 0
-                ch = a
-            elif b == expected_ch and a != expected_ch:
-                ch_axis = 1
-                ch = b
-            else:
-                # ambiguo: "plausibilità" (canali piccoli, samples grandi)
-                ch_axis = 0 if a <= 8 and b > a else 1
-                ch = a if ch_axis == 0 else b
-        else:
-            ch_axis = 0 if a <= 8 and b > a else 1
-            ch = a if ch_axis == 0 else b
-
-        mono = pcm.mean(axis=0) if ch_axis == 0 else pcm.mean(axis=1)
-        return mono, int(ch)
+    def _to_mono_robust(pcm: np.ndarray, expected_ch: int) -> tuple[np.ndarray, int]:
+        # expected_ch è usato solo a scopo diagnostico; la conversione è shape-driven
+        mono, ch = ASRStreamWorker._to_mono(pcm)
+        return mono, ch
 
     @staticmethod
     def _mono_to_int16_robust(mono: np.ndarray) -> np.ndarray:
@@ -310,10 +308,11 @@ class ASRStreamWorker:
         return np.clip(x, -32768, 32767).astype(np.int16)
 
     def _resample_to_16k(self, pcm_int16: np.ndarray, src_sr: int) -> tuple[np.ndarray, int]:
+        # Caso “buono”: già 16k
         if src_sr == self.AZURE_TARGET_SR or src_sr <= 0:
             return pcm_int16, src_sr
 
-        # caso comune WebRTC: 48k -> 16k (decimazione 3:1 con media)
+        # Caso critico: 48k -> 16k (downsample x3) con media blocchi da 3 (più stabile, meno artefatti “robotici”)
         if src_sr == 48000:
             n = (len(pcm_int16) // 3) * 3
             if n <= 0:
@@ -322,7 +321,7 @@ class ASRStreamWorker:
             y = x.reshape(-1, 3).mean(axis=1)
             return y.astype(np.int16), self.AZURE_TARGET_SR
 
-        # fallback generico: interpolazione lineare
+        # fallback generico (interp)
         x = pcm_int16.astype(np.float32)
         src_len = len(x)
         if src_len < 2:
@@ -346,7 +345,6 @@ class ASRStreamWorker:
     def _apply_gain_softclip(self, pcm_16k_i16: np.ndarray) -> np.ndarray:
         if self.GAIN <= 1.0001:
             return pcm_16k_i16
-
         x = pcm_16k_i16.astype(np.float32) * float(self.GAIN)
         limit = float(self.SOFTCLIP_LEVEL) * 32767.0
         limit = 32767.0 if limit <= 0 else limit
@@ -376,25 +374,26 @@ class ASRStreamWorker:
             logger.exception("[ASR] Errore to_ndarray session=%s user=%s", self.session_id, self.user_id)
             return
 
-        expected_ch = self._guess_channels(frame_layout)  # può essere None
-        mono, ch = self._to_mono_robust(pcm, expected_ch)
-        self.channels = ch
+        expected_ch = self._guess_channels(frame_layout) or 1
 
-        # log una tantum: shape input per capire asse canali
         if not self._logged_shape:
             try:
                 logger.info(
-                    "[ASR][SHAPE] session=%s user=%s pcm_shape=%s expected_ch=%s inferred_ch=%s dtype=%s",
+                    "[ASR][SHAPE] session=%s user=%s pcm_shape=%s expected_ch=%s dtype=%s sr_in=%s layout=%s",
                     self.session_id,
                     self.user_id,
                     getattr(pcm, "shape", None),
                     expected_ch,
-                    ch,
                     getattr(pcm, "dtype", None),
+                    src_sr,
+                    frame_layout,
                 )
             except Exception:
                 logger.exception("[ASR][SHAPE] errore log shape")
             self._logged_shape = True
+
+        mono, ch = self._to_mono_robust(pcm, expected_ch)
+        self.channels = ch
 
         if not self._logged_audio_stats:
             try:
@@ -404,19 +403,31 @@ class ASRStreamWorker:
                 m_min = float(np.min(mono)) if mono.size else 0.0
                 m_abs = float(np.max(np.abs(mono))) if mono.size else 0.0
                 logger.info(
-                    "[ASR][DIAG] incoming mono dtype=%s kind=%s min=%.6f max=%.6f max_abs=%.6f layout=%s sr_in=%s ch_inferred=%s",
-                    m_dtype, m_kind, m_min, m_max, m_abs, frame_layout, src_sr, ch
+                    "[ASR][DIAG] mono dtype=%s kind=%s min=%.6f max=%.6f max_abs=%.6f sr_in=%s ch=%s expected_ch=%s",
+                    m_dtype, m_kind, m_min, m_max, m_abs, src_sr, ch, expected_ch
                 )
             except Exception:
                 logger.exception("[ASR][DIAG] errore nel calcolo stats input")
             self._logged_audio_stats = True
 
         mono_i16 = self._mono_to_int16_robust(mono)
+
+        # --- DEBUG RAW (prima del resample) ---
+        if self._debug_wav_enabled:
+            if self._debug_wav_raw_sr is None and src_sr > 0:
+                self._debug_wav_raw_sr = src_sr
+                self._debug_wav_max_bytes_raw = int(src_sr * self.DEBUG_WAV_SECONDS * 2)
+            if self._debug_wav_raw_sr and len(self._debug_wav_raw_buf) < self._debug_wav_max_bytes_raw:
+                raw_bytes = mono_i16.tobytes()
+                remaining = self._debug_wav_max_bytes_raw - len(self._debug_wav_raw_buf)
+                self._debug_wav_raw_buf.extend(raw_bytes[:remaining])
+
+        # resample -> 16k
         pcm_16k, out_sr = self._resample_to_16k(mono_i16, src_sr)
         if not pcm_16k.size:
             return
 
-        # gain (attualmente 1.0 quindi no-op)
+        # gain (di default no-op)
         pcm_16k_g = self._apply_gain_softclip(pcm_16k)
 
         peak = int(np.max(np.abs(pcm_16k_g)))
@@ -425,6 +436,12 @@ class ASRStreamWorker:
         now = time.time()
         if now < self._warmup_until:
             return
+
+        # --- DEBUG 16k (dopo warmup, come lo mandi ad Azure) ---
+        if self._debug_wav_enabled and len(self._debug_wav_16k_buf) < self._debug_wav_max_bytes_16k:
+            b = pcm_16k_g.tobytes()
+            remaining = self._debug_wav_max_bytes_16k - len(self._debug_wav_16k_buf)
+            self._debug_wav_16k_buf.extend(b[:remaining])
 
         # diagnostica 1Hz (post-processing)
         x = pcm_16k_g.astype(np.float32)
@@ -451,11 +468,6 @@ class ASRStreamWorker:
 
         self.total_bytes += num_bytes
         self.total_samples += int(pcm_16k_g.shape[0])
-
-        # accumula per debug wav (post warmup)
-        if self._debug_wav_enabled and len(self._debug_wav_buf) < self._debug_wav_max_bytes:
-            remaining = self._debug_wav_max_bytes - len(self._debug_wav_buf)
-            self._debug_wav_buf.extend(pcm_bytes[:remaining])
 
         self._push_buf.extend(pcm_bytes)
 
