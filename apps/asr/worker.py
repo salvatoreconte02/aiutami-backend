@@ -31,6 +31,20 @@ class ASRStreamWorker:
     # diagnostica aggregata 1Hz
     DIAG_HZ = 1.0
 
+    # ------------------------------- #
+    # GAIN (AMPLIFICAZIONE) LATO WORKER
+    # ------------------------------- #
+    # Fattore di gain lineare. 2.0 = +6dB, 3.16 ≈ +10dB, 4.0 ≈ +12dB
+    # Suggerimento pratico: iniziare da 3.16 (≈ +10dB).
+    GAIN = 3.16
+
+    # Soft clip: evita saturazione “dura” quando si amplifica
+    # 0.98 lascia un piccolo margine per evitare picchi a 32767 costanti
+    SOFTCLIP_LEVEL = 0.98
+
+    # Log "una tantum" anche del gain
+    _logged_gain_stats: bool = False
+
     def __init__(self, session_id: str, user_id: int) -> None:
         self.session_id = str(session_id)
         self.user_id = int(user_id)
@@ -45,6 +59,7 @@ class ASRStreamWorker:
 
         self._push_buf = bytearray()
         self._logged_audio_stats = False
+        self._logged_gain_stats = False
 
         self._warmup_until = 0.0
         self._diag_next = 0.0
@@ -107,6 +122,7 @@ class ASRStreamWorker:
 
         self._push_buf.clear()
         self._logged_audio_stats = False
+        self._logged_gain_stats = False
 
         self._warmup_until = now + (self.WARMUP_MS / 1000.0)
         self._diag_next = now + (1.0 / self.DIAG_HZ)
@@ -273,6 +289,42 @@ class ASRStreamWorker:
         return y.astype(np.int16), self.AZURE_TARGET_SR
 
     # ------------------------------------------------------------------ #
+    # Gain / Soft clip
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _rms_i16(x_i16: np.ndarray) -> float:
+        if x_i16.size == 0:
+            return 0.0
+        xf = x_i16.astype(np.float32)
+        return float(np.sqrt(np.mean(xf * xf)))
+
+    def _apply_gain_softclip(self, pcm_16k_i16: np.ndarray) -> np.ndarray:
+        """
+        Applica un gain lineare e un soft-clip simmetrico.
+        - Gain su float32.
+        - Soft-clip tipo tanh per evitare saturazione dura.
+        - Ritorna int16.
+        """
+        if self.GAIN <= 1.0001:
+            return pcm_16k_i16
+
+        x = pcm_16k_i16.astype(np.float32)
+
+        # gain
+        x *= float(self.GAIN)
+
+        # soft-clip: tanh normalizzato per stare entro [-SOFTCLIP_LEVEL*32767, +...]
+        limit = float(self.SOFTCLIP_LEVEL) * 32767.0
+        if limit <= 0:
+            limit = 32767.0
+
+        # normalizzazione per tanh
+        y = np.tanh(x / limit) * limit
+
+        return np.clip(y, -32768.0, 32767.0).astype(np.int16)
+
+    # ------------------------------------------------------------------ #
     # Ingestione frame
     # ------------------------------------------------------------------ #
 
@@ -318,19 +370,42 @@ class ASRStreamWorker:
         if not pcm_16k.size:
             return
 
-        peak = int(np.max(np.abs(pcm_16k)))
-        rms = float(np.sqrt(np.mean(pcm_16k.astype(np.float32) ** 2)))
+        # Metriche pre-gain
+        peak_pre = int(np.max(np.abs(pcm_16k)))
+        rms_pre = self._rms_i16(pcm_16k)
+
+        # Applica gain + softclip
+        pcm_16k_g = self._apply_gain_softclip(pcm_16k)
+
+        # Metriche post-gain
+        peak = int(np.max(np.abs(pcm_16k_g)))
+        rms = self._rms_i16(pcm_16k_g)
+
+        # Log “una tantum” del gain effettivo
+        if not self._logged_gain_stats:
+            logger.info(
+                "[ASR][GAIN] session=%s user=%s gain=%.3f softclip=%.2f peak_pre=%d rms_pre=%.1f peak_post=%d rms_post=%.1f",
+                self.session_id,
+                self.user_id,
+                float(self.GAIN),
+                float(self.SOFTCLIP_LEVEL),
+                peak_pre,
+                rms_pre,
+                peak,
+                rms,
+            )
+            self._logged_gain_stats = True
 
         now = time.time()
         if now < self._warmup_until:
             return
 
-        # diagnostica aggregata 1Hz
-        x = pcm_16k.astype(np.float32)
+        # diagnostica aggregata 1Hz (post-gain, perché è ciò che manda ad Azure)
+        x = pcm_16k_g.astype(np.float32)
         self._rms_acc += float(np.mean(x * x))
         self._rms_n += 1
-        self._zero_n += int(np.sum(pcm_16k == 0))
-        self._tot_n += int(pcm_16k.size)
+        self._zero_n += int(np.sum(pcm_16k_g == 0))
+        self._tot_n += int(pcm_16k_g.size)
 
         if now >= self._diag_next and self._rms_n > 0:
             rms_1s = (self._rms_acc / self._rms_n) ** 0.5
@@ -345,7 +420,7 @@ class ASRStreamWorker:
             self._tot_n = 0
             self._diag_next = now + (1.0 / self.DIAG_HZ)
 
-        pcm_bytes = pcm_16k.tobytes()
+        pcm_bytes = pcm_16k_g.tobytes()
         num_bytes = int(len(pcm_bytes))
 
         # gate silenzio (disattivato se soglie a 0)
@@ -354,7 +429,7 @@ class ASRStreamWorker:
                 return
 
         self.total_bytes += num_bytes
-        self.total_samples += int(pcm_16k.shape[0])
+        self.total_samples += int(pcm_16k_g.shape[0])
 
         self._push_buf.extend(pcm_bytes)
 

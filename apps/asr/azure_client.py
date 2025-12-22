@@ -116,33 +116,74 @@ class AzureStreamingClient:
         def _on_recognized(evt: speechsdk.SpeechRecognitionEventArgs) -> None:
             try:
                 res = evt.result
+                reason = res.reason
                 txt = res.text or ""
-                logger.info("[AZURE-ASR][final] reason=%s text=%r", res.reason, txt)
 
-                # Se arriva vuoto, è cruciale capire se è NoMatch o altro
-                if res.reason == speechsdk.ResultReason.NoMatch:
+                logger.info(
+                    "[AZURE-ASR][recognized] reason=%s text=%r",
+                    reason,
+                    txt,
+                )
+
+                # Caso esplicito: NoMatch (Azure non ha riconosciuto parlato valido)
+                if reason == speechsdk.ResultReason.NoMatch:
                     try:
                         details = speechsdk.NoMatchDetails.from_result(res)
-                        logger.warning("[AZURE-ASR][nomatch] %s", details)
+                        logger.warning(
+                            "[AZURE-ASR][nomatch] reason=%s details=%r",
+                            details.reason,
+                            details,
+                        )
                     except Exception:
-                        logger.exception("[AZURE-ASR] Errore nel leggere NoMatchDetails")
+                        logger.exception("[AZURE-ASR] Errore lettura NoMatchDetails")
 
-                if self.on_final:
+                    return  # niente on_final in caso di NoMatch
+
+                # Caso: RecognizedSpeech ma testo vuoto → log JSON Azure
+                if reason == speechsdk.ResultReason.RecognizedSpeech and not txt:
+                    try:
+                        json_result = res.properties.get(
+                            speechsdk.PropertyId.SpeechServiceResponse_JsonResult
+                        )
+                        logger.warning(
+                            "[AZURE-ASR][final-empty][json]=%s",
+                            json_result,
+                        )
+                    except Exception:
+                        logger.exception("[AZURE-ASR] Errore lettura JsonResult")
+
+                    return  # testo vuoto non va propagato
+
+                # Caso valido: testo finale non vuoto
+                if txt and self.on_final:
                     self.on_final(txt)
+
             except Exception:
                 logger.exception("[AZURE-ASR] Errore handler recognized")
-
-        def _on_canceled(evt: speechsdk.SpeechRecognitionCanceledEventArgs) -> None:
+                
+                
+        def _on_canceled(evt) -> None:
             try:
+                # Alcune versioni dell’SDK espongono i dettagli qui:
+                details = getattr(evt, "cancellation_details", None)
+                if details is not None:
+                    logger.error(
+                        "[AZURE-ASR][canceled] reason=%s error_code=%s details=%r",
+                        getattr(details, "reason", None),
+                        getattr(details, "error_code", None),
+                        getattr(details, "error_details", None),
+                    )
+                    return
+
+                # Fallback: attributi diretti (se presenti)
                 logger.error(
                     "[AZURE-ASR][canceled] reason=%s error_code=%s details=%r",
-                    evt.reason,
+                    getattr(evt, "reason", None),
                     getattr(evt, "error_code", None),
                     getattr(evt, "error_details", None),
                 )
             except Exception:
-                logger.exception("[AZURE-ASR] Errore handler canceled")
-
+                logger.exception("[AZURE-ASR] Errore handler canceled (safe)")
         def _on_session_started(evt: speechsdk.SessionEventArgs) -> None:
             logger.info("[AZURE-ASR] Session started: %s", evt)
 
