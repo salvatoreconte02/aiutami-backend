@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Optional
 
 import numpy as np
@@ -18,6 +19,16 @@ class ASRStreamWorker:
     AZURE_PUSH_MS = 200
     AZURE_PUSH_BYTES = int(AZURE_TARGET_SR * (AZURE_PUSH_MS / 1000.0) * 2)  # 16k * 0.2 * 2 = 6400 bytes
 
+    # warm-up (scarta i primissimi frame “sporchi”)
+    WARMUP_MS = 500
+
+    # gate anti-silenzio (riduce costi e final vuoti)
+    SILENCE_RMS_GATE = 30.0
+    SILENCE_PEAK_GATE = 200
+
+    # log diagnostico 1Hz
+    DIAG_HZ = 1.0
+
     def __init__(self, session_id: str, user_id: int) -> None:
         self.session_id = str(session_id)
         self.user_id = int(user_id)
@@ -31,6 +42,16 @@ class ASRStreamWorker:
         self._azure_client: Optional[AzureStreamingClient] = None
         self._push_buf = bytearray()
         self._logged_audio_stats = False  # log “diagnostico” una volta per sessione
+
+        # runtime gating/diagnostics
+        self._t0 = time.time()
+        self._warmup_until = self._t0 + (self.WARMUP_MS / 1000.0)
+        self._diag_next = self._t0 + (1.0 / self.DIAG_HZ)
+
+        self._rms_acc = 0.0
+        self._rms_n = 0
+        self._zero_n = 0
+        self._tot_n = 0
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -47,12 +68,22 @@ class ASRStreamWorker:
 
         def _on_partial(text: str) -> None:
             if text:
-                logger.info("[ASR][AZURE][partial] session=%s user=%s text=%r", self.session_id, self.user_id, text)
+                logger.info(
+                    "[ASR][AZURE][partial] session=%s user=%s text=%r",
+                    self.session_id,
+                    self.user_id,
+                    text,
+                )
 
         def _on_final(text: str) -> None:
             if not text:
                 return
-            logger.info("[ASR][AZURE][final] session=%s user=%s text=%r", self.session_id, self.user_id, text)
+            logger.info(
+                "[ASR][AZURE][final] session=%s user=%s text=%r",
+                self.session_id,
+                self.user_id,
+                text,
+            )
 
         self._azure_client = AzureStreamingClient(
             key=key,
@@ -72,6 +103,16 @@ class ASRStreamWorker:
         self.started = True
         self._push_buf.clear()
         self._logged_audio_stats = False
+
+        now = time.time()
+        self._t0 = now
+        self._warmup_until = now + (self.WARMUP_MS / 1000.0)
+        self._diag_next = now + (1.0 / self.DIAG_HZ)
+
+        self._rms_acc = 0.0
+        self._rms_n = 0
+        self._zero_n = 0
+        self._tot_n = 0
 
         logger.info("[ASR] Worker avviato session=%s user=%s", self.session_id, self.user_id)
 
@@ -138,10 +179,8 @@ class ASRStreamWorker:
             if max_abs <= 1.2:
                 y = x * 32767.0
             elif max_abs <= 40000.0:
-                # già “quasi int16”
                 y = x
             else:
-                # valori fuori scala: normalizza
                 if max_abs > 0:
                     y = (x / max_abs) * 32767.0
                 else:
@@ -149,7 +188,6 @@ class ASRStreamWorker:
 
             return np.clip(y, -32768, 32767).astype(np.int16)
 
-        # interi (int32, int64, ecc.)
         x = mono.astype(np.int32, copy=False)
         return np.clip(x, -32768, 32767).astype(np.int16)
 
@@ -216,8 +254,14 @@ class ASRStreamWorker:
                 m_min = float(np.min(mono)) if mono.size else 0.0
                 m_abs = float(np.max(np.abs(mono))) if mono.size else 0.0
                 logger.info(
-                    "[ASR][DIAG] incoming mono dtype=%s kind=%s min=%.3f max=%.3f max_abs=%.3f layout=%s sr_in=%s",
-                    m_dtype, m_kind, m_min, m_max, m_abs, frame_layout, src_sr
+                    "[ASR][DIAG] incoming mono dtype=%s kind=%s min=%.6f max=%.6f max_abs=%.6f layout=%s sr_in=%s",
+                    m_dtype,
+                    m_kind,
+                    m_min,
+                    m_max,
+                    m_abs,
+                    frame_layout,
+                    src_sr,
                 )
             except Exception:
                 logger.exception("[ASR][DIAG] errore nel calcolo stats input")
@@ -226,8 +270,46 @@ class ASRStreamWorker:
         mono_i16 = self._mono_to_int16_robust(mono)
         pcm_16k, out_sr = self._resample_to_16k(mono_i16, src_sr)
 
-        peak = int(np.max(np.abs(pcm_16k))) if pcm_16k.size else 0
-        rms = float(np.sqrt(np.mean(pcm_16k.astype(np.float32) ** 2))) if pcm_16k.size else 0.0
+        if not pcm_16k.size:
+            return
+
+        peak = int(np.max(np.abs(pcm_16k)))
+        rms = float(np.sqrt(np.mean(pcm_16k.astype(np.float32) ** 2)))
+
+        # warm-up: scarta primissimi frame (spesso “sporchi”/clippati)
+        now = time.time()
+        if now < self._warmup_until:
+            return
+
+        # diagnostica su 1 secondo (per capire se è silenzio reale / attenuato)
+        x = pcm_16k.astype(np.float32)
+        self._rms_acc += float(np.mean(x * x))
+        self._rms_n += 1
+        self._zero_n += int(np.sum(pcm_16k == 0))
+        self._tot_n += int(pcm_16k.size)
+
+        if now >= self._diag_next and self._rms_n > 0:
+            rms_1s = (self._rms_acc / self._rms_n) ** 0.5
+            zero_pct = (self._zero_n / max(self._tot_n, 1)) * 100.0
+            logger.info(
+                "[ASR][1s] session=%s user=%s rms_1s=%.1f zero_pct=%.1f%% sr_in=%s sr_out=%s ch=%s",
+                self.session_id,
+                self.user_id,
+                rms_1s,
+                zero_pct,
+                src_sr,
+                out_sr,
+                self.channels,
+            )
+            self._rms_acc = 0.0
+            self._rms_n = 0
+            self._zero_n = 0
+            self._tot_n = 0
+            self._diag_next = now + (1.0 / self.DIAG_HZ)
+
+        # gate anti-silenzio: non accumulare né inviare “quasi muto”
+        if rms < self.SILENCE_RMS_GATE and peak < self.SILENCE_PEAK_GATE:
+            return
 
         pcm_bytes = pcm_16k.tobytes()
         num_samples = int(pcm_16k.shape[0])
@@ -236,10 +318,11 @@ class ASRStreamWorker:
         self.total_samples += num_samples
         self.total_bytes += num_bytes
 
-        # log meno “spam”: solo ogni buffer flush o se clipping evidente
-        clipping = (peak >= 32767)
+        # bufferizza sempre (dopo gate)
         self._push_buf.extend(pcm_bytes)
 
+        # log meno “spam”: solo su flush o se clipping evidente
+        clipping = (peak >= 32767)
         if clipping or len(self._push_buf) >= self.AZURE_PUSH_BYTES:
             logger.info(
                 "[ASR] PCM buf session=%s user=%s add_samples=%d add_bytes=%d sr_in=%s sr_out=%s peak=%d rms=%.1f buf_bytes=%d total_bytes=%d",
