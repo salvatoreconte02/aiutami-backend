@@ -15,20 +15,18 @@ logger = logging.getLogger(__name__)
 class ASRStreamWorker:
     AZURE_TARGET_SR = 16000
 
-    # invio verso Azure a blocchi più “grossi” (meno overhead)
+    # invio verso Azure a chunk fissi (meno overhead, più regolare)
     AZURE_PUSH_MS = 300
-    AZURE_PUSH_BYTES = int(AZURE_TARGET_SR * (AZURE_PUSH_MS / 1000.0) * 2)  # 16k * 0.3 * 2 = 9600 bytes
+    AZURE_PUSH_BYTES = int(AZURE_TARGET_SR * (AZURE_PUSH_MS / 1000.0) * 2)  # 9600 bytes
 
-    # warm-up: scarta i primissimi frame (spesso “sporchi”)
-    WARMUP_MS = 500
+    # --- IMPORTANTISSIMO PER DEBUG: disattivati per togliere variabili ---
+    WARMUP_MS = 0  # prima era 500: ora 0
+    SILENCE_RMS_GATE = 0.0  # prima 40.0: ora 0 (disattiva gate)
+    SILENCE_PEAK_GATE = 0   # prima 250: ora 0 (disattiva gate)
 
-    # gate anti-silenzio (riduce final vuoti/costi)
-    SILENCE_RMS_GATE = 40.0
-    SILENCE_PEAK_GATE = 250
-
-    # flush finale: se resta pochissimo audio, scartarlo (evita queue residue su stop)
-    MIN_FLUSH_MS = 120
-    MIN_FLUSH_BYTES = int(AZURE_TARGET_SR * (MIN_FLUSH_MS / 1000.0) * 2)  # 3840 bytes
+    # stop “gentile”
+    DRAIN_TIMEOUT_S = 2.0
+    STOP_GRACE_SLEEP_S = 0.6
 
     # diagnostica aggregata 1Hz
     DIAG_HZ = 1.0
@@ -48,7 +46,6 @@ class ASRStreamWorker:
         self._push_buf = bytearray()
         self._logged_audio_stats = False
 
-        self._t0 = 0.0
         self._warmup_until = 0.0
         self._diag_next = 0.0
 
@@ -57,11 +54,7 @@ class ASRStreamWorker:
         self._zero_n = 0
         self._tot_n = 0
 
-        # contatori utili
         self._sent_bytes = 0
-        self._dropped_silence_bytes = 0
-        self._dropped_warmup_bytes = 0
-        self._dropped_tail_bytes = 0
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -86,8 +79,7 @@ class ASRStreamWorker:
                 )
 
         def _on_final(text: str) -> None:
-            if not text:
-                return
+            # qui logghiamo anche gli empty, perché è il problema che stiamo inseguendo
             logger.info(
                 "[ASR][AZURE][final] session=%s user=%s text=%r",
                 self.session_id,
@@ -116,7 +108,6 @@ class ASRStreamWorker:
         self._push_buf.clear()
         self._logged_audio_stats = False
 
-        self._t0 = now
         self._warmup_until = now + (self.WARMUP_MS / 1000.0)
         self._diag_next = now + (1.0 / self.DIAG_HZ)
 
@@ -126,9 +117,8 @@ class ASRStreamWorker:
         self._tot_n = 0
 
         self._sent_bytes = 0
-        self._dropped_silence_bytes = 0
-        self._dropped_warmup_bytes = 0
-        self._dropped_tail_bytes = 0
+        self.total_samples = 0
+        self.total_bytes = 0
 
         logger.info("[ASR] Worker avviato session=%s user=%s", self.session_id, self.user_id)
 
@@ -137,18 +127,33 @@ class ASRStreamWorker:
             self._azure_client.start()
             logger.info("[ASR] AzureStreamingClient avviato session=%s user=%s", self.session_id, self.user_id)
 
-    def _drain_queue_best_effort(self, timeout_s: float = 0.5) -> None:
+    def _try_signal_end_of_stream(self) -> None:
         """
-        Best-effort: se AzureStreamingClient espone un attributo/metodo per la queue,
-        attendere brevemente che si svuoti prima di chiudere.
+        Best-effort: se AzureStreamingClient espone un metodo per “chiudere” lo stream,
+        lo invoca. In caso contrario non fa nulla.
         """
-        client = self._azure_client
-        if client is None:
+        c = self._azure_client
+        if c is None:
+            return
+
+        for name in ("end_stream", "end_of_stream", "close_stream", "close", "finish", "complete"):
+            fn = getattr(c, name, None)
+            if callable(fn):
+                try:
+                    fn()
+                    logger.info("[ASR] Segnalato end-of-stream a Azure via %s()", name)
+                except Exception:
+                    logger.exception("[ASR] Errore durante end-of-stream via %s()", name)
+                return
+
+    def _drain_queue_best_effort(self, timeout_s: float) -> None:
+        c = self._azure_client
+        if c is None:
             return
 
         def _get_qsize() -> Optional[int]:
             for name in ("queue_size", "qsize", "get_queue_size"):
-                v = getattr(client, name, None)
+                v = getattr(c, name, None)
                 try:
                     if callable(v):
                         return int(v())
@@ -159,46 +164,51 @@ class ASRStreamWorker:
             return None
 
         end = time.time() + max(0.0, timeout_s)
+        last_q = None
         while time.time() < end:
             q = _get_qsize()
             if q is None:
                 return
+            last_q = q
             if q <= 0:
                 return
             time.sleep(0.02)
+
+        if last_q is not None:
+            logger.info("[ASR] Drain timeout: queue_size=%s session=%s user=%s", last_q, self.session_id, self.user_id)
 
     def stop(self) -> None:
         if not self.started:
             return
 
-        # flush residuo: inviare solo se “sensato”, altrimenti scartare
+        # flush residuo (tutto)
         if self._azure_client and self._push_buf:
             try:
-                if len(self._push_buf) >= self.MIN_FLUSH_BYTES:
-                    self._azure_client.push_audio(bytes(self._push_buf))
-                    self._sent_bytes += len(self._push_buf)
-                else:
-                    self._dropped_tail_bytes += len(self._push_buf)
+                self._azure_client.push_audio(bytes(self._push_buf))
+                self._sent_bytes += len(self._push_buf)
             except Exception:
                 logger.exception("[ASR] Errore flush buffer a Azure session=%s user=%s", self.session_id, self.user_id)
             self._push_buf.clear()
 
-        # prova a far svuotare la coda prima di chiudere (se possibile)
-        self._drain_queue_best_effort(timeout_s=0.5)
+        # segnala fine stream (se supportato dal client)
+        self._try_signal_end_of_stream()
+
+        # attesa “grace” per dare tempo al recognizer di finalizzare
+        time.sleep(self.STOP_GRACE_SLEEP_S)
+
+        # prova a far svuotare la coda prima di chiudere
+        self._drain_queue_best_effort(timeout_s=self.DRAIN_TIMEOUT_S)
 
         if self._azure_client:
             self._azure_client.stop()
 
         logger.info(
-            "[ASR] Worker terminato session=%s user=%s total_samples=%d total_bytes=%d sent_bytes=%d dropped_warmup=%d dropped_silence=%d dropped_tail=%d",
+            "[ASR] Worker terminato session=%s user=%s total_samples=%d total_bytes=%d sent_bytes=%d",
             self.session_id,
             self.user_id,
             self.total_samples,
             self.total_bytes,
             self._sent_bytes,
-            self._dropped_warmup_bytes,
-            self._dropped_silence_bytes,
-            self._dropped_tail_bytes,
         )
 
         self.started = False
@@ -223,14 +233,12 @@ class ASRStreamWorker:
         if mono.dtype.kind == "f":
             x = mono.astype(np.float32, copy=False)
             max_abs = float(np.max(np.abs(x))) if x.size else 0.0
-
             if max_abs <= 1.2:
                 y = x * 32767.0
             elif max_abs <= 40000.0:
                 y = x
             else:
                 y = (x / max_abs) * 32767.0 if max_abs > 0 else x
-
             return np.clip(y, -32768, 32767).astype(np.int16)
 
         x = mono.astype(np.int32, copy=False)
@@ -299,13 +307,7 @@ class ASRStreamWorker:
                 m_abs = float(np.max(np.abs(mono))) if mono.size else 0.0
                 logger.info(
                     "[ASR][DIAG] incoming mono dtype=%s kind=%s min=%.6f max=%.6f max_abs=%.6f layout=%s sr_in=%s",
-                    m_dtype,
-                    m_kind,
-                    m_min,
-                    m_max,
-                    m_abs,
-                    frame_layout,
-                    src_sr,
+                    m_dtype, m_kind, m_min, m_max, m_abs, frame_layout, src_sr
                 )
             except Exception:
                 logger.exception("[ASR][DIAG] errore nel calcolo stats input")
@@ -313,20 +315,14 @@ class ASRStreamWorker:
 
         mono_i16 = self._mono_to_int16_robust(mono)
         pcm_16k, out_sr = self._resample_to_16k(mono_i16, src_sr)
-
         if not pcm_16k.size:
             return
 
         peak = int(np.max(np.abs(pcm_16k)))
         rms = float(np.sqrt(np.mean(pcm_16k.astype(np.float32) ** 2)))
 
-        pcm_bytes = pcm_16k.tobytes()
-        num_bytes = int(len(pcm_bytes))
-
-        # warm-up drop
         now = time.time()
         if now < self._warmup_until:
-            self._dropped_warmup_bytes += num_bytes
             return
 
         # diagnostica aggregata 1Hz
@@ -341,13 +337,7 @@ class ASRStreamWorker:
             zero_pct = (self._zero_n / max(self._tot_n, 1)) * 100.0
             logger.info(
                 "[ASR][1s] session=%s user=%s rms_1s=%.1f zero_pct=%.1f%% sr_in=%s sr_out=%s ch=%s",
-                self.session_id,
-                self.user_id,
-                rms_1s,
-                zero_pct,
-                src_sr,
-                out_sr,
-                self.channels,
+                self.session_id, self.user_id, rms_1s, zero_pct, src_sr, out_sr, self.channels
             )
             self._rms_acc = 0.0
             self._rms_n = 0
@@ -355,19 +345,19 @@ class ASRStreamWorker:
             self._tot_n = 0
             self._diag_next = now + (1.0 / self.DIAG_HZ)
 
-        # gate anti-silenzio
-        if rms < self.SILENCE_RMS_GATE and peak < self.SILENCE_PEAK_GATE:
-            self._dropped_silence_bytes += num_bytes
-            return
+        pcm_bytes = pcm_16k.tobytes()
+        num_bytes = int(len(pcm_bytes))
 
-        # contatori (audio “utile”)
+        # gate silenzio (disattivato se soglie a 0)
+        if self.SILENCE_RMS_GATE > 0.0 or self.SILENCE_PEAK_GATE > 0:
+            if rms < self.SILENCE_RMS_GATE and peak < self.SILENCE_PEAK_GATE:
+                return
+
         self.total_bytes += num_bytes
         self.total_samples += int(pcm_16k.shape[0])
 
-        # bufferizza
         self._push_buf.extend(pcm_bytes)
 
-        # invio: in chunk fissi da AZURE_PUSH_BYTES, mantenendo l’eventuale residuo
         if self._azure_client and len(self._push_buf) >= self.AZURE_PUSH_BYTES:
             try:
                 while len(self._push_buf) >= self.AZURE_PUSH_BYTES:
@@ -381,13 +371,5 @@ class ASRStreamWorker:
 
             logger.info(
                 "[ASR] PUSH session=%s user=%s sr_in=%s sr_out=%s peak=%d rms=%.1f sent_bytes=%d buf_rem=%d total_bytes=%d",
-                self.session_id,
-                self.user_id,
-                src_sr,
-                out_sr,
-                peak,
-                rms,
-                self._sent_bytes,
-                len(self._push_buf),
-                self.total_bytes,
+                self.session_id, self.user_id, src_sr, out_sr, peak, rms, self._sent_bytes, len(self._push_buf), self.total_bytes
             )
