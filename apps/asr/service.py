@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Dict, Tuple
 
+from django.core.cache import cache
+
 from .worker import ASRStreamWorker
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,9 @@ class ASRStreamManager:
     def _key(self, session_id, user_id) -> Tuple[str, int]:
         return str(session_id), int(user_id)
 
+    def _transcript_cache_key(self, session_id, user_id) -> str:
+        return f"asr:final_segments:{str(session_id)}:{int(user_id)}"
+
     # ------------------------------------------------------------------ #
     # API pubblica usata dal WebRTCConsumer
     # ------------------------------------------------------------------ #
@@ -39,6 +44,13 @@ class ASRStreamManager:
                 user_id,
             )
             return
+
+        # Reset transcript cache per questo turno (pulizia forte)
+        try:
+            cache.delete(self._transcript_cache_key(session_id, user_id))
+            logger.info("[ASR][CACHE] cleared session=%s user=%s", session_id, user_id)
+        except Exception:
+            logger.exception("[ASR][CACHE] failed clear session=%s user=%s", session_id, user_id)
 
         worker = ASRStreamWorker(session_id=session_id, user_id=user_id)
         self._streams[key] = worker
@@ -62,7 +74,6 @@ class ASRStreamManager:
             )
             return
 
-        # Metodo corretto del worker
         worker.ingest_frame(frame)
 
     def stop_stream(self, session_id, user_id) -> None:

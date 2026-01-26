@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import time
+
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
+
+from django.core.cache import cache
 
 # 🔹 import moderazione: timer NO PUSH / tempo sessione / inattivo
 from apps.moderation.timers_state import mark_any_activity, mark_user_spoke
@@ -15,6 +20,13 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
     Riceve azioni dal frontend, le valida, chiama TurnManager,
     e notifica tutti gli utenti nella sessione tramite broadcast.
     """
+
+    # -------------------------------------------------------------------------
+    # Parametri attesa cache ASR (evita race: stop turno -> Azure finalizza dopo)
+    # -------------------------------------------------------------------------
+    ASR_CACHE_WAIT_MAX_S = 1.2
+    ASR_CACHE_WAIT_STEP_S = 0.15
+    ASR_CACHE_STABLE_READS = 2  # letture consecutive uguali per considerare "stabile"
 
     async def connect(self):
         """
@@ -193,6 +205,51 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             }
         )
 
+    # -------------------------------------------------------------------------
+    # ASR cache helper (attesa breve per final Azure)
+    # -------------------------------------------------------------------------
+
+    async def _collect_asr_transcript_with_wait(self, cache_key: str) -> str:
+        """
+        Legge i segmenti 'final' ASR dalla cache, attendendo brevemente che arrivino.
+        Considera 'stabile' quando la lista è uguale per N letture consecutive.
+        """
+        def _read_parts() -> list[str]:
+            try:
+                segments = cache.get(cache_key)
+                if not isinstance(segments, list):
+                    return []
+                return [str(s).strip() for s in segments if s and str(s).strip()]
+            except Exception:
+                return []
+
+        deadline = time.monotonic() + float(self.ASR_CACHE_WAIT_MAX_S)
+
+        last_parts: list[str] = []
+        stable = 0
+
+        while True:
+            parts = _read_parts()
+
+            if parts:
+                if parts == last_parts:
+                    stable += 1
+                else:
+                    stable = 1
+                    last_parts = parts
+
+                if stable >= int(self.ASR_CACHE_STABLE_READS):
+                    break
+
+            if time.monotonic() >= deadline:
+                # timeout: restituisce quanto presente (se presente) o stringa vuota
+                last_parts = parts or last_parts
+                break
+
+            await asyncio.sleep(float(self.ASR_CACHE_WAIT_STEP_S))
+
+        return " ".join(last_parts).strip() if last_parts else ""
+
     async def _handle_end_speak(self, content):
         """
         Gestisce il messaggio: { "type": "turns.end_speak" }.
@@ -244,6 +301,9 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         from apps.turns.services import TurnManager as TM  # alias locale
 
+        # Chiave cache dei final ASR per questo turno
+        cache_key = f"asr:final_segments:{str(self.session_id)}:{int(user.id)}"
+
         try:
             # 4) Esecuzione moderazione completa (trigger + LLM)
             try:
@@ -251,8 +311,12 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             except Exception:
                 session_phase = "ACTIVE"
 
-            # Testo dell'ultimo turno (placeholder in attesa di ASR)
-            last_turn_text = content.get("transcript", "") or ""
+            # --- TESTO TURNO: cache final ASR con attesa breve, poi fallback a transcript frontend ---
+            last_turn_text = await self._collect_asr_transcript_with_wait(cache_key)
+
+            if not last_turn_text:
+                last_turn_text = content.get("transcript", "") or ""
+                last_turn_text = str(last_turn_text).strip()
 
             # Nome parlante (display_name se presente, altrimenti username)
             speaker_name = getattr(user, "display_name", None) or user.get_username()
@@ -308,6 +372,12 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     await self._broadcast_events(ai_end_res.events)
 
         finally:
+            # Pulizia cache final ASR consumata (evita riuso tra turni)
+            try:
+                cache.delete(cache_key)
+            except Exception:
+                pass
+
             # 7) Uscita dalla fase di moderazione: si riapre ai turni umani
             await self._set_moderation_in_progress(False)
 
@@ -456,10 +526,8 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         """
         user = self.scope.get("user")
         if not user or not user.is_authenticated:
-            # Per il ping si può anche semplicemente ignorare in caso di anonimo.
             return
 
-        # Si prova a leggere lo stato sessione; se non esiste, si termina.
         try:
             session_phase = await self._get_session_state(self.session_id)
         except Exception:
@@ -467,14 +535,12 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         from apps.turns.services import TurnManager
 
-        # Valutazione trigger a tempo (lazy, senza LLM)
         trig_result = evaluate_time_based_triggers(
             session_id=self.session_id,
             session_phase=session_phase,
         )
 
         if not trig_result.static_messages_to_speak:
-            # Ack leggero (opzionale, utile per debug)
             await self.send_json(
                 {
                     "type": "turns.ping_ok",
@@ -483,7 +549,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             )
             return
 
-        # Ci sono uno o più messaggi statici da pronunciare
         for msg in trig_result.static_messages_to_speak:
             ai_start_res = TurnManager.ai_start(self.session_id)
             if ai_start_res.success:
@@ -501,7 +566,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 await self._mark_any_activity()
                 await self._broadcast_events(ai_end_res.events)
 
-        # Stato finale dopo eventuali interventi AI
         final_state = TurnManager.get_state(self.session_id, user)
         await self.send_json(
             {
@@ -515,10 +579,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
     # -------------------------------------------------------------------------
 
     async def _broadcast_events(self, events):
-        """
-        Invia in broadcast al gruppo WS tutti gli eventi di TurnManager
-        trasformandoli in messaggi WebSocket.
-        """
         if not events:
             return
 
@@ -526,17 +586,13 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             await self.channel_layer.group_send(
                 self.group_name,
                 {
-                    "type": "turns.event",  # nome del metodo handler nel consumer
+                    "type": "turns.event",
                     "event_type": ev.type,
                     "payload": ev.payload or {},
                 },
             )
 
     async def turns_event(self, event):
-        """
-        Handler chiamato da group_send.
-        Converte l'evento interno in un messaggio WS verso il client.
-        """
         await self.send_json(
             {
                 "type": f"turns.{event['event_type'].lower()}",
@@ -564,10 +620,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         return Session.objects.values_list("state", flat=True).get(id=session_id)
 
     async def _ensure_session_active(self) -> bool:
-        """
-        Verifica che la sessione sia in stato ACTIVE.
-        In caso contrario, risponde con errore e ritorna False.
-        """
         from apps.sessions.models import SessionState
 
         try:
@@ -606,16 +658,10 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
     @database_sync_to_async
     def _mark_any_activity(self) -> None:
-        """
-        Wrapper async per mark_any_activity (cache/Redis).
-        """
         mark_any_activity(self.session_id)
 
     @database_sync_to_async
     def _mark_user_spoke(self, user_id: int) -> None:
-        """
-        Wrapper async per mark_user_spoke.
-        """
         mark_user_spoke(self.session_id, user_id)
 
     @database_sync_to_async
@@ -627,9 +673,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         session_phase: str,
         speaker_name: str,
     ):
-        """
-        Wrapper sincrono→asincrono per la chiamata a ModerationOrchestrator.
-        """
         return ModerationOrchestrator.handle_human_turn_end(
             session_id=self.session_id,
             user_id=user_id,
@@ -640,9 +683,5 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
     @database_sync_to_async
     def _set_moderation_in_progress(self, value: bool) -> None:
-        """
-        Wrapper async per impostare il flag moderation_in_progress
-        nello stato turni della sessione corrente.
-        """
         from apps.turns.services import TurnManager
         TurnManager.set_moderation_in_progress(self.session_id, value)

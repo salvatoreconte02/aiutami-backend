@@ -4,10 +4,12 @@ import logging
 import os
 import time
 import wave
+import threading
 from typing import Optional
 
 import numpy as np
 from django.conf import settings
+from django.core.cache import cache
 
 from .azure_client import AzureStreamingClient
 
@@ -38,6 +40,13 @@ class ASRStreamWorker:
     # GAIN: spento finché non è “pulito”
     GAIN = 1.0
     SOFTCLIP_LEVEL = 0.98
+
+    # ------------------------------
+    # Transcript cache (final chunks)
+    # ------------------------------
+    TRANSCRIPT_TTL_S = 60 * 30  # 30 minuti
+    TRANSCRIPT_MAX_SEGMENTS = 200
+    TRANSCRIPT_MAX_CHARS = 12000
 
     def __init__(self, session_id: str, user_id: int) -> None:
         self.session_id = str(session_id)
@@ -76,6 +85,84 @@ class ASRStreamWorker:
         self._debug_wav_max_bytes_raw = int(48000 * self.DEBUG_WAV_SECONDS * 2)  # cap “alto”, poi si riduce
         self._debug_wav_raw_sr: Optional[int] = None
 
+        # lock per append transcript (callback Azure arriva da thread)
+        self._transcript_lock = threading.Lock()
+
+    # ------------------------------------------------------------------ #
+    # Transcript cache helpers
+    # ------------------------------------------------------------------ #
+
+    def _transcript_cache_key(self) -> str:
+        return f"asr:final_segments:{self.session_id}:{self.user_id}"
+
+    def _reset_transcript_cache(self) -> None:
+        """
+        Reset della cache a inizio stream: evita residue di turni precedenti
+        in caso di crash o mancato delete lato consumer.
+        """
+        key = self._transcript_cache_key()
+        try:
+            cache.delete(key)
+            cache.set(key, [], timeout=self.TRANSCRIPT_TTL_S)
+            logger.info("[ASR][CACHE] reset session=%s user=%s", self.session_id, self.user_id)
+        except Exception:
+            logger.exception("[ASR][CACHE] failed reset session=%s user=%s", self.session_id, self.user_id)
+
+    def _append_final_segment_to_cache(self, text: str) -> None:
+        """
+        Accoda un segmento "final" in cache (lista di stringhe).
+        Chiamato da callback Azure (thread), quindi deve essere robusto.
+        """
+        t = (text or "").strip()
+        if not t:
+            return
+
+        key = self._transcript_cache_key()
+        try:
+            with self._transcript_lock:
+                segments = cache.get(key) or []
+                if not isinstance(segments, list):
+                    segments = []
+
+                # deduplica soft: se Azure ripete l'ultimo final, non duplicare
+                if segments:
+                    last = str(segments[-1]).strip()
+                    if last and (t == last or t in last or last in t):
+                        cache.set(key, segments, timeout=self.TRANSCRIPT_TTL_S)
+                        return
+
+                segments.append(t)
+
+                # cap segmenti
+                if len(segments) > self.TRANSCRIPT_MAX_SEGMENTS:
+                    segments = segments[-self.TRANSCRIPT_MAX_SEGMENTS :]
+
+                # cap caratteri totali (mantiene i più recenti)
+                total_chars = 0
+                trimmed = []
+                for s in reversed(segments):
+                    ss = str(s).strip()
+                    if not ss:
+                        continue
+                    total_chars += len(ss) + 1
+                    if total_chars > self.TRANSCRIPT_MAX_CHARS:
+                        break
+                    trimmed.append(ss)
+
+                segments = list(reversed(trimmed)) if trimmed else [t]
+
+                cache.set(key, segments, timeout=self.TRANSCRIPT_TTL_S)
+
+            logger.info(
+                "[ASR][CACHE] appended_final session=%s user=%s segments=%d last=%r",
+                self.session_id,
+                self.user_id,
+                len(segments),
+                t[:120],
+            )
+        except Exception:
+            logger.exception("[ASR][CACHE] failed append_final session=%s user=%s", self.session_id, self.user_id)
+
     # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #
@@ -94,7 +181,10 @@ class ASRStreamWorker:
                 logger.info("[ASR][AZURE][partial] session=%s user=%s text=%r", self.session_id, self.user_id, text)
 
         def _on_final(text: str) -> None:
-            logger.info("[ASR][AZURE][final] session=%s user=%s text=%r", self.session_id, self.user_id, text)
+            # Log + persistenza in cache per consumo da TurnsConsumer (fine turno)
+            if text:
+                logger.info("[ASR][AZURE][final] session=%s user=%s text=%r", self.session_id, self.user_id, text)
+                self._append_final_segment_to_cache(text)
 
         self._azure_client = AzureStreamingClient(
             key=key,
@@ -129,6 +219,9 @@ class ASRStreamWorker:
         self._sent_bytes = 0
         self.total_samples = 0
         self.total_bytes = 0
+
+        # transcript cache: reset per-turno
+        self._reset_transcript_cache()
 
         # debug wav
         self._debug_wav_enabled = os.getenv(self.DEBUG_WAV_ENV, "0") == "1"
@@ -284,7 +377,6 @@ class ASRStreamWorker:
 
     @staticmethod
     def _to_mono_robust(pcm: np.ndarray, expected_ch: int) -> tuple[np.ndarray, int]:
-        # expected_ch è usato solo a scopo diagnostico; la conversione è shape-driven
         mono, ch = ASRStreamWorker._to_mono(pcm)
         return mono, ch
 
@@ -308,11 +400,9 @@ class ASRStreamWorker:
         return np.clip(x, -32768, 32767).astype(np.int16)
 
     def _resample_to_16k(self, pcm_int16: np.ndarray, src_sr: int) -> tuple[np.ndarray, int]:
-        # Caso “buono”: già 16k
         if src_sr == self.AZURE_TARGET_SR or src_sr <= 0:
             return pcm_int16, src_sr
 
-        # Caso critico: 48k -> 16k (downsample x3) con media blocchi da 3 (più stabile, meno artefatti “robotici”)
         if src_sr == 48000:
             n = (len(pcm_int16) // 3) * 3
             if n <= 0:
@@ -321,7 +411,6 @@ class ASRStreamWorker:
             y = x.reshape(-1, 3).mean(axis=1)
             return y.astype(np.int16), self.AZURE_TARGET_SR
 
-        # fallback generico (interp)
         x = pcm_int16.astype(np.float32)
         src_len = len(x)
         if src_len < 2:
