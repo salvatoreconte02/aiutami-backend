@@ -25,11 +25,9 @@ class ForwardingAudioTrack(AudioStreamTrack):
     Traccia audio server->client.
 
     - Riceve chunk PCM (s16 mono) tramite enqueue()
-    - Se non arrivano chunk, produce "silenzio" per tenere stabile la pipeline
-    - Il formato usato è coerente con il resto della vostra pipeline: s16 / mono / 48k
-      (ma sample_rate è preso dal chunk, quindi è robusto).
-
-    Nota: questa è una traccia "forwarder" (non mixer). L'hub decide cosa inoltrare e a chi.
+    - Produce SEMPRE frame di durata fissa (frame_time_ms) riframando i chunk in arrivo
+    - Se non arrivano chunk a sufficienza, pad con silenzio
+    - Output stabile: s16 / mono / sample_rate_default (tipicamente 48k)
     """
 
     kind = "audio"
@@ -50,8 +48,21 @@ class ForwardingAudioTrack(AudioStreamTrack):
         self._queue: asyncio.Queue[PcmChunk] = asyncio.Queue(maxsize=queue_maxsize)
         self._closed = False
 
-        self._sample_rate_default = sample_rate_default
-        self._frame_time_ms = frame_time_ms
+        self._sample_rate_default = int(sample_rate_default)
+        self._frame_time_ms = int(frame_time_ms)
+
+        # Output framing fisso (s16 mono)
+        self._out_sample_rate = self._sample_rate_default
+        self._samples_per_frame = int(self._out_sample_rate * (self._frame_time_ms / 1000.0))
+        if self._samples_per_frame <= 0:
+            self._samples_per_frame = 960  # fallback per 48k/20ms
+
+        self._bytes_per_sample = 2  # s16
+        self._channels = 1          # mono
+        self._bytes_per_frame = self._samples_per_frame * self._channels * self._bytes_per_sample
+
+        # Buffer per riframare chunk variabili in frame fissi
+        self._bytebuf = bytearray()
 
         # PTS tracking
         self._pts: int = 0
@@ -59,14 +70,19 @@ class ForwardingAudioTrack(AudioStreamTrack):
     def close(self) -> None:
         self._closed = True
         try:
-            # svuota la coda (best effort)
             while not self._queue.empty():
                 self._queue.get_nowait()
+        except Exception:
+            pass
+        try:
+            self._bytebuf.clear()
         except Exception:
             pass
 
     def enqueue(self, pcm: bytes, samples: int, sample_rate: int) -> None:
         if self._closed:
+            return
+        if not pcm:
             return
         try:
             self._queue.put_nowait(PcmChunk(pcm=pcm, samples=samples, sample_rate=sample_rate))
@@ -80,34 +96,53 @@ class ForwardingAudioTrack(AudioStreamTrack):
 
     async def recv(self) -> av.AudioFrame:
         if self._closed:
-            # se chiusa, restituiamo comunque silenzio per un breve periodo
-            await asyncio.sleep(0.02)
+            # se chiusa, manteniamo un minimo di pacing
+            await asyncio.sleep(self._frame_time_ms / 1000.0)
 
-        # prova a leggere un chunk, altrimenti genera silenzio
-        chunk: Optional[PcmChunk] = None
+        # 1) tenta di prendere almeno un chunk entro il frame_time
         try:
-            chunk = await asyncio.wait_for(self._queue.get(), timeout=self._frame_time_ms / 1000)
+            chunk = await asyncio.wait_for(self._queue.get(), timeout=self._frame_time_ms / 1000.0)
+            if chunk and chunk.pcm:
+                self._bytebuf.extend(chunk.pcm)
         except asyncio.TimeoutError:
-            chunk = None
+            pass
         except Exception:
-            chunk = None
+            pass
 
-        if chunk is None:
-            # genera silenzio 20ms (o frame_time_ms)
-            sample_rate = self._sample_rate_default
-            samples = int(sample_rate * (self._frame_time_ms / 1000.0))
-            pcm = b"\x00\x00" * samples  # s16 mono
+        # 2) drena velocemente eventuali chunk già disponibili (best effort)
+        try:
+            while len(self._bytebuf) < self._bytes_per_frame:
+                chunk2 = self._queue.get_nowait()
+                if chunk2 and chunk2.pcm:
+                    self._bytebuf.extend(chunk2.pcm)
+        except asyncio.QueueEmpty:
+            pass
+        except Exception:
+            pass
+
+        # 3) evita accumulo eccessivo (riduce latenza se qualcosa va storto)
+        #    tieni al massimo ~1s di audio bufferizzato
+        max_buf = self._bytes_per_frame * int(1000 / self._frame_time_ms)
+        if len(self._bytebuf) > max_buf:
+            # drop dell'audio più vecchio
+            drop = len(self._bytebuf) - max_buf
+            del self._bytebuf[:drop]
+
+        # 4) estrai esattamente un frame; se manca, pad con silenzio
+        if len(self._bytebuf) >= self._bytes_per_frame:
+            pcm_out = bytes(self._bytebuf[:self._bytes_per_frame])
+            del self._bytebuf[:self._bytes_per_frame]
         else:
-            sample_rate = chunk.sample_rate or self._sample_rate_default
-            samples = chunk.samples
-            pcm = chunk.pcm
+            missing = self._bytes_per_frame - len(self._bytebuf)
+            pcm_out = bytes(self._bytebuf) + (b"\x00" * missing)
+            self._bytebuf.clear()
 
-        frame = av.AudioFrame(format="s16", layout="mono", samples=samples)
-        frame.sample_rate = sample_rate
-        frame.planes[0].update(pcm)
+        frame = av.AudioFrame(format="s16", layout="mono", samples=self._samples_per_frame)
+        frame.sample_rate = self._out_sample_rate
+        frame.planes[0].update(pcm_out)
 
         frame.pts = self._pts
-        frame.time_base = Fraction(1, sample_rate)
-        self._pts += samples
+        frame.time_base = Fraction(1, self._out_sample_rate)
+        self._pts += self._samples_per_frame
 
         return frame
