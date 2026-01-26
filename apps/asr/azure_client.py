@@ -164,28 +164,38 @@ class AzureStreamingClient:
                 
         def _on_canceled(evt) -> None:
             try:
-                # Alcune versioni dell’SDK espongono i dettagli qui:
                 details = getattr(evt, "cancellation_details", None)
-                if details is not None:
-                    logger.error(
-                        "[AZURE-ASR][canceled] reason=%s error_code=%s details=%r",
-                        getattr(details, "reason", None),
-                        getattr(details, "error_code", None),
-                        getattr(details, "error_details", None),
+
+                # Prova a leggere il reason in modo robusto
+                reason = getattr(details, "reason", None) if details is not None else getattr(evt, "reason", None)
+                error_code = getattr(details, "error_code", None) if details is not None else getattr(evt, "error_code", None)
+                error_details = getattr(details, "error_details", None) if details is not None else getattr(evt, "error_details", None)
+
+                # EndOfStream è normale quando chiudi il PushAudioInputStream
+                if reason == speechsdk.CancellationReason.EndOfStream:
+                    logger.info("[AZURE-ASR][canceled] EndOfStream (chiusura normale stream)")
+                    return
+
+                # Alcune versioni possono mettere dettagli vuoti: trattali come warning se non c'è error_code
+                if not error_code and (error_details is None or str(error_details).strip() == ""):
+                    logger.warning(
+                        "[AZURE-ASR][canceled] reason=%s (senza dettagli)",
+                        reason,
                     )
                     return
 
-                # Fallback: attributi diretti (se presenti)
+                # Casi realmente problematici
                 logger.error(
                     "[AZURE-ASR][canceled] reason=%s error_code=%s details=%r",
-                    getattr(evt, "reason", None),
-                    getattr(evt, "error_code", None),
-                    getattr(evt, "error_details", None),
+                    reason,
+                    error_code,
+                    error_details,
                 )
             except Exception:
                 logger.exception("[AZURE-ASR] Errore handler canceled (safe)")
+                
         def _on_session_started(evt: speechsdk.SessionEventArgs) -> None:
-            logger.info("[AZURE-ASR] Session started: %s", evt)
+                    logger.info("[AZURE-ASR] Session started: %s", evt)
 
         def _on_session_stopped(evt: speechsdk.SessionEventArgs) -> None:
             logger.info("[AZURE-ASR] Session stopped: %s", evt)
