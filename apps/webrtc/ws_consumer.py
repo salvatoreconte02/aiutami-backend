@@ -324,7 +324,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
                         # 3) Forwarding: se questo utente è lo speaker corrente, inoltra agli altri
                         #    (hub esclude automaticamente lo speaker, quindi no echo)
                         try:
-                            pcm = frame.planes[0].to_bytes()
+                            pcm = bytes(frame.planes[0])
                             samples = int(frame.samples)
                             sample_rate = int(frame.sample_rate or 48000)
                             self._hub.forward_pcm_from_speaker(
