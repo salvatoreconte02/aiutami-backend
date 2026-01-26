@@ -1,3 +1,4 @@
+# apps/webrtc/ws_consumer.py
 from __future__ import annotations
 
 import asyncio
@@ -16,7 +17,6 @@ from aiortc import (
 )
 from aiortc.sdp import candidate_from_sdp
 
-# PyAV resampler (hard normalize audio)
 from av.audio.resampler import AudioResampler
 
 from apps.asr.service import asr_stream_manager
@@ -27,6 +27,9 @@ from apps.turns.services import (
     TURN_STATE_AI_SPEAKING,
 )
 
+from .audio_hub import get_hub, maybe_cleanup_hub
+from .audio_tracks import ForwardingAudioTrack
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,8 +39,8 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
 
     Obiettivo MVP:
     - WebRTC può restare connesso (track audio può arrivare sempre)
-    - ASR deve partire SOLO quando l'utente è current speaker e lo stato turni è HUMAN_SPEAKING
-    - ASR deve fermarsi appena non è più speaker / stato non compatibile
+    - ASR parte SOLO quando l'utente è current speaker e lo stato turni è HUMAN_SPEAKING
+    - Forwarding audio: lo speaker viene inoltrato dal backend a tutti gli altri peer della sessione
     """
 
     async def connect(self):
@@ -46,18 +49,20 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
 
         self.pc: Optional[RTCPeerConnection] = None
         self._reader_task: Optional[asyncio.Task] = None
-
-        # Tenuto solo per compatibilità: non viene più avviato
         self._stats_task: Optional[asyncio.Task] = None
 
-        # Stato turni "shadow" in questo consumer (aggiornato via eventi del gruppo turns)
+        # Stato turni "shadow"
         self._turn_state: str = TURN_STATE_IDLE
         self._current_speaker_user_id: Optional[int] = None
 
         # ASR gating
         self._asr_started: bool = False
 
-        # Gruppo turns (per ricevere HUMAN_STARTED/HUMAN_ENDED/AI_STARTED/AI_ENDED)
+        # Audio forwarding
+        self._hub = get_hub(str(self.session_id))
+        self._outbound_track: Optional[ForwardingAudioTrack] = None
+
+        # Gruppo turns (per ricevere eventi turno)
         self._turns_group_name = f"turns_{self.session_id}"
 
         if not self.user.is_authenticated:
@@ -69,13 +74,13 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4003)
             return
 
-        # Join al gruppo turns della sessione per ricevere eventi turno
+        # Join al gruppo turns della sessione
         try:
             await self.channel_layer.group_add(self._turns_group_name, self.channel_name)
         except Exception:
             logger.exception("[WebRTC] group_add turns failed user=%s session=%s", self.user.id, self.session_id)
 
-        # Carico stato turni iniziale (1 volta sola) dal TurnManager
+        # Stato turni iniziale
         await self._refresh_turn_state_from_manager()
 
         await self.accept()
@@ -83,7 +88,6 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
 
     async def disconnect(self, code):
         await self._cleanup(reason=f"disconnect(code={code})")
-        # Leave gruppo turns
         try:
             await self.channel_layer.group_discard(self._turns_group_name, self.channel_name)
         except Exception:
@@ -120,14 +124,14 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
                 pass
 
     # ------------------------------------------------------------------ #
-    # TURN EVENTS (dal gruppo turns_{session_id})
+    # TURN EVENTS
     # ------------------------------------------------------------------ #
 
     async def turns_event(self, event):
         """
-        Riceve eventi broadcastati da TurnsConsumer:
+        Eventi broadcastati da TurnsConsumer:
           type="turns.event"
-          event_type="HUMAN_STARTED" / "HUMAN_ENDED" / "AI_STARTED" / "AI_ENDED" / ...
+          event_type="HUMAN_STARTED" / "HUMAN_ENDED" / "AI_STARTED" / "AI_ENDED"
           payload={...}
         """
         try:
@@ -136,49 +140,52 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
         except Exception:
             return
 
-        # Aggiorna shadow state in base agli eventi noti
         if ev_type == "HUMAN_STARTED":
+            speaker_id = payload.get("user_id")
             self._turn_state = TURN_STATE_HUMAN_SPEAKING
-            self._current_speaker_user_id = payload.get("user_id")
+            self._current_speaker_user_id = speaker_id
+            # hub speaker update
+            self._hub.set_speaker(speaker_id)
+
         elif ev_type == "HUMAN_ENDED":
             self._turn_state = TURN_STATE_IDLE
             self._current_speaker_user_id = None
+            self._hub.set_speaker(None)
+
         elif ev_type == "AI_STARTED":
             self._turn_state = TURN_STATE_AI_SPEAKING
             self._current_speaker_user_id = None
+            self._hub.set_speaker(None)
+
         elif ev_type == "AI_ENDED":
             self._turn_state = TURN_STATE_IDLE
             self._current_speaker_user_id = None
+            self._hub.set_speaker(None)
+
         else:
-            # Eventi non rilevanti per il gating (RESERVATION_*, ecc.)
             return
 
-        # Applica gating ASR (start/stop)
         await self._apply_asr_gating(reason=f"turn_event:{ev_type}")
 
     async def _refresh_turn_state_from_manager(self):
-        """
-        Lettura iniziale (o di recovery) dello stato turni dalla cache (TurnManager).
-        Evita di fare query per ogni frame.
-        """
         try:
             res = await sync_to_async(TurnManager.get_state)(self.session_id, self.user)
             st = res.state
             self._turn_state = st.state
             self._current_speaker_user_id = st.current_speaker_user_id
+            # aggiorna hub speaker con lo stato corrente
+            if self._turn_state == TURN_STATE_HUMAN_SPEAKING:
+                self._hub.set_speaker(self._current_speaker_user_id)
+            else:
+                self._hub.set_speaker(None)
         except Exception:
-            # Se fallisce, restiamo conservativi: ASR spento
             self._turn_state = TURN_STATE_IDLE
             self._current_speaker_user_id = None
+            self._hub.set_speaker(None)
 
         await self._apply_asr_gating(reason="initial_state_load")
 
     async def _apply_asr_gating(self, reason: str):
-        """
-        Decide se ASR deve essere attivo per questo utente.
-        Regola:
-          ASR ON  <=>  turn_state == HUMAN_SPEAKING AND current_speaker_user_id == self.user.id
-        """
         should_run = (
             self._turn_state == TURN_STATE_HUMAN_SPEAKING
             and self._current_speaker_user_id == self.user.id
@@ -188,12 +195,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             try:
                 asr_stream_manager.start_stream(self.session_id, self.user.id)
                 self._asr_started = True
-                logger.info(
-                    "[ASR] START (gated) session=%s user=%s reason=%s",
-                    self.session_id,
-                    self.user.id,
-                    reason,
-                )
+                logger.info("[ASR] START (gated) session=%s user=%s reason=%s", self.session_id, self.user.id, reason)
             except Exception:
                 logger.exception("[ASR] start_stream failed session=%s user=%s", self.session_id, self.user.id)
                 self._asr_started = False
@@ -201,12 +203,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
         if (not should_run) and self._asr_started:
             try:
                 asr_stream_manager.stop_stream(self.session_id, self.user.id)
-                logger.info(
-                    "[ASR] STOP (gated) session=%s user=%s reason=%s",
-                    self.session_id,
-                    self.user.id,
-                    reason,
-                )
+                logger.info("[ASR] STOP (gated) session=%s user=%s reason=%s", self.session_id, self.user.id, reason)
             except Exception:
                 logger.exception("[ASR] stop_stream failed session=%s user=%s", self.session_id, self.user.id)
             finally:
@@ -224,16 +221,31 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "webrtc.error", "payload": {"reason": "MISSING_SDP"}})
             return
 
-        # Se arriva una nuova offer, ripartire “puliti”
         if self.pc is not None:
             await self._cleanup(reason="new_offer")
 
-        config = RTCConfiguration(
-            iceServers=[RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
-        )
+        config = RTCConfiguration(iceServers=[RTCIceServer(urls=["stun:stun.l.google.com:19302"])])
         self.pc = RTCPeerConnection(configuration=config)
 
-        # NOTA: stats disabilitate (nessun task avviato)
+        # 1) predisporre sempre una outbound audio track (server -> client)
+        #    - inizialmente è silenzio
+        #    - l'hub può poi inoltrarvi l'audio dello speaker
+        self._outbound_track = ForwardingAudioTrack(
+            user_id=self.user.id,
+            session_id=str(self.session_id),
+            sample_rate_default=48000,
+            frame_time_ms=20,
+        )
+        try:
+            self.pc.addTrack(self._outbound_track)
+        except Exception:
+            logger.exception("[WebRTC] addTrack(outbound) failed user=%s session=%s", self.user.id, self.session_id)
+
+        # registra il peer nell'hub
+        try:
+            self._hub.register_peer(self.user.id, self._outbound_track)
+        except Exception:
+            logger.exception("[AudioHub] register failed user=%s session=%s", self.user.id, self.session_id)
 
         @self.pc.on("icegatheringstatechange")
         async def on_ice_gathering_state_change():
@@ -282,14 +294,13 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             except Exception:
                 logger.exception("[WebRTC] send ICE to browser failed user=%s session=%s", self.user.id, self.session_id)
 
-        # Ricezione track
+        # Ricezione track (browser -> server)
         @self.pc.on("track")
         async def on_track(track):
             logger.info("[WebRTC] Track received kind=%s user=%s session=%s", track.kind, self.user.id, self.session_id)
             if track.kind != "audio":
                 return
 
-            # Resampler “hard normalize”: mono + s16 + 48k
             resampler = AudioResampler(format="s16", layout="mono", rate=48000)
 
             async def reader():
@@ -297,7 +308,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
                     while True:
                         frame = await track.recv()
 
-                        # Normalizzazione audio prima di ASR
+                        # normalizzazione
                         try:
                             out_frames = resampler.resample(frame)
                             if out_frames:
@@ -306,16 +317,31 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
                             logger.exception("[WebRTC] Resample error user=%s session=%s", self.user.id, self.session_id)
                             continue
 
-                        # Ingest ASR SOLO se gated ON (speaker corrente)
+                        # 2) ASR gated (già esistente)
                         if self._asr_started:
                             asr_stream_manager.ingest_frame(self.session_id, self.user.id, frame)
+
+                        # 3) Forwarding: se questo utente è lo speaker corrente, inoltra agli altri
+                        #    (hub esclude automaticamente lo speaker, quindi no echo)
+                        try:
+                            pcm = frame.planes[0].to_bytes()
+                            samples = int(frame.samples)
+                            sample_rate = int(frame.sample_rate or 48000)
+                            self._hub.forward_pcm_from_speaker(
+                                from_user_id=self.user.id,
+                                pcm=pcm,
+                                samples=samples,
+                                sample_rate=sample_rate,
+                            )
+                        except Exception:
+                            # non deve far cadere la pipeline
+                            logger.exception("[WebRTC] forwarding error user=%s session=%s", self.user.id, self.session_id)
 
                 except asyncio.CancelledError:
                     logger.info("[WebRTC] Reader cancelled user=%s session=%s", self.user.id, self.session_id)
                 except Exception:
                     logger.exception("[WebRTC] Reader error user=%s session=%s", self.user.id, self.session_id)
                 finally:
-                    # Stop ASR se era attivo
                     if self._asr_started:
                         try:
                             asr_stream_manager.stop_stream(self.session_id, self.user.id)
@@ -377,7 +403,6 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             ice = candidate_from_sdp(candidate_sdp)
             ice.sdpMid = sdp_mid
             ice.sdpMLineIndex = int(sdp_mline) if sdp_mline is not None else None
-
             await self.pc.addIceCandidate(ice)
 
             logger.info(
@@ -415,7 +440,6 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             self._reader_task.cancel()
             self._reader_task = None
 
-        # Stats disabilitate: per sicurezza annulliamo se mai fosse stato creato altrove
         if self._stats_task is not None:
             self._stats_task.cancel()
             self._stats_task = None
@@ -426,6 +450,20 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             except Exception:
                 logger.exception("[WebRTC] stop_stream failed (cleanup) user=%s session=%s", self.user.id, self.session_id)
             self._asr_started = False
+
+        # deregistra dall'hub
+        try:
+            self._hub.unregister_peer(self.user.id)
+            maybe_cleanup_hub(str(self.session_id))
+        except Exception:
+            logger.exception("[AudioHub] unregister failed user=%s session=%s", self.user.id, self.session_id)
+
+        if self._outbound_track is not None:
+            try:
+                self._outbound_track.close()
+            except Exception:
+                pass
+            self._outbound_track = None
 
         if self.pc is not None:
             try:
