@@ -110,7 +110,11 @@ class ModerationService:
             state.ai_interventions_count += 1
             state.last_ai_intervention_at = datetime.utcnow()
 
-        # 6) Salvare lo stato aggiornato
+        # 6) Se forced_conclusion e AI ha parlato, setta il flag
+        if mode == "forced_conclusion" and ai_should_speak:
+            state.forced_conclusion_done = True
+
+        # 7) Salvare lo stato aggiornato
         save_moderation_state(session_id, state)
 
         return ModerationResult(

@@ -371,6 +371,19 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     await self._mark_any_activity()
                     await self._broadcast_events(ai_end_res.events)
 
+            # 7) Gestione transizione a CONCLUSION (timer 30 min scaduto)
+            if decision.should_transition_to_conclusion:
+                transitioned = await self._transition_session_to_conclusion()
+                if transitioned:
+                    # Broadcast del cambio di stato sessione
+                    await self.channel_layer.group_send(
+                        f"sessions_{self.session_id}",
+                        {
+                            "type": "session.state_changed",
+                            "new_state": "CONCLUSION",
+                        },
+                    )
+
         finally:
             # Pulizia cache final ASR consumata (evita riuso tra turni)
             try:
@@ -685,3 +698,23 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
     def _set_moderation_in_progress(self, value: bool) -> None:
         from apps.turns.services import TurnManager
         TurnManager.set_moderation_in_progress(self.session_id, value)
+
+    @database_sync_to_async
+    def _transition_session_to_conclusion(self) -> bool:
+        """
+        Cambia la fase della sessione da ACTIVE a CONCLUSION.
+        Restituisce True se la transizione è avvenuta, False altrimenti.
+        """
+        from apps.sessions.models import Session, SessionState
+        from django.utils import timezone
+
+        try:
+            session = Session.objects.get(pk=self.session_id)
+            if session.state == SessionState.ACTIVE:
+                session.state = SessionState.CONCLUSION
+                session.conclusion_at = timezone.now()
+                session.save(update_fields=["state", "conclusion_at"])
+                return True
+        except Session.DoesNotExist:
+            pass
+        return False

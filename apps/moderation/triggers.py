@@ -33,6 +33,7 @@ class TriggerEvaluationResult:
     """
     hard_action: HardModerationAction
     static_messages_to_speak: List[str]
+    should_transition_to_conclusion: bool = False  # segnala cambio fase a CONCLUSION
 
 
 def evaluate_triggers_on_human_turn_end(
@@ -50,15 +51,22 @@ def evaluate_triggers_on_human_turn_end(
 
     - Non chiama l'LLM: decide solo hard_action e messaggi fissi.
     """
+    from datetime import datetime  # import locale per evitare circular
+
     hard_action = HardModerationAction.NONE
     static_messages: list[str] = []
+    should_transition_to_conclusion = False
 
     # 1) Trigger hard: riassunto ogni N turni umani (FORCED_SUMMARY)
     if _should_force_summary(moderation_state):
         hard_action = HardModerationAction.FORCED_SUMMARY
 
     # 2) Trigger hard: fase di conclusione (FORCED_CONCLUSION)
-    if _should_force_conclusion(session_id=session_id, session_phase=session_phase):
+    if _should_force_conclusion(
+        session_id=session_id,
+        session_phase=session_phase,
+        moderation_state=moderation_state,
+    ):
         hard_action = HardModerationAction.FORCED_CONCLUSION
 
     # 3) Trigger meccanici legati allo stato corrente
@@ -70,9 +78,28 @@ def evaluate_triggers_on_human_turn_end(
         )
     )
 
+    # 4) Controllo timer 30 min (solo in fase ACTIVE)
+    if session_phase == "ACTIVE":
+        timers_state = load_timers_state(session_id)
+        if timers_state.session_started_at is not None:
+            elapsed = datetime.utcnow() - timers_state.session_started_at
+            if elapsed >= TIMER_30_THRESHOLD:
+                # Aggiungi messaggio solo se non già notificato
+                if not timers_state.timer_30_notified:
+                    static_messages.append(
+                        "Il tempo della discussione è terminato. "
+                        "Potete avviarvi verso la conclusione."
+                    )
+                    timers_state.timer_30_notified = True
+                    save_timers_state(session_id, timers_state)
+
+                # Segnala il cambio di fase (sempre, anche se già notificato)
+                should_transition_to_conclusion = True
+
     return TriggerEvaluationResult(
         hard_action=hard_action,
         static_messages_to_speak=static_messages,
+        should_transition_to_conclusion=should_transition_to_conclusion,
     )
 
 
@@ -128,18 +155,22 @@ def _should_force_conclusion(
     *,
     session_id: int | str,
     session_phase: str,
+    moderation_state: ModerationState,
 ) -> bool:
     """
     Determina se scatta il trigger hard di conclusione.
 
-    Condizione unica:
-    - la sessione deve essere già in fase "CONCLUSION".
+    Condizioni:
+    - la sessione deve essere già in fase "CONCLUSION"
+    - la conclusione forzata non deve essere già stata eseguita
     """
     if session_phase != "CONCLUSION":
         return False
 
-    # TODO: opzionale - verificare se la conclusione è già stata fatta,
-    # per non ripetere più volte il riassunto finale.
+    # Scatta solo se non è già stata fatta
+    if moderation_state.forced_conclusion_done:
+        return False
+
     return True
 
 

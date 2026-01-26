@@ -25,11 +25,13 @@ class FullModerationDecision:
     - ai_should_speak: se il moderatore AI deve parlare
     - ai_message: contenuto eventuale del messaggio AI
     - hard_action: NONE / FORCED_SUMMARY / FORCED_CONCLUSION
+    - should_transition_to_conclusion: se la sessione deve passare a CONCLUSION
     """
     static_messages_to_speak: List[str]
     ai_should_speak: bool
     ai_message: Optional[str]
     hard_action: HardModerationAction
+    should_transition_to_conclusion: bool = False
 
 
 class ModerationOrchestrator:
@@ -84,4 +86,5 @@ class ModerationOrchestrator:
             ai_should_speak=moderation_result.ai_should_speak,
             ai_message=moderation_result.ai_message,
             hard_action=trigger_result.hard_action,
+            should_transition_to_conclusion=trigger_result.should_transition_to_conclusion,
         )
