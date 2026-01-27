@@ -78,6 +78,7 @@ class ModerationOrchestrator:
             last_turn_text=last_turn_text,
             session_phase=session_phase,
             hard_action=trigger_result.hard_action,
+            speaker_name=speaker_name,
         )
 
         # 4) Decisione finale
