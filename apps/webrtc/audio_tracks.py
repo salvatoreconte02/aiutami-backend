@@ -137,7 +137,7 @@ class ForwardingAudioTrack(AudioStreamTrack):
             missing = self._bytes_per_frame - had
             pcm_out = bytes(self._bytebuf) + (b"\x00" * missing)
             self._bytebuf.clear()
-            logger.warning(
+            logger.debug(
                 "[AudioTrack] Buffer underrun: had=%d needed=%d missing=%d user=%s",
                 had, self._bytes_per_frame, missing, self.user_id,
             )
