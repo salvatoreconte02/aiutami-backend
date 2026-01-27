@@ -281,6 +281,8 @@ Emesso quando la finestra di priorità scade senza intervento del prenotato.
   "type": "turn.reservation_expired"
 }
 
+> **Nota:** L'evento `turn.reservation_expired` viene inviato automaticamente dal server dopo 8 secondi dalla scadenza della finestra di prenotazione, senza necessità di azioni da parte dei client.
+
 7.3 AI moderatore
 
 Questi messaggi sono informativi per la UI:

@@ -470,6 +470,39 @@ class TurnManager:
             },
         )
 
+    @classmethod
+    def expire_reservation_if_pending(
+        cls,
+        session_id: str,
+        expected_user_id: int
+    ) -> Optional[TurnEvent]:
+        """
+        Chiamato dal timer asincrono dopo 8 secondi.
+        Expira la reservation SOLO se è ancora attiva per lo stesso utente.
+
+        Restituisce l'evento RESERVATION_EXPIRED o None se già consumata.
+        """
+        state = cls._load_state(session_id)
+
+        # Reservation già consumata o assegnata ad altro utente?
+        if state.reservation_user_id != expected_user_id:
+            return None
+
+        # Expira la reservation
+        state.reservation_user_id = None
+        state.reservation_expires_at = None
+        state.version += 1
+
+        cls._save_state(session_id, state)
+
+        return TurnEvent(
+            type="RESERVATION_EXPIRED",
+            payload={
+                "user_id": expected_user_id,
+                "expired_at": timezone.now().isoformat(),
+            },
+        )
+
     # -------------------------------------------------------------------
     #  API per la fase di moderazione
     # -------------------------------------------------------------------

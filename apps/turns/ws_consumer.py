@@ -9,6 +9,8 @@ from channels.db import database_sync_to_async
 
 from django.core.cache import cache
 
+from apps.turns.services import TurnManager, PRIORITY_WINDOW_SECONDS
+
 # 🔹 import moderazione: timer NO PUSH / tempo sessione / inattivo
 from apps.moderation.timers_state import mark_any_activity, mark_user_spoke
 from apps.moderation.orchestrator import ModerationOrchestrator
@@ -298,6 +300,16 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         # Broadcast degli eventi generati dalla chiusura
         await self._broadcast_events(result.events)
+
+        # Se c'è una reservation window attiva, schedula il timer per l'expiration
+        for event in result.events:
+            if event.type == "RESERVATION_WINDOW_STARTED":
+                asyncio.create_task(
+                    self._schedule_reservation_expiration(
+                        session_id=self.session_id,
+                        user_id=event.payload["user_id"],
+                    )
+                )
 
         # 3) Entrata nella fase di moderazione: blocco nuovi turni umani
         await self._set_moderation_in_progress(True)
@@ -623,6 +635,32 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     "type": "turns.event",
                     "event_type": ev.type,
                     "payload": ev.payload or {},
+                },
+            )
+
+    async def _schedule_reservation_expiration(
+        self,
+        session_id: str,
+        user_id: int
+    ):
+        """
+        Task asincrono che aspetta la scadenza della finestra di priorità
+        e invia RESERVATION_EXPIRED se la reservation è ancora attiva.
+        """
+        await asyncio.sleep(PRIORITY_WINDOW_SECONDS)
+
+        # Verifica e expira (sync method wrapped)
+        event = await database_sync_to_async(
+            TurnManager.expire_reservation_if_pending
+        )(session_id, user_id)
+
+        if event:
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "turns.event",
+                    "event_type": event.type,
+                    "payload": event.payload,
                 },
             )
 
