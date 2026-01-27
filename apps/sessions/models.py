@@ -71,6 +71,11 @@ class Session(models.Model):
     started_at = models.DateTimeField(null=True, blank=True)
     conclusion_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
+    final_summary = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Summary finale della sessione dal moderatore AI"
+    )
 
     class Meta:
         db_table = "session"

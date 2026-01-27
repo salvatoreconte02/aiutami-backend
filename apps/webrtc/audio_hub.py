@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 from .audio_tracks import ForwardingAudioTrack
 
 logger = logging.getLogger(__name__)
+
+# Reserved ID for AI Moderator virtual peer
+AI_MODERATOR_ID = "__AI_MODERATOR__"
 
 
 @dataclass
@@ -27,7 +30,8 @@ class SessionAudioHub:
     def __init__(self, session_id: str) -> None:
         self.session_id = session_id
         self.peers: Dict[int, PeerAudioState] = {}
-        self.current_speaker_user_id: Optional[int] = None
+        self.current_speaker_user_id: Optional[Union[int, str]] = None  # int for humans, str for AI
+        self._ai_track: Optional[ForwardingAudioTrack] = None
 
     def register_peer(self, user_id: int, outbound_track: ForwardingAudioTrack) -> None:
         self.peers[user_id] = PeerAudioState(user_id=user_id, outbound_track=outbound_track)
@@ -45,11 +49,42 @@ class SessionAudioHub:
         if self.current_speaker_user_id == user_id:
             self.current_speaker_user_id = None
 
-    def set_speaker(self, user_id: Optional[int]) -> None:
+    def set_speaker(self, user_id: Optional[Union[int, str]]) -> None:
         if self.current_speaker_user_id == user_id:
             return  # idempotent - no change
         self.current_speaker_user_id = user_id
         logger.info("[AudioHub] set speaker=%s session=%s", user_id, self.session_id)
+
+    def init_ai_track(self) -> ForwardingAudioTrack:
+        """Crea il track virtuale per il moderatore AI."""
+        if self._ai_track is None:
+            self._ai_track = ForwardingAudioTrack(
+                user_id=0,  # Virtual user
+                session_id=self.session_id
+            )
+            logger.info("[AudioHub] AI track initialized session=%s", self.session_id)
+        return self._ai_track
+
+    def inject_ai_audio(self, pcm_chunk: bytes, samples: int, sample_rate: int) -> None:
+        """Inietta audio TTS nel track AI per forwarding."""
+        if self._ai_track is not None and self.current_speaker_user_id == AI_MODERATOR_ID:
+            self._ai_track.enqueue(pcm_chunk, samples, sample_rate)
+
+    def get_outbound_track_for_peer(self, user_id: int) -> Optional[ForwardingAudioTrack]:
+        """
+        Ritorna il track da cui il peer user_id dovrebbe ricevere audio.
+
+        - Se AI sta parlando: ritorna _ai_track
+        - Se un umano sta parlando: ritorna il track di quell'umano (se diverso da user_id)
+        - Altrimenti: None
+        """
+        if self.current_speaker_user_id == AI_MODERATOR_ID:
+            return self._ai_track
+        elif self.current_speaker_user_id is not None and self.current_speaker_user_id != user_id:
+            speaker_state = self.peers.get(self.current_speaker_user_id)
+            if speaker_state:
+                return speaker_state.outbound_track
+        return None
 
     def forward_pcm_from_speaker(self, from_user_id: int, pcm: bytes, samples: int, sample_rate: int) -> None:
         """

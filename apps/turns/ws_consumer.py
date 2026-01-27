@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+from datetime import datetime
 
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
@@ -15,8 +17,31 @@ from apps.turns.services import TurnManager, PRIORITY_WINDOW_SECONDS
 from apps.moderation.timers_state import mark_any_activity, mark_user_spoke
 from apps.moderation.orchestrator import ModerationOrchestrator
 from apps.moderation.triggers import evaluate_time_based_triggers
+from apps.tts.service import TTSService
+from apps.webrtc.audio_hub import get_hub, AI_MODERATOR_ID
 
 logger = logging.getLogger(__name__)
+
+# Transcript storage constants
+TRANSCRIPT_KEY_PREFIX = "session"
+TRANSCRIPT_TTL = 60 * 60 * 24  # 24 hours
+
+
+def _append_to_session_transcript(session_id: str, entry: dict) -> None:
+    """
+    Appende un'entry al transcript della sessione in Redis.
+
+    Args:
+        session_id: ID della sessione
+        entry: Dict con type, text, e altri campi
+    """
+    key = f"{TRANSCRIPT_KEY_PREFIX}:{session_id}:transcript"
+    serialized = json.dumps(entry)
+
+    # Django cache non ha rpush nativo, usiamo get/set
+    existing = cache.get(key) or []
+    existing.append(serialized)
+    cache.set(key, existing, timeout=TRANSCRIPT_TTL)
 
 
 class TurnsConsumer(AsyncJsonWebsocketConsumer):
@@ -340,6 +365,16 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             # Nome parlante (display_name se presente, altrimenti username)
             speaker_name = getattr(user, "display_name", None) or user.get_username()
 
+            # Append human turn to session transcript
+            if last_turn_text:
+                _append_to_session_transcript(self.session_id, {
+                    "type": "human",
+                    "user_id": str(user.id),
+                    "speaker_name": speaker_name,
+                    "text": last_turn_text,
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+
             decision = await self._run_moderation_orchestrator(
                 user_id=user.id,
                 last_turn_text=last_turn_text,
@@ -384,18 +419,44 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     await self._mark_any_activity()
                     await self._broadcast_events(ai_end_res.events)
 
-            # 6) Eventuale intervento AI proposto dall'LLM
+            # 6) Eventuale intervento AI proposto dall'LLM con TTS
             if decision.ai_should_speak and decision.ai_message:
+                # 6.1 Start AI turn
                 ai_start_res = TM.ai_start(self.session_id)
                 if ai_start_res.success:
                     await self._mark_any_activity()
                     await self._broadcast_events(ai_start_res.events)
 
-                    await self.send_json({
-                        "type": "turns.ai_message",
-                        "payload": {"text": decision.ai_message},
+                    # 6.2 Set AI as speaker in audio hub
+                    hub = get_hub(self.session_id)
+                    hub.init_ai_track()
+                    hub.set_speaker(AI_MODERATOR_ID)
+
+                    # 6.3 TTS streaming with injection to hub
+                    tts = TTSService()
+                    tts_result = await tts.synthesize_stream(
+                        text=decision.ai_message,
+                        on_audio_chunk=lambda pcm, samples, sr: self._inject_ai_audio(hub, pcm, samples, sr)
+                    )
+
+                    # 6.4 Fallback if TTS fails
+                    if not tts_result.success:
+                        logger.warning(f"TTS failed: {tts_result.error}, fallback to text")
+                        await self.send_json({
+                            "type": "turns.ai_message",
+                            "payload": {"text": decision.ai_message}
+                        })
+
+                    # 6.5 Append to session transcript
+                    _append_to_session_transcript(self.session_id, {
+                        "type": "ai",
+                        "text": decision.ai_message,
+                        "trigger": "llm_decision",
+                        "timestamp": datetime.utcnow().isoformat()
                     })
 
+                    # 6.6 End AI turn (synchronous with audio end)
+                    hub.set_speaker(None)
                     ai_end_res = TM.ai_end(self.session_id)
                     await self._mark_any_activity()
                     await self._broadcast_events(ai_end_res.events)
@@ -735,6 +796,10 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
     @database_sync_to_async
     def _mark_user_spoke(self, user_id: int) -> None:
         mark_user_spoke(self.session_id, user_id)
+
+    async def _inject_ai_audio(self, hub, pcm: bytes, samples: int, sample_rate: int):
+        """Wrapper async per inject_ai_audio."""
+        hub.inject_ai_audio(pcm, samples, sample_rate)
 
     @database_sync_to_async
     def _run_moderation_orchestrator(

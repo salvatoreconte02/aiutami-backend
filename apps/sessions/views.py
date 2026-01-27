@@ -15,6 +15,7 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
 from .models import Session, SessionParticipant, SessionState
+from .services import close_session
 from .serializers import (
     InvitationCreateSerializer,
     JoinByTokenSerializer,
@@ -330,11 +331,8 @@ class SessionDebugForceCloseView(APIView):
                 status=403,
             )
 
-        # Aggiornamento stato -> CLOSED
-        if session.state != SessionState.CLOSED:
-            session.state = SessionState.CLOSED
-            session.ended_at = timezone.now()
-            session.save(update_fields=["state", "ended_at"])
+        # Aggiornamento stato -> CLOSED (con cleanup Redis e salvataggio summary)
+        session = close_session(str(session.id))
 
         detail_data = SessionDetailSerializer(
             session,
