@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -12,6 +13,8 @@ from django.core.cache import cache
 from apps.moderation.timers_state import mark_any_activity, mark_user_spoke
 from apps.moderation.orchestrator import ModerationOrchestrator
 from apps.moderation.triggers import evaluate_time_based_triggers
+
+logger = logging.getLogger(__name__)
 
 
 class TurnsConsumer(AsyncJsonWebsocketConsumer):
@@ -298,6 +301,10 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         # 3) Entrata nella fase di moderazione: blocco nuovi turni umani
         await self._set_moderation_in_progress(True)
+        logger.info(
+            "[MODERATION][START] session=%s user=%s",
+            self.session_id, user.id
+        )
 
         from apps.turns.services import TurnManager as TM  # alias locale
 
@@ -326,6 +333,16 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 last_turn_text=last_turn_text,
                 session_phase=session_phase,
                 speaker_name=speaker_name,
+            )
+
+            logger.info(
+                "[MODERATION][DECISION] session=%s hard_action=%s ai_should_speak=%s "
+                "static_msgs=%d transition_to_conclusion=%s",
+                self.session_id,
+                decision.hard_action,
+                decision.ai_should_speak,
+                len(decision.static_messages_to_speak),
+                decision.should_transition_to_conclusion,
             )
 
             # --- DEBUG: invio diretto del messaggio del moderatore LLM al chiamante ---
@@ -393,6 +410,10 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
             # 7) Uscita dalla fase di moderazione: si riapre ai turni umani
             await self._set_moderation_in_progress(False)
+            logger.info(
+                "[MODERATION][END] session=%s user=%s",
+                self.session_id, user.id
+            )
 
             # Stato finale dei turni dopo la moderazione
             final_state = TM.get_state(self.session_id, user)

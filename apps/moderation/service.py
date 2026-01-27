@@ -1,5 +1,6 @@
 # apps/moderation/service.py
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -8,6 +9,8 @@ import json
 import os
 
 from openai import AzureOpenAI  # client ufficiale per Azure OpenAI
+
+logger = logging.getLogger(__name__)
 
 from .state import (
     ModerationState,
@@ -196,6 +199,15 @@ class ModerationService:
             },
         }
 
+        # Log della request LLM
+        logger.info(
+            "[MODERATION][LLM][REQUEST] mode=%s speaker=%s phase=%s transcript=%r",
+            mode,
+            speaker_name,
+            session_phase,
+            last_turn,
+        )
+
         # 2) Tentativo di chiamata reale verso Azure OpenAI
         try:
             client = cls._build_azure_client()
@@ -245,15 +257,20 @@ class ModerationService:
                 # In caso di contenuto multi-parte (non comune qui), si concatena
                 raw_output = "".join(part.get("text", "") for part in raw_output)
 
-        except Exception:
+        except Exception as e:
             # In caso di errore di rete/API, si torna a un fallback locale
+            logger.warning("[MODERATION][LLM][ERROR] mode=%s error=%s", mode, str(e))
             return cls._fallback_llm_output(mode, base_updated_summary)
 
         # 3) Parsing e normalizzazione dell'output del modello
         try:
             parsed: dict[str, Any] = json.loads(raw_output)
-        except Exception:
+        except Exception as e:
             # Se il modello non restituisce JSON valido, si applica il fallback
+            logger.warning(
+                "[MODERATION][LLM][PARSE_ERROR] mode=%s raw_output=%r error=%s",
+                mode, raw_output, str(e)
+            )
             return cls._fallback_llm_output(mode, base_updated_summary)
 
         updated_summary = parsed.get("updated_summary", summary_in)
@@ -266,6 +283,16 @@ class ModerationService:
             intervention_score = float(intervention_score_raw)
         except (TypeError, ValueError):
             intervention_score = 0.0
+
+        # Log della risposta LLM
+        logger.info(
+            "[MODERATION][LLM][RESPONSE] mode=%s should_speak=%s reason=%s score=%.2f message=%r",
+            mode,
+            should_ai_speak,
+            reason,
+            intervention_score,
+            message_to_say,
+        )
 
         return {
             "updated_summary": updated_summary,
@@ -282,6 +309,8 @@ class ModerationService:
         o l'output non è parsabile. Mantiene la stessa semantica
         che aveva lo stub originale.
         """
+        logger.warning("[MODERATION][LLM][FALLBACK] mode=%s (using local fallback)", mode)
+
         if mode == "forced_summary":
             return {
                 "updated_summary": base_updated_summary,

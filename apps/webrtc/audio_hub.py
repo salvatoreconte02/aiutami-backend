@@ -46,6 +46,8 @@ class SessionAudioHub:
             self.current_speaker_user_id = None
 
     def set_speaker(self, user_id: Optional[int]) -> None:
+        if self.current_speaker_user_id == user_id:
+            return  # idempotent - no change
         self.current_speaker_user_id = user_id
         logger.info("[AudioHub] set speaker=%s session=%s", user_id, self.session_id)
 
