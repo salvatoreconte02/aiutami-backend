@@ -133,9 +133,14 @@ class ForwardingAudioTrack(AudioStreamTrack):
             pcm_out = bytes(self._bytebuf[:self._bytes_per_frame])
             del self._bytebuf[:self._bytes_per_frame]
         else:
-            missing = self._bytes_per_frame - len(self._bytebuf)
+            had = len(self._bytebuf)
+            missing = self._bytes_per_frame - had
             pcm_out = bytes(self._bytebuf) + (b"\x00" * missing)
             self._bytebuf.clear()
+            logger.warning(
+                "[AudioTrack] Buffer underrun: had=%d needed=%d missing=%d user=%s",
+                had, self._bytes_per_frame, missing, self.user_id,
+            )
 
         frame = av.AudioFrame(format="s16", layout="mono", samples=self._samples_per_frame)
         frame.sample_rate = self._out_sample_rate

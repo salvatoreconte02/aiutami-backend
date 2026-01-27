@@ -327,6 +327,12 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
                             pcm = bytes(frame.planes[0])
                             samples = int(frame.samples)
                             sample_rate = int(frame.sample_rate or 48000)
+                            expected_bytes = samples * 2  # s16 mono = 2 bytes per sample
+                            if len(pcm) != expected_bytes:
+                                logger.warning(
+                                    "[WebRTC] PCM size mismatch: got=%d expected=%d samples=%d rate=%d user=%s",
+                                    len(pcm), expected_bytes, samples, sample_rate, self.user.id
+                                )
                             self._hub.forward_pcm_from_speaker(
                                 from_user_id=self.user.id,
                                 pcm=pcm,
