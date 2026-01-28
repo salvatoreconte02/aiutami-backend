@@ -312,6 +312,16 @@ class TurnManager:
             )
 
         if state.reservation_user_id is not None:
+            # Distingui tra finestra di priorità attiva e semplice prenotazione
+            now = timezone.now()
+            if state.reservation_expires_at is not None and state.reservation_expires_at > now:
+                return TurnResult(
+                    success=False,
+                    state=state,
+                    events=events,
+                    error_code="PRIORITY_FOR_OTHER_USER",
+                    error_detail="Esiste una finestra di priorità per un altro partecipante.",
+                )
             return TurnResult(
                 success=False,
                 state=state,
