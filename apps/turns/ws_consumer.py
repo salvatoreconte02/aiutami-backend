@@ -441,6 +441,11 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             if decision.ai_should_speak and decision.ai_message:
                 # 6.1 Start AI turn
                 ai_start_res = TM.ai_start(self.session_id)
+                if not ai_start_res.success:
+                    logger.warning(
+                        "[MODERATION][AI_START_BLOCKED] session=%s error=%s detail=%s",
+                        self.session_id, ai_start_res.error_code, ai_start_res.error_detail
+                    )
                 if ai_start_res.success:
                     await self._mark_any_activity()
                     await self._broadcast_events(ai_start_res.events)
