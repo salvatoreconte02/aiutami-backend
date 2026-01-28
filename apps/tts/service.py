@@ -109,13 +109,17 @@ class TTSService:
             audio_data = result.audio_data
             duration_ms = int(result.audio_duration.total_seconds() * 1000)
 
-            # Invia audio in chunk
+            # Invia audio in chunk con pacing per rispettare il timing reale
             if audio_data:
-                chunk_size = OUTPUT_SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS // 10  # 100ms chunks
+                chunk_size = OUTPUT_SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS // 50  # 20ms chunks
+                chunk_duration_sec = chunk_size / (OUTPUT_SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS)
+
                 for i in range(0, len(audio_data), chunk_size):
                     chunk = audio_data[i:i + chunk_size]
                     samples = len(chunk) // BYTES_PER_SAMPLE
                     await on_audio_chunk(chunk, samples, OUTPUT_SAMPLE_RATE)
+                    # Pacing: aspetta ~90% della durata del chunk per evitare underrun
+                    await asyncio.sleep(chunk_duration_sec * 0.9)
 
             return TTSResult(success=True, duration_ms=duration_ms, error=None)
 
