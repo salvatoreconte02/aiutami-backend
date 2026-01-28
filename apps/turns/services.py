@@ -291,8 +291,9 @@ class TurnManager:
         state = cls._load_state(session_id)
         events: List[TurnEvent] = []
 
-        # Durante la moderazione non si impostano nuove prenotazioni.
-        if state.moderation_in_progress:
+        # Durante la moderazione non si impostano nuove prenotazioni,
+        # MA se il moderatore sta già parlando (AI_SPEAKING) allora si può prenotare.
+        if state.moderation_in_progress and state.state != TURN_STATE_AI_SPEAKING:
             return TurnResult(
                 success=False,
                 state=state,
@@ -301,13 +302,13 @@ class TurnManager:
                 error_detail="È in corso una fase di moderazione: attendere che il moderatore termini.",
             )
 
-        if state.state != TURN_STATE_HUMAN_SPEAKING:
+        if state.state not in (TURN_STATE_HUMAN_SPEAKING, TURN_STATE_AI_SPEAKING):
             return TurnResult(
                 success=False,
                 state=state,
                 events=events,
                 error_code="NOT_ALLOWED",
-                error_detail="La prenotazione è consentita solo mentre un umano sta parlando.",
+                error_detail="La prenotazione è consentita solo mentre qualcuno sta parlando.",
             )
 
         if state.reservation_user_id is not None:
