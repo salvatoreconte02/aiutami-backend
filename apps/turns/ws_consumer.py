@@ -1013,8 +1013,11 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         """
         from apps.turns.services import TurnManager
 
+        logger.info("[TTS_MESSAGE][START] session=%s text=%s", self.session_id, text[:50])
+
         ai_start_res = TurnManager.ai_start(self.session_id)
         if not ai_start_res.success:
+            logger.warning("[TTS_MESSAGE][AI_START_FAILED] session=%s error=%s", self.session_id, ai_start_res.error_code)
             return
 
         await self._mark_any_activity()
@@ -1025,37 +1028,45 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         hub.init_ai_track()
         hub.set_speaker(AI_MODERATOR_ID)
 
-        # TTS streaming
-        tts = TTSService()
-        tts_result = await tts.synthesize_stream(
-            text=text,
-            on_audio_chunk=lambda pcm, samples, sr: self._inject_ai_audio(hub, pcm, samples, sr)
-        )
-
-        if not tts_result.success:
-            logger.warning(f"TTS failed: {tts_result.error}, fallback to text")
-            await self.channel_layer.group_send(
-                self.group_name,
-                {
-                    "type": "turns.event",
-                    "event_type": "STATIC_MESSAGE",
-                    "payload": {"text": text, "use_tts": False},
-                },
+        try:
+            # TTS streaming
+            logger.info("[TTS_MESSAGE][TTS_START] session=%s", self.session_id)
+            tts = TTSService()
+            tts_result = await tts.synthesize_stream(
+                text=text,
+                on_audio_chunk=lambda pcm, samples, sr: self._inject_ai_audio(hub, pcm, samples, sr)
             )
+            logger.info("[TTS_MESSAGE][TTS_DONE] session=%s success=%s error=%s", self.session_id, tts_result.success, tts_result.error)
 
-        # Append to transcript
-        _append_to_session_transcript(self.session_id, {
-            "type": "ai",
-            "text": text,
-            "trigger": "time_based",
-            "timestamp": datetime.utcnow().isoformat()
-        })
+            if not tts_result.success:
+                logger.warning("[TTS_MESSAGE][TTS_FAILED] session=%s error=%s fallback to text", self.session_id, tts_result.error)
+                await self.channel_layer.group_send(
+                    self.group_name,
+                    {
+                        "type": "turns.event",
+                        "event_type": "STATIC_MESSAGE",
+                        "payload": {"text": text, "use_tts": False},
+                    },
+                )
 
-        # End AI turn
-        hub.set_speaker(None)
-        ai_end_res = TurnManager.ai_end(self.session_id)
-        await self._mark_any_activity()
-        await self._broadcast_events(ai_end_res.events)
+            # Append to transcript
+            _append_to_session_transcript(self.session_id, {
+                "type": "ai",
+                "text": text,
+                "trigger": "time_based",
+                "timestamp": datetime.utcnow().isoformat()
+            })
+
+        except Exception as e:
+            logger.error("[TTS_MESSAGE][ERROR] session=%s error=%s", self.session_id, e, exc_info=True)
+
+        finally:
+            # End AI turn
+            hub.set_speaker(None)
+            ai_end_res = TurnManager.ai_end(self.session_id)
+            await self._mark_any_activity()
+            await self._broadcast_events(ai_end_res.events)
+            logger.info("[TTS_MESSAGE][END] session=%s", self.session_id)
 
     async def _flush_pending_tts_messages(self) -> None:
         """
