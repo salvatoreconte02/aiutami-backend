@@ -373,14 +373,8 @@ class TurnManager:
                 error_detail="L'intervento AI è consentito solo quando nessuno sta parlando.",
             )
 
-        if state.reservation_user_id is not None:
-            return TurnResult(
-                success=False,
-                state=state,
-                events=events,
-                error_code="PRIORITY_WINDOW_ACTIVE",
-                error_detail="Esiste una priorità a favore di un partecipante umano.",
-            )
+        # L'AI ha precedenza sulla prenotazione: la prenotazione rimane
+        # salvata e la finestra di priorità si aprirà dopo che l'AI finisce.
 
         state.state = TURN_STATE_AI_SPEAKING
         state.current_speaker_user_id = None
@@ -421,6 +415,22 @@ class TurnManager:
             payload={},
         )
         events.append(ai_ended)
+
+        # Se c'era una prenotazione "congelata", ora si apre la finestra di priorità
+        if state.reservation_user_id is not None:
+            now = timezone.now()
+            state.reservation_expires_at = now + timedelta(seconds=PRIORITY_WINDOW_SECONDS)
+            state.version += 1
+
+            reservation_started = TurnEvent(
+                type="RESERVATION_WINDOW_STARTED",
+                payload={
+                    "user_id": state.reservation_user_id,
+                    "expires_at": state.reservation_expires_at.isoformat(),
+                    "window_seconds": PRIORITY_WINDOW_SECONDS,
+                },
+            )
+            events.append(reservation_started)
 
         cls._save_state(session_id, state)
         return TurnResult(success=True, state=state, events=events)
