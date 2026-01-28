@@ -275,20 +275,10 @@ class TurnManager:
         )
         events.append(human_ended)
 
-        if state.reservation_user_id is not None:
-            now = timezone.now()
-            state.reservation_expires_at = now + timedelta(seconds=PRIORITY_WINDOW_SECONDS)
-            state.version += 1
-
-            reservation_started = TurnEvent(
-                type="RESERVATION_WINDOW_STARTED",
-                payload={
-                    "user_id": state.reservation_user_id,
-                    "expires_at": state.reservation_expires_at.isoformat(),
-                    "window_seconds": PRIORITY_WINDOW_SECONDS,
-                },
-            )
-            events.append(reservation_started)
+        # NOTA: Se c'è una prenotazione, NON apriamo subito la finestra di priorità.
+        # La finestra verrà aperta DOPO la fase di moderazione (in ai_end se l'AI parla,
+        # oppure manualmente se l'AI non parla). Questo evita che la finestra scada
+        # mentre il moderatore sta parlando.
 
         cls._save_state(session_id, state)
         return TurnResult(success=True, state=state, events=events)
@@ -540,3 +530,39 @@ class TurnManager:
             state.version += 1
             cls._save_state(session_id, state)
         return state
+
+    @classmethod
+    def start_reservation_window(cls, session_id: str) -> Optional[TurnEvent]:
+        """
+        Apre la finestra di priorità per una prenotazione esistente.
+
+        Da chiamare DOPO la fase di moderazione se l'AI non ha parlato.
+        Se l'AI ha parlato, la finestra viene aperta da ai_end().
+
+        Ritorna l'evento RESERVATION_WINDOW_STARTED se la finestra è stata aperta,
+        None altrimenti.
+        """
+        state = cls._load_state(session_id)
+
+        # Nessuna prenotazione attiva
+        if state.reservation_user_id is None:
+            return None
+
+        # Finestra già aperta (non dovrebbe succedere, ma per sicurezza)
+        if state.reservation_expires_at is not None:
+            return None
+
+        # Apri la finestra
+        now = timezone.now()
+        state.reservation_expires_at = now + timedelta(seconds=PRIORITY_WINDOW_SECONDS)
+        state.version += 1
+        cls._save_state(session_id, state)
+
+        return TurnEvent(
+            type="RESERVATION_WINDOW_STARTED",
+            payload={
+                "user_id": state.reservation_user_id,
+                "expires_at": state.reservation_expires_at.isoformat(),
+                "window_seconds": PRIORITY_WINDOW_SECONDS,
+            },
+        )

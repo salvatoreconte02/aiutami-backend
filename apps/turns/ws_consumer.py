@@ -349,15 +349,9 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         # Broadcast degli eventi generati dalla chiusura
         await self._broadcast_events(result.events)
 
-        # Se c'è una reservation window attiva, schedula il timer per l'expiration
-        for event in result.events:
-            if event.type == "RESERVATION_WINDOW_STARTED":
-                asyncio.create_task(
-                    self._schedule_reservation_expiration(
-                        session_id=self.session_id,
-                        user_id=event.payload["user_id"],
-                    )
-                )
+        # NOTA: La finestra di prenotazione NON viene più aperta qui.
+        # Verrà aperta DOPO la moderazione (in ai_end se l'AI parla,
+        # oppure manualmente alla fine di questo metodo se l'AI non parla).
 
         # 3) Entrata nella fase di moderazione: blocco nuovi turni umani
         await self._set_moderation_in_progress(True)
@@ -484,6 +478,16 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     await self._mark_any_activity()
                     await self._broadcast_events(ai_end_res.events)
 
+                    # 6.7 Se ai_end ha aperto una finestra di prenotazione, schedula il timer
+                    for ev in ai_end_res.events:
+                        if ev.type == "RESERVATION_WINDOW_STARTED":
+                            asyncio.create_task(
+                                self._schedule_reservation_expiration(
+                                    session_id=self.session_id,
+                                    user_id=ev.payload["user_id"],
+                                )
+                            )
+
             # 7) Gestione transizione a CONCLUSION (timer 30 min scaduto)
             if decision.should_transition_to_conclusion:
                 transitioned = await self._transition_session_to_conclusion()
@@ -513,6 +517,19 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 "[MODERATION][END] session=%s user=%s",
                 self.session_id, user.id
             )
+
+            # 8) Se c'è una prenotazione e la finestra non è stata ancora aperta
+            #    (cioè l'AI non ha parlato), aprila ora.
+            reservation_event = TM.start_reservation_window(self.session_id)
+            if reservation_event is not None:
+                await self._broadcast_events([reservation_event])
+                # Schedula il timer per l'expiration
+                asyncio.create_task(
+                    self._schedule_reservation_expiration(
+                        session_id=self.session_id,
+                        user_id=reservation_event.payload["user_id"],
+                    )
+                )
 
             # Stato finale dei turni dopo la moderazione
             final_state = TM.get_state(self.session_id, user)
@@ -1071,6 +1088,17 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             ai_end_res = TurnManager.ai_end(self.session_id)
             await self._mark_any_activity()
             await self._broadcast_events(ai_end_res.events)
+
+            # Se ai_end ha aperto una finestra di prenotazione, schedula il timer
+            for ev in ai_end_res.events:
+                if ev.type == "RESERVATION_WINDOW_STARTED":
+                    asyncio.create_task(
+                        self._schedule_reservation_expiration(
+                            session_id=self.session_id,
+                            user_id=ev.payload["user_id"],
+                        )
+                    )
+
             logger.info("[TTS_MESSAGE][END] session=%s", self.session_id)
 
     async def _flush_pending_tts_messages(self) -> None:
