@@ -291,8 +291,22 @@ class TurnManager:
         state = cls._load_state(session_id)
         events: List[TurnEvent] = []
 
-        # Durante la moderazione non si impostano nuove prenotazioni,
-        # MA se il moderatore sta già parlando (AI_SPEAKING) allora si può prenotare.
+        # 1) Check finestra di priorità attiva - ha precedenza su tutto
+        #    Se c'è una finestra attiva, ritorna PRIORITY_FOR_OTHER_USER anche se state=IDLE
+        now = timezone.now()
+        if (state.reservation_user_id is not None
+            and state.reservation_expires_at is not None
+            and state.reservation_expires_at > now):
+            return TurnResult(
+                success=False,
+                state=state,
+                events=events,
+                error_code="PRIORITY_FOR_OTHER_USER",
+                error_detail="Esiste una finestra di priorità per un altro partecipante.",
+            )
+
+        # 2) Durante la moderazione non si impostano nuove prenotazioni,
+        #    MA se il moderatore sta già parlando (AI_SPEAKING) allora si può prenotare.
         if state.moderation_in_progress and state.state != TURN_STATE_AI_SPEAKING:
             return TurnResult(
                 success=False,
@@ -302,6 +316,7 @@ class TurnManager:
                 error_detail="È in corso una fase di moderazione: attendere che il moderatore termini.",
             )
 
+        # 3) Check stato - prenotazione consentita solo mentre qualcuno sta parlando
         if state.state not in (TURN_STATE_HUMAN_SPEAKING, TURN_STATE_AI_SPEAKING):
             return TurnResult(
                 success=False,
@@ -311,17 +326,8 @@ class TurnManager:
                 error_detail="La prenotazione è consentita solo mentre qualcuno sta parlando.",
             )
 
+        # 4) Check prenotazione esistente (senza finestra attiva)
         if state.reservation_user_id is not None:
-            # Distingui tra finestra di priorità attiva e semplice prenotazione
-            now = timezone.now()
-            if state.reservation_expires_at is not None and state.reservation_expires_at > now:
-                return TurnResult(
-                    success=False,
-                    state=state,
-                    events=events,
-                    error_code="PRIORITY_FOR_OTHER_USER",
-                    error_detail="Esiste una finestra di priorità per un altro partecipante.",
-                )
             return TurnResult(
                 success=False,
                 state=state,
