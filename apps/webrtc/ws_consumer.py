@@ -155,7 +155,8 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
         elif ev_type == "AI_STARTED":
             self._turn_state = TURN_STATE_AI_SPEAKING
             self._current_speaker_user_id = None
-            self._hub.set_speaker(None)
+            # Non resettiamo lo speaker qui - viene gestito dal TurnsConsumer
+            # che imposta AI_MODERATOR_ID prima di iniziare il TTS
 
         elif ev_type == "AI_ENDED":
             self._turn_state = TURN_STATE_IDLE
