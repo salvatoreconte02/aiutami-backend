@@ -886,6 +886,9 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             if session_state != "ACTIVE":
                 return
 
+            # Inizializza il timer per NO_PUSH (se non già impostato)
+            await self._mark_any_activity()
+
             task = asyncio.create_task(self._trigger_loop(self.session_id))
             self._trigger_tasks[self.session_id] = task
             logger.info(
