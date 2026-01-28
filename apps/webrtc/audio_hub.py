@@ -66,9 +66,13 @@ class SessionAudioHub:
         return self._ai_track
 
     def inject_ai_audio(self, pcm_chunk: bytes, samples: int, sample_rate: int) -> None:
-        """Inietta audio TTS nel track AI per forwarding."""
-        if self._ai_track is not None and self.current_speaker_user_id == AI_MODERATOR_ID:
-            self._ai_track.enqueue(pcm_chunk, samples, sample_rate)
+        """Inietta audio TTS direttamente nei track di tutti i peer."""
+        if self.current_speaker_user_id != AI_MODERATOR_ID:
+            return
+
+        # Forward diretto a tutti i peer (come forward_pcm_from_speaker)
+        for uid, peer in self.peers.items():
+            peer.outbound_track.enqueue(pcm=pcm_chunk, samples=samples, sample_rate=sample_rate)
 
     def get_outbound_track_for_peer(self, user_id: int) -> Optional[ForwardingAudioTrack]:
         """

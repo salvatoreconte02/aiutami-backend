@@ -320,7 +320,7 @@ def _collect_time_based_static_messages(
             state.timer_30_notified = True
 
     # 3) UTENTE INATTIVO - TTS
-    if session_phase == SessionStateEnum.ACTIVE:
+    if session_phase == SessionStateEnum.ACTIVE and state.session_started_at is not None:
         participants = (
             SessionParticipant.objects
             .filter(session_id=session_id)
@@ -335,8 +335,10 @@ def _collect_time_based_static_messages(
 
             last_spoke = state.last_user_speak_at.get(user_id_str)
 
-            # Mai parlato, oppure troppo tempo senza parlare
-            if last_spoke is None or (now - last_spoke) >= INACTIVE_USER_THRESHOLD:
+            # Se l'utente ha parlato: controlla tempo dall'ultima volta
+            # Se l'utente NON ha mai parlato: controlla tempo dall'inizio sessione
+            reference_time = last_spoke if last_spoke is not None else state.session_started_at
+            if reference_time is not None and (now - reference_time) >= INACTIVE_USER_THRESHOLD:
                 display_name = getattr(p.user, "display_name", None) or p.user.get_username()
                 messages.append(StaticMessage(
                     text=f"{display_name}, se vuoi condividere un'idea, questo è un buon momento per intervenire.",
