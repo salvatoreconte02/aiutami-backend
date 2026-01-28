@@ -923,26 +923,49 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         - Se qualcuno sta parlando e ci sono messaggi TTS, li accoda
         - Svuota la coda se IDLE e ci sono messaggi pendenti
         """
+        logger.info("[TRIGGER_LOOP][STARTED] session=%s", session_id)
+
         while True:
-            await asyncio.sleep(5)
-
             try:
-                session_phase = await self._get_session_state(session_id)
-            except Exception:
-                continue
+                await asyncio.sleep(5)
 
-            # Valuta trigger temporali
-            trig_result = evaluate_time_based_triggers(
-                session_id=session_id,
-                session_phase=session_phase,
-            )
+                logger.debug("[TRIGGER_LOOP][TICK] session=%s", session_id)
 
-            # Esegui/accoda i messaggi
-            if trig_result.static_messages_to_speak:
-                await self._execute_static_messages(trig_result.static_messages_to_speak)
+                try:
+                    session_phase = await self._get_session_state(session_id)
+                except Exception as e:
+                    logger.warning("[TRIGGER_LOOP][GET_STATE_ERROR] session=%s error=%s", session_id, e)
+                    continue
 
-            # Svuota coda messaggi pendenti se IDLE
-            await self._flush_pending_tts_messages()
+                logger.debug("[TRIGGER_LOOP][PHASE] session=%s phase=%s", session_id, session_phase)
+
+                # Valuta trigger temporali
+                try:
+                    trig_result = await database_sync_to_async(evaluate_time_based_triggers)(
+                        session_id=session_id,
+                        session_phase=session_phase,
+                    )
+                except Exception as e:
+                    logger.error("[TRIGGER_LOOP][EVAL_ERROR] session=%s error=%s", session_id, e, exc_info=True)
+                    continue
+
+                logger.info(
+                    "[TRIGGER_LOOP][RESULT] session=%s messages=%d",
+                    session_id, len(trig_result.static_messages_to_speak)
+                )
+
+                # Esegui/accoda i messaggi
+                if trig_result.static_messages_to_speak:
+                    await self._execute_static_messages(trig_result.static_messages_to_speak)
+
+                # Svuota coda messaggi pendenti se IDLE
+                await self._flush_pending_tts_messages()
+
+            except asyncio.CancelledError:
+                logger.info("[TRIGGER_LOOP][CANCELLED] session=%s", session_id)
+                raise
+            except Exception as e:
+                logger.error("[TRIGGER_LOOP][ERROR] session=%s error=%s", session_id, e, exc_info=True)
 
     async def _execute_static_messages(self, messages: list) -> None:
         """
