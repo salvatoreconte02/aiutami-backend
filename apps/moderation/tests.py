@@ -6,7 +6,13 @@ from apps.moderation.state import (
     load_moderation_state,
     save_moderation_state,
 )
-from apps.moderation.triggers import TriggerEvaluationResult, evaluate_triggers_on_human_turn_end
+from apps.moderation.triggers import TriggerEvaluationResult, evaluate_triggers_on_human_turn_end, StaticMessage
+from apps.moderation.pending_messages import (
+    PendingMessage,
+    enqueue_message,
+    dequeue_all_messages,
+    has_pending_messages,
+)
 from apps.moderation.service import HardModerationAction, ModerationService
 from apps.moderation.orchestrator import FullModerationDecision, ModerationOrchestrator
 from unittest.mock import patch, MagicMock
@@ -63,6 +69,17 @@ class TriggerEvaluationResultTests(TestCase):
             static_messages_to_speak=[],
         )
         self.assertFalse(result.should_transition_to_conclusion)
+
+    def test_trigger_result_static_messages_are_static_message_objects(self):
+        """static_messages_to_speak should contain StaticMessage objects."""
+        msg = StaticMessage(text="Test", use_tts=True)
+        result = TriggerEvaluationResult(
+            hard_action=HardModerationAction.NONE,
+            static_messages_to_speak=[msg],
+        )
+        self.assertEqual(len(result.static_messages_to_speak), 1)
+        self.assertIsInstance(result.static_messages_to_speak[0], StaticMessage)
+        self.assertEqual(result.static_messages_to_speak[0].text, "Test")
 
 
 class ForcedConclusionOnlyOnceTests(TestCase):
@@ -142,8 +159,9 @@ class Timer30TransitionTests(TestCase):
         )
 
         self.assertTrue(result.should_transition_to_conclusion)
-        self.assertIn("Il tempo della discussione è terminato",
-                      " ".join(result.static_messages_to_speak))
+        timer_msgs = [m for m in result.static_messages_to_speak
+                      if "Il tempo della discussione è terminato" in m.text]
+        self.assertEqual(len(timer_msgs), 1)
 
     @patch('apps.moderation.triggers._get_next_reserved_speaker_name', return_value=None)
     @patch('apps.moderation.triggers._get_ready_to_conclude_status', return_value=(0, 3))
@@ -282,6 +300,18 @@ class FullModerationDecisionTests(TestCase):
         )
         self.assertFalse(decision.should_transition_to_conclusion)
 
+    def test_full_decision_static_messages_are_static_message_objects(self):
+        """static_messages_to_speak should contain StaticMessage objects."""
+        msg = StaticMessage(text="Test", use_tts=True)
+        decision = FullModerationDecision(
+            static_messages_to_speak=[msg],
+            ai_should_speak=False,
+            ai_message=None,
+            hard_action=HardModerationAction.NONE,
+        )
+        self.assertEqual(len(decision.static_messages_to_speak), 1)
+        self.assertIsInstance(decision.static_messages_to_speak[0], StaticMessage)
+
 
 class ConsumerTransitionIntegrationTests(TestCase):
     """Integration tests for session transition via consumer."""
@@ -307,3 +337,211 @@ class ConsumerTransitionIntegrationTests(TestCase):
         # Verify mock returns expected value
         decision = mock_orchestrator()
         self.assertTrue(decision.should_transition_to_conclusion)
+
+
+class StaticMessageTests(TestCase):
+    def test_static_message_with_tts(self):
+        """StaticMessage with use_tts=True."""
+        msg = StaticMessage(text="Test message", use_tts=True)
+        self.assertEqual(msg.text, "Test message")
+        self.assertTrue(msg.use_tts)
+
+    def test_static_message_without_tts(self):
+        """StaticMessage with use_tts=False (text only)."""
+        msg = StaticMessage(text="Timer warning", use_tts=False)
+        self.assertEqual(msg.text, "Timer warning")
+        self.assertFalse(msg.use_tts)
+
+
+class TriggerMessagesUseTTSTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch('apps.moderation.triggers._get_next_reserved_speaker_name', return_value="Mario")
+    @patch('apps.moderation.triggers._get_ready_to_conclude_status', return_value=(0, 3))
+    def test_prenotazione_message_has_use_tts_false(self, mock_ready, mock_reserved):
+        """PRENOTAZIONE message should have use_tts=False (text only)."""
+        session_id = "test-session-tts-1"
+        mod_state = ModerationState.initial()
+        save_moderation_state(session_id, mod_state)
+
+        result = evaluate_triggers_on_human_turn_end(
+            session_id=session_id,
+            user_id=1,
+            session_phase="ACTIVE",
+            moderation_state=mod_state,
+        )
+
+        prenotazione_msgs = [m for m in result.static_messages_to_speak
+                            if "prenotato" in m.text]
+        self.assertEqual(len(prenotazione_msgs), 1)
+        self.assertFalse(prenotazione_msgs[0].use_tts)
+
+    @patch('apps.moderation.triggers._get_next_reserved_speaker_name', return_value=None)
+    @patch('apps.moderation.triggers._get_ready_to_conclude_status', return_value=(2, 3))
+    def test_pronti_concludere_message_has_use_tts_true(self, mock_ready, mock_reserved):
+        """PRONTI_CONCLUDERE message should have use_tts=True."""
+        session_id = "test-session-tts-2"
+        mod_state = ModerationState.initial()
+        save_moderation_state(session_id, mod_state)
+
+        result = evaluate_triggers_on_human_turn_end(
+            session_id=session_id,
+            user_id=1,
+            session_phase="ACTIVE",
+            moderation_state=mod_state,
+        )
+
+        pronti_msgs = [m for m in result.static_messages_to_speak
+                      if "pronti a concludere" in m.text]
+        self.assertEqual(len(pronti_msgs), 1)
+        self.assertTrue(pronti_msgs[0].use_tts)
+
+
+class TimeBasedTriggersTTSTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
+    def test_no_push_message_has_use_tts_true(self, mock_speaking):
+        """NO_PUSH message should have use_tts=True."""
+        from apps.moderation.triggers import evaluate_time_based_triggers
+        session_id = "test-session-time-1"
+
+        # Setup: last activity was 20 seconds ago (> 15s threshold)
+        timers_state = ModerationTimersState.initial()
+        timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=5)
+        timers_state.last_any_activity_at = datetime.utcnow() - timedelta(seconds=20)
+        timers_state.no_push_notified = False
+        save_timers_state(session_id, timers_state)
+
+        result = evaluate_time_based_triggers(
+            session_id=session_id,
+            session_phase="ACTIVE",
+        )
+
+        no_push_msgs = [m for m in result.static_messages_to_speak
+                       if "vuole intervenire" in m.text]
+        self.assertEqual(len(no_push_msgs), 1)
+        self.assertTrue(no_push_msgs[0].use_tts)
+
+    @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
+    def test_timer_25_message_has_use_tts_false(self, mock_speaking):
+        """TIMER_25 message should have use_tts=False (text only warning)."""
+        from apps.moderation.triggers import evaluate_time_based_triggers
+        session_id = "test-session-time-2"
+
+        # Setup: session started 26 minutes ago
+        timers_state = ModerationTimersState.initial()
+        timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=26)
+        timers_state.last_any_activity_at = datetime.utcnow()  # recent activity
+        timers_state.timer_25_notified = False
+        save_timers_state(session_id, timers_state)
+
+        result = evaluate_time_based_triggers(
+            session_id=session_id,
+            session_phase="ACTIVE",
+        )
+
+        timer_25_msgs = [m for m in result.static_messages_to_speak
+                        if "cinque minuti" in m.text]
+        self.assertEqual(len(timer_25_msgs), 1)
+        self.assertFalse(timer_25_msgs[0].use_tts)
+
+    @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
+    @patch('apps.moderation.triggers.SessionParticipant')
+    def test_utente_inattivo_message_has_use_tts_true(self, mock_participant, mock_speaking):
+        """UTENTE_INATTIVO message should have use_tts=True."""
+        from apps.moderation.triggers import evaluate_time_based_triggers
+        session_id = "test-session-time-3"
+
+        # Setup: session with one user who never spoke
+        timers_state = ModerationTimersState.initial()
+        timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=15)
+        timers_state.last_any_activity_at = datetime.utcnow()
+        timers_state.last_user_speak_at = {}  # No one spoke
+        timers_state.inactive_notified_user_ids = []
+        save_timers_state(session_id, timers_state)
+
+        # Mock participant
+        mock_user = MagicMock()
+        mock_user.id = 1
+        mock_user.display_name = "TestUser"
+        mock_user.get_username.return_value = "testuser"
+
+        mock_participant_obj = MagicMock()
+        mock_participant_obj.user_id = 1
+        mock_participant_obj.user = mock_user
+
+        mock_participant.objects.filter.return_value.select_related.return_value = [mock_participant_obj]
+
+        result = evaluate_time_based_triggers(
+            session_id=session_id,
+            session_phase="ACTIVE",
+        )
+
+        inactive_msgs = [m for m in result.static_messages_to_speak
+                        if "buon momento per intervenire" in m.text]
+        self.assertEqual(len(inactive_msgs), 1)
+        self.assertTrue(inactive_msgs[0].use_tts)
+
+
+class PendingMessagesTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_enqueue_and_dequeue_single_message(self):
+        """Enqueue a message and dequeue it."""
+        session_id = "test-pending-1"
+
+        enqueue_message(session_id, "Test message", "NO_PUSH")
+
+        self.assertTrue(has_pending_messages(session_id))
+
+        messages = dequeue_all_messages(session_id)
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].text, "Test message")
+        self.assertEqual(messages[0].trigger_type, "NO_PUSH")
+        self.assertIsInstance(messages[0].created_at, datetime)
+
+        # After dequeue, queue should be empty
+        self.assertFalse(has_pending_messages(session_id))
+
+    def test_enqueue_multiple_messages_fifo_order(self):
+        """Multiple messages should be dequeued in FIFO order."""
+        session_id = "test-pending-2"
+
+        enqueue_message(session_id, "First", "NO_PUSH")
+        enqueue_message(session_id, "Second", "TIMER_30")
+        enqueue_message(session_id, "Third", "UTENTE_INATTIVO")
+
+        messages = dequeue_all_messages(session_id)
+
+        self.assertEqual(len(messages), 3)
+        self.assertEqual(messages[0].text, "First")
+        self.assertEqual(messages[1].text, "Second")
+        self.assertEqual(messages[2].text, "Third")
+
+    def test_dequeue_empty_queue_returns_empty_list(self):
+        """Dequeuing an empty queue returns empty list."""
+        session_id = "test-pending-3"
+
+        messages = dequeue_all_messages(session_id)
+
+        self.assertEqual(messages, [])
+
+    def test_has_pending_messages_false_when_empty(self):
+        """has_pending_messages returns False for empty/nonexistent queue."""
+        session_id = "test-pending-4"
+
+        self.assertFalse(has_pending_messages(session_id))

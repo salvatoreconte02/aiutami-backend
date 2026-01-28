@@ -5,6 +5,7 @@ import json
 import logging
 import time
 from datetime import datetime
+from typing import ClassVar, Dict
 
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
@@ -52,6 +53,19 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
     """
 
     # -------------------------------------------------------------------------
+    # Background trigger task management (class-level, shared across instances)
+    # -------------------------------------------------------------------------
+    _trigger_tasks: ClassVar[Dict[str, asyncio.Task]] = {}
+    _trigger_tasks_lock: ClassVar[asyncio.Lock] = None  # Lazy init
+
+    @classmethod
+    def _get_trigger_lock(cls) -> asyncio.Lock:
+        """Lazy initialization del lock per evitare problemi con event loop."""
+        if cls._trigger_tasks_lock is None:
+            cls._trigger_tasks_lock = asyncio.Lock()
+        return cls._trigger_tasks_lock
+
+    # -------------------------------------------------------------------------
     # Parametri attesa cache ASR (evita race: stop turno -> Azure finalizza dopo)
     # -------------------------------------------------------------------------
     ASR_CACHE_WAIT_MAX_S = 1.2
@@ -83,12 +97,21 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         await self.accept()
 
+        # Avvia il background task per i trigger temporali
+        await self._maybe_start_trigger_task()
+
     async def disconnect(self, code):
         """
         Rimuove l'utente dal gruppo WS.
         """
         if hasattr(self, "group_name"):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+        # Ferma il background task per i trigger temporali
+        # Nota: in un'implementazione più sofisticata, si potrebbe contare
+        # i client connessi e fermare solo quando l'ultimo si disconnette
+        if hasattr(self, "session_id"):
+            await self._maybe_stop_trigger_task()
 
     # -------------------------------------------------------------------------
     # Dispatcher principale: riceve JSON dal frontend
@@ -404,20 +427,15 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
             # 5) Esecuzione dei messaggi statici (senza LLM) come veri turni AI
             for msg in decision.static_messages_to_speak:
-                ai_start_res = TM.ai_start(self.session_id)
-                if ai_start_res.success:
-                    await self._mark_any_activity()
-                    await self._broadcast_events(ai_start_res.events)
-
-                    # Messaggio del moderatore verso il client (per TTS / UI)
+                if msg.use_tts:
+                    # Messaggio con TTS - esegui come turno AI completo
+                    await self._execute_tts_message(msg.text)
+                else:
+                    # Solo testo - invia direttamente senza turno AI
                     await self.send_json({
                         "type": "turns.ai_message",
-                        "payload": {"text": msg},
+                        "payload": {"text": msg.text, "use_tts": False},
                     })
-
-                    ai_end_res = TM.ai_end(self.session_id)
-                    await self._mark_any_activity()
-                    await self._broadcast_events(ai_end_res.events)
 
             # 6) Eventuale intervento AI proposto dall'LLM con TTS
             if decision.ai_should_speak and decision.ai_message:
@@ -473,6 +491,9 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                             "new_state": "CONCLUSION",
                         },
                     )
+
+            # 8) Flush messaggi TTS pendenti (accodati durante la moderazione)
+            await self._flush_pending_tts_messages()
 
         finally:
             # Pulizia cache final ASR consumata (evita riuso tra turni)
@@ -657,21 +678,20 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             return
 
         for msg in trig_result.static_messages_to_speak:
-            ai_start_res = TurnManager.ai_start(self.session_id)
-            if ai_start_res.success:
-                await self._mark_any_activity()
-                await self._broadcast_events(ai_start_res.events)
-
+            if msg.use_tts:
+                # Messaggio con TTS - esegui come turno AI completo
+                await self._execute_tts_message(msg.text)
+            else:
+                # Solo testo - invia direttamente senza turno AI
                 await self.send_json(
                     {
                         "type": "turns.ai_message",
-                        "payload": {"text": msg},
+                        "payload": {"text": msg.text, "use_tts": False},
                     }
                 )
 
-                ai_end_res = TurnManager.ai_end(self.session_id)
-                await self._mark_any_activity()
-                await self._broadcast_events(ai_end_res.events)
+        # Flush messaggi TTS pendenti
+        await self._flush_pending_tts_messages()
 
         final_state = TurnManager.get_state(self.session_id, user)
         await self.send_json(
@@ -842,3 +862,189 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         except Session.DoesNotExist:
             pass
         return False
+
+    # -------------------------------------------------------------------------
+    # Background trigger task lifecycle
+    # -------------------------------------------------------------------------
+
+    async def _maybe_start_trigger_task(self) -> None:
+        """
+        Avvia il background task per i trigger temporali se:
+        - La sessione è in stato ACTIVE
+        - Non esiste già un task per questa sessione
+        """
+        lock = self._get_trigger_lock()
+        async with lock:
+            if self.session_id in self._trigger_tasks:
+                return
+
+            try:
+                session_state = await self._get_session_state(self.session_id)
+            except Exception:
+                return
+
+            if session_state != "ACTIVE":
+                return
+
+            task = asyncio.create_task(self._trigger_loop(self.session_id))
+            self._trigger_tasks[self.session_id] = task
+            logger.info(
+                "[TRIGGER_TASK][START] session=%s",
+                self.session_id,
+            )
+
+    async def _maybe_stop_trigger_task(self) -> None:
+        """
+        Ferma il background task per i trigger temporali se esiste.
+        Chiamato quando l'ultimo client si disconnette.
+        """
+        lock = self._get_trigger_lock()
+        async with lock:
+            task = self._trigger_tasks.pop(self.session_id, None)
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                logger.info(
+                    "[TRIGGER_TASK][STOP] session=%s",
+                    self.session_id,
+                )
+
+    async def _trigger_loop(self, session_id: str) -> None:
+        """
+        Loop che ogni 5s valuta i trigger temporali.
+
+        - Se nessuno sta parlando e ci sono messaggi, li esegue
+        - Se qualcuno sta parlando e ci sono messaggi TTS, li accoda
+        - Svuota la coda se IDLE e ci sono messaggi pendenti
+        """
+        while True:
+            await asyncio.sleep(5)
+
+            try:
+                session_phase = await self._get_session_state(session_id)
+            except Exception:
+                continue
+
+            # Valuta trigger temporali
+            trig_result = evaluate_time_based_triggers(
+                session_id=session_id,
+                session_phase=session_phase,
+            )
+
+            # Esegui/accoda i messaggi
+            if trig_result.static_messages_to_speak:
+                await self._execute_static_messages(trig_result.static_messages_to_speak)
+
+            # Svuota coda messaggi pendenti se IDLE
+            await self._flush_pending_tts_messages()
+
+    async def _execute_static_messages(self, messages: list) -> None:
+        """
+        Esegue i messaggi statici in base al flag use_tts.
+
+        - use_tts=True: TTS audio via WebRTC (o accodato se qualcuno sta parlando)
+        - use_tts=False: solo testo via WebSocket
+        """
+        from apps.turns.services import TurnManager
+        from apps.moderation.triggers import StaticMessage
+        from apps.moderation.pending_messages import enqueue_message
+
+        for msg in messages:
+            if not isinstance(msg, StaticMessage):
+                continue
+
+            if msg.use_tts:
+                # Verifica se qualcuno sta parlando
+                state = TurnManager.get_state_only(self.session_id)
+                if state and state.state != "IDLE":
+                    # Accoda il messaggio
+                    enqueue_message(self.session_id, msg.text, "TRIGGER")
+                    logger.info(
+                        "[TRIGGER][QUEUED] session=%s text=%s",
+                        self.session_id, msg.text[:50]
+                    )
+                else:
+                    # Esegui TTS immediatamente
+                    await self._execute_tts_message(msg.text)
+            else:
+                # Solo testo, invia via WebSocket
+                await self.channel_layer.group_send(
+                    self.group_name,
+                    {
+                        "type": "turns.event",
+                        "event_type": "STATIC_MESSAGE",
+                        "payload": {"text": msg.text, "use_tts": False},
+                    },
+                )
+
+    async def _execute_tts_message(self, text: str) -> None:
+        """
+        Esegue un singolo messaggio TTS via WebRTC.
+        Apre turno AI, riproduce audio, chiude turno.
+        """
+        from apps.turns.services import TurnManager
+
+        ai_start_res = TurnManager.ai_start(self.session_id)
+        if not ai_start_res.success:
+            return
+
+        await self._mark_any_activity()
+        await self._broadcast_events(ai_start_res.events)
+
+        # Set AI as speaker in audio hub
+        hub = get_hub(self.session_id)
+        hub.init_ai_track()
+        hub.set_speaker(AI_MODERATOR_ID)
+
+        # TTS streaming
+        tts = TTSService()
+        tts_result = await tts.synthesize_stream(
+            text=text,
+            on_audio_chunk=lambda pcm, samples, sr: self._inject_ai_audio(hub, pcm, samples, sr)
+        )
+
+        if not tts_result.success:
+            logger.warning(f"TTS failed: {tts_result.error}, fallback to text")
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "turns.event",
+                    "event_type": "STATIC_MESSAGE",
+                    "payload": {"text": text, "use_tts": False},
+                },
+            )
+
+        # Append to transcript
+        _append_to_session_transcript(self.session_id, {
+            "type": "ai",
+            "text": text,
+            "trigger": "time_based",
+            "timestamp": datetime.utcnow().isoformat()
+        })
+
+        # End AI turn
+        hub.set_speaker(None)
+        ai_end_res = TurnManager.ai_end(self.session_id)
+        await self._mark_any_activity()
+        await self._broadcast_events(ai_end_res.events)
+
+    async def _flush_pending_tts_messages(self) -> None:
+        """
+        Svuota la coda dei messaggi TTS pendenti se il turno è IDLE.
+        """
+        from apps.turns.services import TurnManager
+        from apps.moderation.pending_messages import dequeue_all_messages, has_pending_messages
+
+        if not has_pending_messages(self.session_id):
+            return
+
+        state = TurnManager.get_state_only(self.session_id)
+        if state and state.state != "IDLE":
+            return
+
+        pending = dequeue_all_messages(self.session_id)
+        for msg in pending:
+            await self._execute_tts_message(msg.text)

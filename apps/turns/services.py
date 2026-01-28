@@ -138,6 +138,14 @@ class TurnManager:
         return TurnResult(success=True, state=state, events=events)
 
     @classmethod
+    def get_state_only(cls, session_id: str) -> Optional[TurnState]:
+        """
+        Ritorna lo stato corrente dei turni senza wrappare in TurnResult.
+        Usato per check veloci (es. in _trigger_loop).
+        """
+        return cls._load_state(session_id)
+
+    @classmethod
     def request_speak(cls, session_id: str, user) -> TurnResult:
         """
         Richiesta di iniziare a parlare (toggle 'Parla').

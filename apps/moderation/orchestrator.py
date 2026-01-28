@@ -12,6 +12,7 @@ from .service import (
 from .triggers import (
     evaluate_triggers_on_human_turn_end,
     TriggerEvaluationResult,
+    StaticMessage,
 )
 
 
@@ -21,13 +22,13 @@ class FullModerationDecision:
     Risultato completo della moderazione alla fine di un turno umano.
 
     Contiene:
-    - static_messages_to_speak: lista di messaggi fissi (senza LLM)
+    - static_messages_to_speak: lista di StaticMessage (con flag use_tts)
     - ai_should_speak: se il moderatore AI deve parlare
     - ai_message: contenuto eventuale del messaggio AI
     - hard_action: NONE / FORCED_SUMMARY / FORCED_CONCLUSION
     - should_transition_to_conclusion: se la sessione deve passare a CONCLUSION
     """
-    static_messages_to_speak: List[str]
+    static_messages_to_speak: List[StaticMessage]
     ai_should_speak: bool
     ai_message: Optional[str]
     hard_action: HardModerationAction

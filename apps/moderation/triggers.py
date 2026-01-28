@@ -7,6 +7,13 @@ from django.core.cache import cache
 from .state import ModerationState
 from .service import HardModerationAction, SUMMARY_TURNS_INTERVAL
 
+
+@dataclass
+class StaticMessage:
+    """Messaggio statico da pronunciare/mostrare."""
+    text: str
+    use_tts: bool = True  # True = TTS audio, False = solo testo WebSocket
+
 # Import dominio turni per i trigger statici
 from apps.turns.services import (
     TurnState,
@@ -32,7 +39,7 @@ class TriggerEvaluationResult:
     per una determinata sessione in una determinata finestra.
     """
     hard_action: HardModerationAction
-    static_messages_to_speak: List[str]
+    static_messages_to_speak: List[StaticMessage]
     should_transition_to_conclusion: bool = False  # segnala cambio fase a CONCLUSION
 
 
@@ -54,7 +61,7 @@ def evaluate_triggers_on_human_turn_end(
     from datetime import datetime  # import locale per evitare circular
 
     hard_action = HardModerationAction.NONE
-    static_messages: list[str] = []
+    static_messages: list[StaticMessage] = []
     should_transition_to_conclusion = False
 
     # 1) Trigger hard: riassunto ogni N turni umani (FORCED_SUMMARY)
@@ -84,12 +91,13 @@ def evaluate_triggers_on_human_turn_end(
         if timers_state.session_started_at is not None:
             elapsed = datetime.utcnow() - timers_state.session_started_at
             if elapsed >= TIMER_30_THRESHOLD:
-                # Aggiungi messaggio solo se non già notificato
+                # Aggiungi messaggio solo se non già notificato (TTS)
                 if not timers_state.timer_30_notified:
-                    static_messages.append(
-                        "Il tempo della discussione è terminato. "
-                        "Potete avviarvi verso la conclusione."
-                    )
+                    static_messages.append(StaticMessage(
+                        text="Il tempo della discussione è terminato. "
+                             "Potete avviarvi verso la conclusione.",
+                        use_tts=True,
+                    ))
                     timers_state.timer_30_notified = True
                     save_timers_state(session_id, timers_state)
 
@@ -117,7 +125,7 @@ def evaluate_time_based_triggers(
       emesso alcun messaggio (sarà valutato al prossimo 'ping' quando
       la sessione sarà di nuovo libera).
     """
-    static_messages: list[str] = []
+    static_messages: list[StaticMessage] = []
     hard_action = HardModerationAction.NONE
 
     if _someone_is_currently_speaking(session_id=session_id):
@@ -179,25 +187,27 @@ def _collect_static_messages_for_current_state(
     session_id: int | str,
     user_id: int | str,
     session_phase: str,
-) -> list[str]:
+) -> list[StaticMessage]:
     """
     Raccoglie i messaggi fissi da pronunciare nella finestra post-turno.
     """
-    messages: list[str] = []
+    messages: list[StaticMessage] = []
 
-    # 1) Prenotazione intervento: annunciare chi ha la priorità di parola
+    # 1) Prenotazione intervento: annunciare chi ha la priorità di parola (SOLO TESTO)
     reserved_speaker_name = _get_next_reserved_speaker_name(session_id=session_id)
     if reserved_speaker_name is not None:
-        messages.append(
-            f"Ora la parola va a {reserved_speaker_name}, che aveva prenotato."
-        )
+        messages.append(StaticMessage(
+            text=f"Ora la parola va a {reserved_speaker_name}, che aveva prenotato.",
+            use_tts=False,  # Solo testo, no TTS
+        ))
 
-    # 2) Pronti alla conclusione: annunciare quanti sono pronti (in fase ACTIVE)
+    # 2) Pronti alla conclusione: annunciare quanti sono pronti (TTS)
     ready_count, total_count = _get_ready_to_conclude_status(session_id=session_id)
     if session_phase == "ACTIVE" and total_count > 0 and 0 < ready_count < total_count:
-        messages.append(
-            f"{ready_count} partecipanti su {total_count} sono pronti a concludere."
-        )
+        messages.append(StaticMessage(
+            text=f"{ready_count} partecipanti su {total_count} sono pronti a concludere.",
+            use_tts=True,
+        ))
 
     return messages
 
@@ -268,7 +278,7 @@ def _collect_time_based_static_messages(
     *,
     session_id: int | str,
     session_phase: str,
-) -> list[str]:
+) -> list[StaticMessage]:
     """
     Raccoglie i messaggi fissi da generare in base ai soli controlli a tempo,
     nel caso in cui la sessione sia libera (nessuno sta parlando).
@@ -276,33 +286,40 @@ def _collect_time_based_static_messages(
     # Import locali per evitare problemi in fase di bootstrap
     from apps.sessions.models import SessionParticipant, SessionState as SessionStateEnum
 
-    messages: list[str] = []
+    messages: list[StaticMessage] = []
     state = load_timers_state(session_id)
     now = datetime.utcnow()
 
-    # 1) NO PUSH (silenzio prolungato nella sessione)
+    # 1) NO PUSH (silenzio prolungato nella sessione) - TTS
     if state.last_any_activity_at is not None and not state.no_push_notified:
         if now - state.last_any_activity_at >= NO_PUSH_THRESHOLD:
-            messages.append(
-                "Se qualcuno vuole intervenire, può parlare ora o condividere una breve considerazione."
-            )
+            messages.append(StaticMessage(
+                text="Se qualcuno vuole intervenire, può parlare ora o condividere una breve considerazione.",
+                use_tts=True,
+            ))
             state.no_push_notified = True
 
     # 2) TIMER 25'/30' – solo in fase ACTIVE
     if session_phase == SessionStateEnum.ACTIVE and state.session_started_at is not None:
         elapsed = now - state.session_started_at
 
+        # TIMER 25 - Solo testo (non interrompente)
         if (not state.timer_25_notified) and elapsed >= TIMER_25_THRESHOLD:
-            messages.append("Mancano circa cinque minuti alla fine della discussione.")
+            messages.append(StaticMessage(
+                text="Mancano circa cinque minuti alla fine della discussione.",
+                use_tts=False,  # Solo testo
+            ))
             state.timer_25_notified = True
 
+        # TIMER 30 - TTS (annuncio importante)
         if (not state.timer_30_notified) and elapsed >= TIMER_30_THRESHOLD:
-            messages.append(
-                "Il tempo della discussione è terminato. Potete avviarvi verso la conclusione."
-            )
+            messages.append(StaticMessage(
+                text="Il tempo della discussione è terminato. Potete avviarvi verso la conclusione.",
+                use_tts=True,
+            ))
             state.timer_30_notified = True
 
-    # 3) UTENTE INATTIVO
+    # 3) UTENTE INATTIVO - TTS
     if session_phase == SessionStateEnum.ACTIVE:
         participants = (
             SessionParticipant.objects
@@ -321,9 +338,10 @@ def _collect_time_based_static_messages(
             # Mai parlato, oppure troppo tempo senza parlare
             if last_spoke is None or (now - last_spoke) >= INACTIVE_USER_THRESHOLD:
                 display_name = getattr(p.user, "display_name", None) or p.user.get_username()
-                messages.append(
-                    f"{display_name}, se vuoi condividere un'idea, questo è un buon momento per intervenire."
-                )
+                messages.append(StaticMessage(
+                    text=f"{display_name}, se vuoi condividere un'idea, questo è un buon momento per intervenire.",
+                    use_tts=True,
+                ))
                 state.inactive_notified_user_ids.append(user_id_str)
                 # Per l'MVP si notifica al massimo un utente per ping
                 break
