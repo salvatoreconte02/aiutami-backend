@@ -382,8 +382,8 @@ class TriggerMessagesUseTTSTests(TestCase):
 
     @patch('apps.moderation.triggers._get_next_reserved_speaker_name', return_value=None)
     @patch('apps.moderation.triggers._get_ready_to_conclude_status', return_value=(2, 3))
-    def test_pronti_concludere_message_has_use_tts_true(self, mock_ready, mock_reserved):
-        """PRONTI_CONCLUDERE message should have use_tts=True."""
+    def test_pronti_concludere_no_longer_at_turn_end(self, mock_ready, mock_reserved):
+        """PRONTI_CONCLUDERE message should NOT be generated at turn end anymore."""
         session_id = "test-session-tts-2"
         mod_state = ModerationState.initial()
         save_moderation_state(session_id, mod_state)
@@ -395,10 +395,10 @@ class TriggerMessagesUseTTSTests(TestCase):
             moderation_state=mod_state,
         )
 
+        # Should NOT have "pronti a concludere" message at turn end anymore
         pronti_msgs = [m for m in result.static_messages_to_speak
                       if "pronti a concludere" in m.text]
-        self.assertEqual(len(pronti_msgs), 1)
-        self.assertTrue(pronti_msgs[0].use_tts)
+        self.assertEqual(len(pronti_msgs), 0)
 
 
 class TimeBasedTriggersTTSTests(TestCase):
@@ -468,7 +468,7 @@ class TimeBasedTriggersTTSTests(TestCase):
     @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
     def test_utente_inattivo_message_has_use_tts_true(self, mock_speaking, mock_participant_objects):
         """UTENTE_INATTIVO message should have use_tts=True."""
-        from apps.moderation.triggers import evaluate_time_based_triggers
+        from apps.moderation.triggers import evaluate_time_based_triggers, INACTIVE_VOICE_MESSAGES
         import uuid
         session_id = str(uuid.uuid4())
 
@@ -477,7 +477,8 @@ class TimeBasedTriggersTTSTests(TestCase):
         timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=15)
         timers_state.last_any_activity_at = datetime.utcnow()
         timers_state.last_user_speak_at = {}  # No one spoke
-        timers_state.inactive_notified_user_ids = []
+        timers_state.voice_solicits_count = {}  # No solicits yet
+        timers_state.last_voice_solicit_at = {}
         save_timers_state(session_id, timers_state)
 
         # Mock participant
@@ -497,8 +498,9 @@ class TimeBasedTriggersTTSTests(TestCase):
             session_phase="ACTIVE",
         )
 
+        # Should have one message that contains "TestUser" (the inactive user)
         inactive_msgs = [m for m in result.static_messages_to_speak
-                        if "buon momento per intervenire" in m.text]
+                        if "TestUser" in m.text]
         self.assertEqual(len(inactive_msgs), 1)
         self.assertTrue(inactive_msgs[0].use_tts)
 
@@ -815,3 +817,200 @@ class NoPushMessageVariantsTests(TestCase):
 
         self.assertEqual(len(result.static_messages_to_speak), 1)
         self.assertIn(result.static_messages_to_speak[0].text, NO_PUSH_MESSAGES)
+
+
+class StaticMessageTriggerTypeTests(TestCase):
+    """Tests for StaticMessage trigger_type field."""
+
+    def test_static_message_with_trigger_type(self):
+        """StaticMessage should support optional trigger_type field."""
+        msg = StaticMessage(text="Test", use_tts=False, trigger_type="TIMER_25")
+        self.assertEqual(msg.trigger_type, "TIMER_25")
+
+    def test_static_message_trigger_type_default_none(self):
+        """StaticMessage trigger_type should default to None."""
+        msg = StaticMessage(text="Test", use_tts=True)
+        self.assertIsNone(msg.trigger_type)
+
+
+class Timer25TriggerTypeTests(TestCase):
+    """Tests for TIMER_25 trigger_type for frontend visual timer."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch('apps.sessions.models.SessionParticipant.objects')
+    @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
+    def test_timer_25_message_has_trigger_type(self, mock_speaking, mock_participant_objects):
+        """TIMER_25 message should have trigger_type='TIMER_25' for frontend."""
+        from apps.moderation.triggers import evaluate_time_based_triggers
+        import uuid
+        session_id = str(uuid.uuid4())
+
+        mock_participant_objects.filter.return_value.select_related.return_value = []
+
+        timers_state = ModerationTimersState.initial()
+        timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=26)
+        timers_state.last_any_activity_at = datetime.utcnow()
+        timers_state.timer_25_notified = False
+        save_timers_state(session_id, timers_state)
+
+        result = evaluate_time_based_triggers(
+            session_id=session_id,
+            session_phase="ACTIVE",
+        )
+
+        timer_25_msgs = [m for m in result.static_messages_to_speak
+                        if "cinque minuti" in m.text]
+        self.assertEqual(len(timer_25_msgs), 1)
+        self.assertEqual(timer_25_msgs[0].trigger_type, "TIMER_25")
+
+
+class ReadyToConcludeTests(TestCase):
+    """Tests for ready_to_conclude trigger fixes."""
+
+    def test_ready_to_conclude_message_variants_exist(self):
+        """Verify READY_TO_CONCLUDE_MESSAGES constants exist."""
+        from apps.moderation.triggers import (
+            READY_TO_CONCLUDE_MESSAGES,
+            READY_TO_CONCLUDE_LAST_ONE_MESSAGES,
+        )
+
+        self.assertGreater(len(READY_TO_CONCLUDE_MESSAGES), 1)
+        self.assertGreater(len(READY_TO_CONCLUDE_LAST_ONE_MESSAGES), 1)
+
+        # All should have {nome} placeholder
+        for msg in READY_TO_CONCLUDE_MESSAGES:
+            self.assertIn("{nome}", msg)
+        for msg in READY_TO_CONCLUDE_LAST_ONE_MESSAGES:
+            self.assertIn("{nome}", msg)
+
+    def test_generate_ready_to_conclude_message_normal(self):
+        """generate_ready_to_conclude_message returns normal variant."""
+        from apps.moderation.triggers import (
+            generate_ready_to_conclude_message,
+            READY_TO_CONCLUDE_MESSAGES,
+        )
+
+        msg = generate_ready_to_conclude_message("Mario", ready_count=1, total_count=4)
+
+        # Should be TTS
+        self.assertTrue(msg.use_tts)
+        # Should contain user name
+        self.assertIn("Mario", msg.text)
+
+    def test_generate_ready_to_conclude_message_last_one(self):
+        """generate_ready_to_conclude_message returns 'last one' variant when appropriate."""
+        from apps.moderation.triggers import (
+            generate_ready_to_conclude_message,
+            READY_TO_CONCLUDE_LAST_ONE_MESSAGES,
+        )
+
+        # 3 ready out of 4 = only 1 missing
+        msg = generate_ready_to_conclude_message("Luigi", ready_count=3, total_count=4)
+
+        self.assertTrue(msg.use_tts)
+        self.assertIn("Luigi", msg.text)
+        # Should mention "manca solo" or similar
+        self.assertTrue(
+            "manca solo" in msg.text.lower() or
+            "quasi tutti" in msg.text.lower()
+        )
+
+
+class InactiveUserTests(TestCase):
+    """Tests for UTENTE INATTIVO trigger fixes."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_inactive_voice_messages_exist(self):
+        """Verify INACTIVE_VOICE_MESSAGES constants exist."""
+        from apps.moderation.triggers import INACTIVE_VOICE_MESSAGES
+
+        self.assertGreater(len(INACTIVE_VOICE_MESSAGES), 1)
+        # All should have {nome} placeholder
+        for msg in INACTIVE_VOICE_MESSAGES:
+            self.assertIn("{nome}", msg)
+
+    @patch('apps.sessions.models.SessionParticipant.objects')
+    @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
+    def test_inactive_user_max_two_voice_solicits(self, mock_speaking, mock_participant_objects):
+        """User should receive max 2 voice solicits, then no more."""
+        from apps.moderation.triggers import evaluate_time_based_triggers
+        import uuid
+        session_id = str(uuid.uuid4())
+
+        # Setup participant
+        mock_user = MagicMock()
+        mock_user.id = 1
+        mock_user.display_name = "TestUser"
+        mock_user.get_username.return_value = "testuser"
+
+        mock_participant_obj = MagicMock()
+        mock_participant_obj.user_id = 1
+        mock_participant_obj.user = mock_user
+
+        mock_participant_objects.filter.return_value.select_related.return_value = [mock_participant_obj]
+
+        # Setup: user already received 2 voice solicits
+        timers_state = ModerationTimersState.initial()
+        timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=30)
+        timers_state.last_any_activity_at = datetime.utcnow()
+        timers_state.voice_solicits_count = {"1": 2}  # Already received 2
+        timers_state.last_voice_solicit_at = {"1": datetime.utcnow() - timedelta(minutes=15)}
+        save_timers_state(session_id, timers_state)
+
+        result = evaluate_time_based_triggers(
+            session_id=session_id,
+            session_phase="ACTIVE",
+        )
+
+        # Should NOT receive another solicit
+        inactive_msgs = [m for m in result.static_messages_to_speak
+                        if "TestUser" in m.text]
+        self.assertEqual(len(inactive_msgs), 0)
+
+    @patch('apps.sessions.models.SessionParticipant.objects')
+    @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
+    def test_inactive_user_timer_resets_after_voice_solicit(self, mock_speaking, mock_participant_objects):
+        """After voice solicit, timer should reset (use last_voice_solicit_at as reference)."""
+        from apps.moderation.triggers import evaluate_time_based_triggers
+        import uuid
+        session_id = str(uuid.uuid4())
+
+        mock_user = MagicMock()
+        mock_user.id = 1
+        mock_user.display_name = "TestUser"
+        mock_user.get_username.return_value = "testuser"
+
+        mock_participant_obj = MagicMock()
+        mock_participant_obj.user_id = 1
+        mock_participant_obj.user = mock_user
+
+        mock_participant_objects.filter.return_value.select_related.return_value = [mock_participant_obj]
+
+        # Setup: user received 1 voice solicit 5 minutes ago
+        # (Should wait 10 more minutes from that point, not from session start)
+        timers_state = ModerationTimersState.initial()
+        timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=30)
+        timers_state.last_any_activity_at = datetime.utcnow()
+        timers_state.voice_solicits_count = {"1": 1}
+        timers_state.last_voice_solicit_at = {"1": datetime.utcnow() - timedelta(minutes=5)}
+        save_timers_state(session_id, timers_state)
+
+        result = evaluate_time_based_triggers(
+            session_id=session_id,
+            session_phase="ACTIVE",
+        )
+
+        # Should NOT trigger yet (only 5 min since last solicit, need 10)
+        inactive_msgs = [m for m in result.static_messages_to_speak
+                        if "TestUser" in m.text]
+        self.assertEqual(len(inactive_msgs), 0)

@@ -17,12 +17,62 @@ NO_PUSH_MESSAGES = [
     "La discussione è in pausa. Chi vuole intervenire può farlo ora.",
 ]
 
+# Message variants for READY_TO_CONCLUDE trigger
+READY_TO_CONCLUDE_MESSAGES = [
+    "{nome} è pronto a concludere. Se hai capito con certezza di chi si tratta, premi anche tu 'pronto alla conclusione' per terminare la sessione.",
+    "{nome} ha indicato di essere pronto alla conclusione. Quando anche tu avrai raggiunto una certezza, premi il pulsante per concludere.",
+    "{nome} si è dichiarato pronto a concludere. Se hai già individuato il colpevole, puoi premere 'pronto alla conclusione'.",
+    "{nome} è pronto. Ricorda: quando sei sicuro di chi si tratta, premi 'pronto alla conclusione' per avviare la fase finale.",
+]
+
+READY_TO_CONCLUDE_LAST_ONE_MESSAGES = [
+    "{nome} è pronto a concludere. Ora manca solo un partecipante per avviare la fase finale.",
+    "{nome} si è dichiarato pronto. Manca solo una persona: se hai raggiunto una certezza, premi 'pronto alla conclusione'.",
+    "{nome} è pronto. Quasi tutti hanno deciso: manca solo un voto per concludere la sessione.",
+]
+
+# Message variants for INACTIVE_USER trigger
+INACTIVE_VOICE_MESSAGES = [
+    "{nome}, se vuoi condividere un'idea, questo è un buon momento per intervenire.",
+    "{nome}, non ti abbiamo ancora sentito. Se hai qualcosa da aggiungere, puoi parlare ora.",
+    "{nome}, c'è qualcosa che vorresti condividere con il gruppo?",
+    "{nome}, se hai un pensiero sulla discussione, sentiti libero di intervenire.",
+]
+
 
 @dataclass
 class StaticMessage:
     """Messaggio statico da pronunciare/mostrare."""
     text: str
     use_tts: bool = True  # True = TTS audio, False = solo testo WebSocket
+    trigger_type: Optional[str] = None  # Tipo trigger per identificazione frontend (es. TIMER_25)
+
+
+def generate_ready_to_conclude_message(
+    user_name: str,
+    ready_count: int,
+    total_count: int,
+) -> StaticMessage:
+    """
+    Genera il messaggio per quando un utente clicca 'pronto a concludere'.
+
+    Args:
+        user_name: Nome dell'utente che ha cliccato
+        ready_count: Numero di utenti già pronti (incluso questo)
+        total_count: Numero totale di partecipanti
+
+    Returns:
+        StaticMessage con use_tts=True
+    """
+    # Caso "manca solo uno": ready_count == total_count - 1
+    if ready_count == total_count - 1:
+        template = random.choice(READY_TO_CONCLUDE_LAST_ONE_MESSAGES)
+    else:
+        template = random.choice(READY_TO_CONCLUDE_MESSAGES)
+
+    text = template.format(nome=user_name)
+    return StaticMessage(text=text, use_tts=True)
+
 
 # Import dominio turni per i trigger statici
 from apps.turns.services import (
@@ -39,6 +89,7 @@ from .timers_state import (
     TIMER_25_THRESHOLD,
     TIMER_30_THRESHOLD,
     INACTIVE_USER_THRESHOLD,
+    MAX_VOICE_SOLICITS_PER_USER,
 )
 
 
@@ -213,13 +264,8 @@ def _collect_static_messages_for_current_state(
             use_tts=False,  # Solo testo, no TTS
         ))
 
-    # 2) Pronti alla conclusione: annunciare quanti sono pronti (TTS)
-    ready_count, total_count = _get_ready_to_conclude_status(session_id=session_id)
-    if session_phase == "ACTIVE" and total_count > 0 and 0 < ready_count < total_count:
-        messages.append(StaticMessage(
-            text=f"{ready_count} partecipanti su {total_count} sono pronti a concludere.",
-            use_tts=True,
-        ))
+    # NOTE: Il trigger "pronti alla conclusione" è stato spostato in SessionReadyToConcludeView
+    # per scattare al click del bottone invece che a fine turno.
 
     return messages
 
@@ -324,6 +370,7 @@ def _collect_time_based_static_messages(
             messages.append(StaticMessage(
                 text="Mancano circa cinque minuti alla fine della discussione.",
                 use_tts=False,  # Solo testo
+                trigger_type="TIMER_25",  # Per frontend: avvia timer visivo
             ))
             state.timer_25_notified = True
 
@@ -336,7 +383,7 @@ def _collect_time_based_static_messages(
             state.timer_30_notified = True
             should_transition_to_conclusion = True
 
-    # 3) UTENTE INATTIVO - TTS
+    # 3) UTENTE INATTIVO - TTS (max 2 per utente, timer resets dopo sollecito)
     if session_phase == SessionStateEnum.ACTIVE and state.session_started_at is not None:
         participants = (
             SessionParticipant.objects
@@ -347,22 +394,37 @@ def _collect_time_based_static_messages(
         for p in participants:
             user_id_str = str(p.user_id)
 
-            if user_id_str in state.inactive_notified_user_ids:
+            # Controlla limite solleciti vocali
+            voice_count = state.voice_solicits_count.get(user_id_str, 0)
+            if voice_count >= MAX_VOICE_SOLICITS_PER_USER:
                 continue
 
+            # Tempo di riferimento: ultimo sollecito vocale > ultimo turno > inizio sessione
+            last_voice_solicit = state.last_voice_solicit_at.get(user_id_str)
             last_spoke = state.last_user_speak_at.get(user_id_str)
 
-            # Se l'utente ha parlato: controlla tempo dall'ultima volta
-            # Se l'utente NON ha mai parlato: controlla tempo dall'inizio sessione
-            reference_time = last_spoke if last_spoke is not None else state.session_started_at
-            if reference_time is not None and (now - reference_time) >= INACTIVE_USER_THRESHOLD:
+            if last_voice_solicit is not None:
+                reference_time = last_voice_solicit
+            elif last_spoke is not None:
+                reference_time = last_spoke
+            else:
+                reference_time = state.session_started_at
+
+            if reference_time is None:
+                continue
+
+            elapsed = now - reference_time
+
+            if elapsed >= INACTIVE_USER_THRESHOLD:
                 display_name = getattr(p.user, "display_name", None) or p.user.get_username()
                 messages.append(StaticMessage(
-                    text=f"{display_name}, se vuoi condividere un'idea, questo è un buon momento per intervenire.",
+                    text=random.choice(INACTIVE_VOICE_MESSAGES).format(nome=display_name),
                     use_tts=True,
                 ))
-                state.inactive_notified_user_ids.append(user_id_str)
-                # Per l'MVP si notifica al massimo un utente per ping
+                # Aggiorna contatore e timestamp
+                state.voice_solicits_count[user_id_str] = voice_count + 1
+                state.last_voice_solicit_at[user_id_str] = now
+                # Un solo utente per ciclo
                 break
 
     # Salvataggio stato timer aggiornato

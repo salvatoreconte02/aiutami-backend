@@ -426,12 +426,15 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     await self._execute_tts_message(msg.text)
                 else:
                     # Solo testo - broadcast a tutti i partecipanti
+                    payload = {"text": msg.text, "use_tts": False}
+                    if msg.trigger_type:
+                        payload["trigger_type"] = msg.trigger_type
                     await self.channel_layer.group_send(
                         self.group_name,
                         {
                             "type": "turns.event",
                             "event_type": "STATIC_MESSAGE",
-                            "payload": {"text": msg.text, "use_tts": False},
+                            "payload": payload,
                         },
                     )
 
@@ -709,12 +712,15 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 await self._execute_tts_message(msg.text)
             else:
                 # Solo testo - broadcast a tutti i partecipanti
+                payload = {"text": msg.text, "use_tts": False}
+                if msg.trigger_type:
+                    payload["trigger_type"] = msg.trigger_type
                 await self.channel_layer.group_send(
                     self.group_name,
                     {
                         "type": "turns.event",
                         "event_type": "STATIC_MESSAGE",
-                        "payload": {"text": msg.text, "use_tts": False},
+                        "payload": payload,
                     },
                 )
 
@@ -780,6 +786,15 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 "payload": event["payload"],
             }
         )
+
+    async def trigger_ready_to_conclude(self, event):
+        """
+        Handler per messaggi ready_to_conclude inviati dal view.
+        Esegue il messaggio TTS.
+        """
+        text = event.get("text", "")
+        if text:
+            await self._execute_tts_message(text)
 
     # -------------------------------------------------------------------------
     # CHECKS UTILI (sync → async)
@@ -1040,12 +1055,15 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     await self._execute_tts_message(msg.text)
             else:
                 # Solo testo, invia via WebSocket
+                payload = {"text": msg.text, "use_tts": False}
+                if msg.trigger_type:
+                    payload["trigger_type"] = msg.trigger_type
                 await self.channel_layer.group_send(
                     self.group_name,
                     {
                         "type": "turns.event",
                         "event_type": "STATIC_MESSAGE",
-                        "payload": {"text": msg.text, "use_tts": False},
+                        "payload": payload,
                     },
                 )
 

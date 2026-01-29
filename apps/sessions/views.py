@@ -30,6 +30,8 @@ from .permissions import IsSessionMember
 
 # 🔹 import per i timer di moderazione
 from apps.moderation.timers_state import mark_session_started
+from apps.moderation.triggers import generate_ready_to_conclude_message, _someone_is_currently_speaking
+from apps.moderation.pending_messages import enqueue_message
 
 
 # -------------------------------------------------------------------
@@ -132,7 +134,8 @@ class SessionStartView(APIView):
 class SessionReadyToConcludeView(APIView):
     """
     POST /api/sessions/{session_id}/ready_to_conclude/
-    Permette al partecipante corrente di indicare se è pronto (o meno) alla conclusione.
+    Permette al partecipante corrente di indicare che è pronto alla conclusione.
+    La deselezione (ready=False) non è permessa.
 
     Body esemplificativo:
     {
@@ -150,20 +153,56 @@ class SessionReadyToConcludeView(APIView):
         ready = request.data.get("ready", True)
         ready = bool(ready)
 
-        # Aggiorna il record SessionParticipant dell'utente corrente
+        # Impedisci deselezione
+        if not ready:
+            return Response(
+                {"error": "Non è possibile annullare la dichiarazione di essere pronti."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Recupera il partecipante
         participant = get_object_or_404(
             SessionParticipant,
             session=session,
             user=request.user,
         )
-        if participant.ready_to_conclude != ready:
-            participant.ready_to_conclude = ready
-            participant.save(update_fields=["ready_to_conclude"])
+
+        # Se già pronto, ignora (idempotente)
+        if participant.ready_to_conclude:
+            detail_data = SessionDetailSerializer(
+                session,
+                context={"request": request},
+            ).data
+            return Response(detail_data, status=status.HTTP_200_OK)
+
+        # Aggiorna il flag
+        participant.ready_to_conclude = True
+        participant.save(update_fields=["ready_to_conclude"])
 
         # Ricalcolo dei conteggi "pronti / totali"
         qs = SessionParticipant.objects.filter(session=session)
         total_count = qs.count()
         ready_count = qs.filter(ready_to_conclude=True).count()
+
+        # Genera e invia messaggio (solo se non tutti pronti - altrimenti si passa a CONCLUSION)
+        if session.state == SessionState.ACTIVE and ready_count < total_count:
+            user_name = getattr(request.user, "display_name", None) or request.user.get_username()
+            msg = generate_ready_to_conclude_message(user_name, ready_count, total_count)
+
+            # Verifica se qualcuno sta parlando
+            if _someone_is_currently_speaking(session_id):
+                # Accoda il messaggio
+                enqueue_message(session_id, msg.text, "READY_TO_CONCLUDE")
+            else:
+                # Invia messaggio TTS immediatamente via WebSocket
+                channel_layer = get_channel_layer()
+                async_to_sync(channel_layer.group_send)(
+                    f"turns_{session_id}",
+                    {
+                        "type": "trigger.ready_to_conclude",
+                        "text": msg.text,
+                    },
+                )
 
         # Se tutti sono pronti e la sessione è ancora ACTIVE,
         # si porta lo stato in CONCLUSION.
