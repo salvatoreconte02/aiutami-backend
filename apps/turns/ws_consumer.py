@@ -790,11 +790,26 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
     async def trigger_ready_to_conclude(self, event):
         """
         Handler per messaggi ready_to_conclude inviati dal view.
-        Esegue il messaggio TTS.
+        Esegue il messaggio TTS e, se trigger_conclusion=True, transiziona a CONCLUSION.
         """
         text = event.get("text", "")
+        trigger_conclusion = event.get("trigger_conclusion", False)
+
         if text:
             await self._execute_tts_message(text)
+
+        # Se tutti erano pronti (3/3), transiziona a CONCLUSION dopo il TTS
+        if trigger_conclusion:
+            transitioned = await self._transition_session_to_conclusion()
+            if transitioned:
+                await self.channel_layer.group_send(
+                    f"sessions_{self.session_id}",
+                    {
+                        "type": "sessions.event",
+                        "event_type": "STATE_CHANGED",
+                        "new_state": "CONCLUSION",
+                    },
+                )
 
     # -------------------------------------------------------------------------
     # CHECKS UTILI (sync → async)
@@ -999,11 +1014,18 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 )
 
                 # Esegui/accoda i messaggi
+                # Se should_transition_to_conclusion, passa il flag ai messaggi accodati
+                message_was_queued = False
                 if trig_result.static_messages_to_speak:
-                    await self._execute_static_messages(trig_result.static_messages_to_speak)
+                    message_was_queued = await self._execute_static_messages(
+                        trig_result.static_messages_to_speak,
+                        trigger_conclusion=trig_result.should_transition_to_conclusion,
+                    )
 
                 # Gestione transizione a CONCLUSION (timer 30 scaduto via background)
-                if trig_result.should_transition_to_conclusion:
+                # NON transizionare se il messaggio TTS è stato accodato - la transizione
+                # avverrà quando il messaggio viene eseguito in _flush_pending_tts_messages
+                if trig_result.should_transition_to_conclusion and not message_was_queued:
                     transitioned = await database_sync_to_async(self._transition_session_to_conclusion)()
                     if transitioned:
                         logger.info("[TRIGGER_LOOP][TRANSITION] session=%s -> CONCLUSION", session_id)
@@ -1025,16 +1047,29 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             except Exception as e:
                 logger.error("[TRIGGER_LOOP][ERROR] session=%s error=%s", session_id, e, exc_info=True)
 
-    async def _execute_static_messages(self, messages: list) -> None:
+    async def _execute_static_messages(
+        self,
+        messages: list,
+        trigger_conclusion: bool = False,
+    ) -> bool:
         """
         Esegue i messaggi statici in base al flag use_tts.
 
         - use_tts=True: TTS audio via WebRTC (o accodato se qualcuno sta parlando)
         - use_tts=False: solo testo via WebSocket
+
+        Args:
+            messages: Lista di StaticMessage da eseguire
+            trigger_conclusion: Se True, i messaggi TTS accodati avranno trigger_conclusion=True
+
+        Returns:
+            True se almeno un messaggio TTS è stato accodato (non eseguito subito), False altrimenti
         """
         from apps.turns.services import TurnManager
         from apps.moderation.triggers import StaticMessage
         from apps.moderation.pending_messages import enqueue_message
+
+        message_was_queued = False
 
         for msg in messages:
             if not isinstance(msg, StaticMessage):
@@ -1044,12 +1079,18 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 # Verifica se qualcuno sta parlando
                 state = TurnManager.get_state_only(self.session_id)
                 if state and state.state != "IDLE":
-                    # Accoda il messaggio
-                    enqueue_message(self.session_id, msg.text, "TRIGGER")
-                    logger.info(
-                        "[TRIGGER][QUEUED] session=%s text=%s",
-                        self.session_id, msg.text[:50]
+                    # Accoda il messaggio (con trigger_conclusion se applicabile)
+                    enqueue_message(
+                        self.session_id,
+                        msg.text,
+                        "TRIGGER",
+                        trigger_conclusion=trigger_conclusion,
                     )
+                    logger.info(
+                        "[TRIGGER][QUEUED] session=%s text=%s trigger_conclusion=%s",
+                        self.session_id, msg.text[:50], trigger_conclusion
+                    )
+                    message_was_queued = True
                 else:
                     # Esegui TTS immediatamente
                     await self._execute_tts_message(msg.text)
@@ -1066,6 +1107,8 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                         "payload": payload,
                     },
                 )
+
+        return message_was_queued
 
     async def _execute_tts_message(self, text: str) -> None:
         """
@@ -1143,6 +1186,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
     async def _flush_pending_tts_messages(self) -> None:
         """
         Svuota la coda dei messaggi TTS pendenti se il turno è IDLE.
+        Gestisce anche trigger_conclusion per transizionare a CONCLUSION dopo TTS.
         """
         from apps.turns.services import TurnManager
         from apps.moderation.pending_messages import dequeue_all_messages, has_pending_messages
@@ -1157,3 +1201,16 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         pending = dequeue_all_messages(self.session_id)
         for msg in pending:
             await self._execute_tts_message(msg.text)
+
+            # Se il messaggio aveva trigger_conclusion=True, transiziona a CONCLUSION
+            if msg.trigger_conclusion:
+                transitioned = await self._transition_session_to_conclusion()
+                if transitioned:
+                    await self.channel_layer.group_send(
+                        f"sessions_{self.session_id}",
+                        {
+                            "type": "sessions.event",
+                            "event_type": "STATE_CHANGED",
+                            "new_state": "CONCLUSION",
+                        },
+                    )

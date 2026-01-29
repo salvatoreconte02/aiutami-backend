@@ -895,12 +895,14 @@ class ReadyToConcludeTests(TestCase):
             READY_TO_CONCLUDE_MESSAGES,
         )
 
-        msg = generate_ready_to_conclude_message("Mario", ready_count=1, total_count=4)
+        result = generate_ready_to_conclude_message("Mario", ready_count=1, total_count=4)
 
         # Should be TTS
-        self.assertTrue(msg.use_tts)
+        self.assertTrue(result.message.use_tts)
         # Should contain user name
-        self.assertIn("Mario", msg.text)
+        self.assertIn("Mario", result.message.text)
+        # Should NOT trigger conclusion (not 3/3)
+        self.assertFalse(result.trigger_conclusion)
 
     def test_generate_ready_to_conclude_message_last_one(self):
         """generate_ready_to_conclude_message returns 'last one' variant when appropriate."""
@@ -910,15 +912,37 @@ class ReadyToConcludeTests(TestCase):
         )
 
         # 3 ready out of 4 = only 1 missing
-        msg = generate_ready_to_conclude_message("Luigi", ready_count=3, total_count=4)
+        result = generate_ready_to_conclude_message("Luigi", ready_count=3, total_count=4)
 
-        self.assertTrue(msg.use_tts)
-        self.assertIn("Luigi", msg.text)
+        self.assertTrue(result.message.use_tts)
+        self.assertIn("Luigi", result.message.text)
         # Should mention "manca solo" or similar
         self.assertTrue(
-            "manca solo" in msg.text.lower() or
-            "quasi tutti" in msg.text.lower()
+            "manca solo" in result.message.text.lower() or
+            "quasi tutti" in result.message.text.lower()
         )
+        # Should NOT trigger conclusion (not 4/4)
+        self.assertFalse(result.trigger_conclusion)
+
+    def test_generate_ready_to_conclude_message_all_ready(self):
+        """generate_ready_to_conclude_message returns 'all ready' variant and triggers conclusion."""
+        from apps.moderation.triggers import (
+            generate_ready_to_conclude_message,
+            READY_TO_CONCLUDE_ALL_READY_MESSAGES,
+        )
+
+        # 4 ready out of 4 = all ready
+        result = generate_ready_to_conclude_message("Luigi", ready_count=4, total_count=4)
+
+        self.assertTrue(result.message.use_tts)
+        # Should NOT contain user name (all ready messages don't have {nome})
+        self.assertNotIn("Luigi", result.message.text)
+        # Should mention "tutti" or similar
+        self.assertTrue(
+            "tutti" in result.message.text.lower()
+        )
+        # Should trigger conclusion (4/4)
+        self.assertTrue(result.trigger_conclusion)
 
 
 class InactiveUserTests(TestCase):

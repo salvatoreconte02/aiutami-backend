@@ -23,9 +23,15 @@ class PendingMessage:
     text: str
     trigger_type: str
     created_at: datetime
+    trigger_conclusion: bool = False  # Se True, dopo il TTS si transiziona a CONCLUSION
 
 
-def enqueue_message(session_id: int | str, text: str, trigger_type: str) -> None:
+def enqueue_message(
+    session_id: int | str,
+    text: str,
+    trigger_type: str,
+    trigger_conclusion: bool = False,
+) -> None:
     """
     Aggiunge un messaggio TTS alla coda dei messaggi pendenti per la sessione.
 
@@ -33,6 +39,7 @@ def enqueue_message(session_id: int | str, text: str, trigger_type: str) -> None
         session_id: ID della sessione
         text: Testo del messaggio da pronunciare
         trigger_type: Tipo di trigger che ha generato il messaggio (es. NO_PUSH, TIMER_30)
+        trigger_conclusion: Se True, dopo il TTS si transiziona a CONCLUSION
     """
     key = f"{PENDING_MESSAGES_KEY_PREFIX}:{session_id}"
 
@@ -40,6 +47,7 @@ def enqueue_message(session_id: int | str, text: str, trigger_type: str) -> None
         "text": text,
         "trigger_type": trigger_type,
         "created_at": datetime.utcnow().isoformat(),
+        "trigger_conclusion": trigger_conclusion,
     }
 
     # Django cache non ha rpush nativo, usiamo get/set
@@ -71,6 +79,7 @@ def dequeue_all_messages(session_id: int | str) -> List[PendingMessage]:
                 text=data["text"],
                 trigger_type=data["trigger_type"],
                 created_at=datetime.fromisoformat(data["created_at"]),
+                trigger_conclusion=data.get("trigger_conclusion", False),
             ))
         except (json.JSONDecodeError, KeyError):
             continue

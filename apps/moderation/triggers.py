@@ -31,6 +31,12 @@ READY_TO_CONCLUDE_LAST_ONE_MESSAGES = [
     "{nome} è pronto. Quasi tutti hanno deciso: manca solo un voto per concludere la sessione.",
 ]
 
+READY_TO_CONCLUDE_ALL_READY_MESSAGES = [
+    "Tutti i partecipanti sono pronti. Possiamo avviarci alla fase di conclusione.",
+    "Tutti hanno deciso. Possiamo avviarci alla fase di conclusione.",
+    "Siete tutti pronti. Possiamo avviarci alla fase di conclusione.",
+]
+
 # Message variants for INACTIVE_USER trigger
 INACTIVE_VOICE_MESSAGES = [
     "{nome}, se vuoi condividere un'idea, questo è un buon momento per intervenire.",
@@ -48,11 +54,18 @@ class StaticMessage:
     trigger_type: Optional[str] = None  # Tipo trigger per identificazione frontend (es. TIMER_25)
 
 
+@dataclass
+class ReadyToConcludeResult:
+    """Risultato della generazione del messaggio ready_to_conclude."""
+    message: StaticMessage
+    trigger_conclusion: bool  # Se True, dopo il TTS si transiziona a CONCLUSION
+
+
 def generate_ready_to_conclude_message(
     user_name: str,
     ready_count: int,
     total_count: int,
-) -> StaticMessage:
+) -> ReadyToConcludeResult:
     """
     Genera il messaggio per quando un utente clicca 'pronto a concludere'.
 
@@ -62,16 +75,27 @@ def generate_ready_to_conclude_message(
         total_count: Numero totale di partecipanti
 
     Returns:
-        StaticMessage con use_tts=True
+        ReadyToConcludeResult con messaggio e flag trigger_conclusion
     """
+    trigger_conclusion = False
+
+    # Caso "tutti pronti": ready_count == total_count
+    if ready_count == total_count:
+        template = random.choice(READY_TO_CONCLUDE_ALL_READY_MESSAGES)
+        text = template  # Nessun placeholder {nome}
+        trigger_conclusion = True
     # Caso "manca solo uno": ready_count == total_count - 1
-    if ready_count == total_count - 1:
+    elif ready_count == total_count - 1:
         template = random.choice(READY_TO_CONCLUDE_LAST_ONE_MESSAGES)
+        text = template.format(nome=user_name)
     else:
         template = random.choice(READY_TO_CONCLUDE_MESSAGES)
+        text = template.format(nome=user_name)
 
-    text = template.format(nome=user_name)
-    return StaticMessage(text=text, use_tts=True)
+    return ReadyToConcludeResult(
+        message=StaticMessage(text=text, use_tts=True),
+        trigger_conclusion=trigger_conclusion,
+    )
 
 
 # Import dominio turni per i trigger statici

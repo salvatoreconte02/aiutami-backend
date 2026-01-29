@@ -184,15 +184,21 @@ class SessionReadyToConcludeView(APIView):
         total_count = qs.count()
         ready_count = qs.filter(ready_to_conclude=True).count()
 
-        # Genera e invia messaggio (solo se non tutti pronti - altrimenti si passa a CONCLUSION)
-        if session.state == SessionState.ACTIVE and ready_count < total_count:
+        # Genera e invia messaggio (incluso caso 3/3 - la transizione avviene dopo TTS)
+        if session.state == SessionState.ACTIVE:
             user_name = getattr(request.user, "display_name", None) or request.user.get_username()
-            msg = generate_ready_to_conclude_message(user_name, ready_count, total_count)
+            result = generate_ready_to_conclude_message(user_name, ready_count, total_count)
+            msg = result.message
 
             # Verifica se qualcuno sta parlando
             if _someone_is_currently_speaking(session_id):
-                # Accoda il messaggio
-                enqueue_message(session_id, msg.text, "READY_TO_CONCLUDE")
+                # Accoda il messaggio (con flag trigger_conclusion)
+                enqueue_message(
+                    session_id,
+                    msg.text,
+                    "READY_TO_CONCLUDE",
+                    trigger_conclusion=result.trigger_conclusion,
+                )
             else:
                 # Invia messaggio TTS immediatamente via WebSocket
                 channel_layer = get_channel_layer()
@@ -201,19 +207,12 @@ class SessionReadyToConcludeView(APIView):
                     {
                         "type": "trigger.ready_to_conclude",
                         "text": msg.text,
+                        "trigger_conclusion": result.trigger_conclusion,
                     },
                 )
 
-        # Se tutti sono pronti e la sessione è ancora ACTIVE,
-        # si porta lo stato in CONCLUSION.
-        if (
-            session.state == SessionState.ACTIVE
-            and total_count > 0
-            and ready_count == total_count
-        ):
-            session.state = SessionState.CONCLUSION
-            session.conclusion_at = timezone.now()
-            session.save(update_fields=["state", "conclusion_at"])
+        # NOTA: La transizione a CONCLUSION avviene DOPO il TTS nel ws_consumer,
+        # non più qui, per uniformare il comportamento con il timer 30min.
 
         # Serializza lo stato aggiornato della sessione
         detail_data = SessionDetailSerializer(
