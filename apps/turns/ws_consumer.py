@@ -425,11 +425,15 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     # Messaggio con TTS - esegui come turno AI completo
                     await self._execute_tts_message(msg.text)
                 else:
-                    # Solo testo - invia direttamente senza turno AI
-                    await self.send_json({
-                        "type": "turns.ai_message",
-                        "payload": {"text": msg.text, "use_tts": False},
-                    })
+                    # Solo testo - broadcast a tutti i partecipanti
+                    await self.channel_layer.group_send(
+                        self.group_name,
+                        {
+                            "type": "turns.event",
+                            "event_type": "STATIC_MESSAGE",
+                            "payload": {"text": msg.text, "use_tts": False},
+                        },
+                    )
 
             # 6) Eventuale intervento AI proposto dall'LLM con TTS
             if decision.ai_should_speak and decision.ai_message:
@@ -704,12 +708,14 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 # Messaggio con TTS - esegui come turno AI completo
                 await self._execute_tts_message(msg.text)
             else:
-                # Solo testo - invia direttamente senza turno AI
-                await self.send_json(
+                # Solo testo - broadcast a tutti i partecipanti
+                await self.channel_layer.group_send(
+                    self.group_name,
                     {
-                        "type": "turns.ai_message",
+                        "type": "turns.event",
+                        "event_type": "STATIC_MESSAGE",
                         "payload": {"text": msg.text, "use_tts": False},
-                    }
+                    },
                 )
 
         # Flush messaggi TTS pendenti
@@ -944,6 +950,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         - Se nessuno sta parlando e ci sono messaggi, li esegue
         - Se qualcuno sta parlando e ci sono messaggi TTS, li accoda
         - Svuota la coda se IDLE e ci sono messaggi pendenti
+        - Se timer 30 scade, transiziona la sessione a CONCLUSION
         """
         logger.info("[TRIGGER_LOOP][STARTED] session=%s", session_id)
 
@@ -972,13 +979,27 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     continue
 
                 logger.info(
-                    "[TRIGGER_LOOP][RESULT] session=%s messages=%d",
-                    session_id, len(trig_result.static_messages_to_speak)
+                    "[TRIGGER_LOOP][RESULT] session=%s messages=%d transition=%s",
+                    session_id, len(trig_result.static_messages_to_speak), trig_result.should_transition_to_conclusion
                 )
 
                 # Esegui/accoda i messaggi
                 if trig_result.static_messages_to_speak:
                     await self._execute_static_messages(trig_result.static_messages_to_speak)
+
+                # Gestione transizione a CONCLUSION (timer 30 scaduto via background)
+                if trig_result.should_transition_to_conclusion:
+                    transitioned = await database_sync_to_async(self._transition_session_to_conclusion)()
+                    if transitioned:
+                        logger.info("[TRIGGER_LOOP][TRANSITION] session=%s -> CONCLUSION", session_id)
+                        await self.channel_layer.group_send(
+                            f"sessions_{session_id}",
+                            {
+                                "type": "sessions.event",
+                                "event_type": "STATE_CHANGED",
+                                "new_state": "CONCLUSION",
+                            },
+                        )
 
                 # Svuota coda messaggi pendenti se IDLE
                 await self._flush_pending_tts_messages()

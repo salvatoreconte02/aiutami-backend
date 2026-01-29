@@ -1,11 +1,21 @@
 from dataclasses import dataclass
 from typing import List, Optional
 from datetime import datetime
+import random
 
 from django.core.cache import cache
 
 from .state import ModerationState
 from .service import HardModerationAction, SUMMARY_TURNS_INTERVAL
+
+
+# Message variants for NO_PUSH trigger
+NO_PUSH_MESSAGES = [
+    "Se qualcuno vuole intervenire, può parlare ora o condividere una breve considerazione.",
+    "C'è un momento di silenzio. Se qualcuno ha un pensiero da condividere, questo è un buon momento.",
+    "Se qualcuno desidera aggiungere qualcosa alla discussione, può prendere la parola.",
+    "La discussione è in pausa. Chi vuole intervenire può farlo ora.",
+]
 
 
 @dataclass
@@ -125,7 +135,6 @@ def evaluate_time_based_triggers(
       emesso alcun messaggio (sarà valutato al prossimo 'ping' quando
       la sessione sarà di nuovo libera).
     """
-    static_messages: list[StaticMessage] = []
     hard_action = HardModerationAction.NONE
 
     if _someone_is_currently_speaking(session_id=session_id):
@@ -133,16 +142,19 @@ def evaluate_time_based_triggers(
         return TriggerEvaluationResult(
             hard_action=hard_action,
             static_messages_to_speak=[],
+            should_transition_to_conclusion=False,
         )
 
     # Se nessuno sta parlando, è possibile emettere direttamente messaggi fissi.
-    static_messages.extend(
-        _collect_time_based_static_messages(session_id=session_id, session_phase=session_phase)
+    static_messages, should_transition = _collect_time_based_static_messages(
+        session_id=session_id,
+        session_phase=session_phase,
     )
 
     return TriggerEvaluationResult(
         hard_action=hard_action,
         static_messages_to_speak=static_messages,
+        should_transition_to_conclusion=should_transition,
     )
 
 
@@ -278,15 +290,19 @@ def _collect_time_based_static_messages(
     *,
     session_id: int | str,
     session_phase: str,
-) -> list[StaticMessage]:
+) -> tuple[list[StaticMessage], bool]:
     """
     Raccoglie i messaggi fissi da generare in base ai soli controlli a tempo,
     nel caso in cui la sessione sia libera (nessuno sta parlando).
+
+    Returns:
+        Tuple of (messages, should_transition_to_conclusion)
     """
     # Import locali per evitare problemi in fase di bootstrap
     from apps.sessions.models import SessionParticipant, SessionState as SessionStateEnum
 
     messages: list[StaticMessage] = []
+    should_transition_to_conclusion = False
     state = load_timers_state(session_id)
     now = datetime.utcnow()
 
@@ -294,7 +310,7 @@ def _collect_time_based_static_messages(
     if state.last_any_activity_at is not None and not state.no_push_notified:
         if now - state.last_any_activity_at >= NO_PUSH_THRESHOLD:
             messages.append(StaticMessage(
-                text="Se qualcuno vuole intervenire, può parlare ora o condividere una breve considerazione.",
+                text=random.choice(NO_PUSH_MESSAGES),
                 use_tts=True,
             ))
             state.no_push_notified = True
@@ -311,13 +327,14 @@ def _collect_time_based_static_messages(
             ))
             state.timer_25_notified = True
 
-        # TIMER 30 - TTS (annuncio importante)
+        # TIMER 30 - TTS (annuncio importante) + transizione
         if (not state.timer_30_notified) and elapsed >= TIMER_30_THRESHOLD:
             messages.append(StaticMessage(
                 text="Il tempo della discussione è terminato. Potete avviarvi verso la conclusione.",
                 use_tts=True,
             ))
             state.timer_30_notified = True
+            should_transition_to_conclusion = True
 
     # 3) UTENTE INATTIVO - TTS
     if session_phase == SessionStateEnum.ACTIVE and state.session_started_at is not None:
@@ -351,4 +368,4 @@ def _collect_time_based_static_messages(
     # Salvataggio stato timer aggiornato
     save_timers_state(session_id, state)
 
-    return messages
+    return messages, should_transition_to_conclusion

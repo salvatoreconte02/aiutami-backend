@@ -5,6 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Rules for Claude
 
 - **Git operations require explicit permission**: Never execute `git commit`, `git push`, `git pull`, or `git branch` autonomously. Always ask for permission before any git operation.
+- **No Claude references in commits**: Do not include "Co-Authored-By: Claude" or similar references in commit messages.
+- **Push incrementali**: Quando una feature è completa e funzionante, proponi commit e push per mantenere il repository remoto aggiornato.
 - **CLAUDE.md maintenance**: Keep this file under 200 lines. When updates are needed, ask for permission first and explain the proposed changes and why they are necessary.
 - **Testing**: Claude è connesso direttamente alla VM via SSH. Può eseguire test, gestire Docker e verificare in tempo reale.
 

@@ -154,7 +154,7 @@ def save_timers_state(session_id: int | str, state: ModerationTimersState) -> No
 # Costanti soglia per i trigger a tempo
 # ----------------------------------------------------------------------
 
-NO_PUSH_THRESHOLD = timedelta(seconds=15)      # silenzio 15s
+NO_PUSH_THRESHOLD = timedelta(seconds=20)      # silenzio 20s
 TIMER_25_THRESHOLD = timedelta(minutes=25)     # avviso 5 minuti rimanenti
 TIMER_30_THRESHOLD = timedelta(minutes=30)     # fine discussione
 
@@ -187,10 +187,12 @@ def mark_any_activity(session_id: int | str, when: Optional[datetime] = None) ->
     - altri eventi significativi.
 
     Da usare per il trigger NO PUSH.
+    Resetta il flag no_push_notified per permettere un nuovo trigger dopo l'attività.
     """
     now = when or datetime.utcnow()
     state = load_timers_state(session_id)
     state.last_any_activity_at = now
+    state.no_push_notified = False  # Reset flag per permettere nuovo trigger
     save_timers_state(session_id, state)
 
 

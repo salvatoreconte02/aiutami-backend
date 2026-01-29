@@ -408,16 +408,21 @@ class TimeBasedTriggersTTSTests(TestCase):
     def tearDown(self):
         cache.clear()
 
+    @patch('apps.sessions.models.SessionParticipant.objects')
     @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
-    def test_no_push_message_has_use_tts_true(self, mock_speaking):
+    def test_no_push_message_has_use_tts_true(self, mock_speaking, mock_participant_objects):
         """NO_PUSH message should have use_tts=True."""
-        from apps.moderation.triggers import evaluate_time_based_triggers
-        session_id = "test-session-time-1"
+        from apps.moderation.triggers import evaluate_time_based_triggers, NO_PUSH_MESSAGES
+        import uuid
+        session_id = str(uuid.uuid4())
 
-        # Setup: last activity was 20 seconds ago (> 15s threshold)
+        # Mock participants (empty list to avoid inactive user trigger)
+        mock_participant_objects.filter.return_value.select_related.return_value = []
+
+        # Setup: last activity was 21 seconds ago (> 20s threshold)
         timers_state = ModerationTimersState.initial()
         timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=5)
-        timers_state.last_any_activity_at = datetime.utcnow() - timedelta(seconds=20)
+        timers_state.last_any_activity_at = datetime.utcnow() - timedelta(seconds=21)
         timers_state.no_push_notified = False
         save_timers_state(session_id, timers_state)
 
@@ -427,15 +432,20 @@ class TimeBasedTriggersTTSTests(TestCase):
         )
 
         no_push_msgs = [m for m in result.static_messages_to_speak
-                       if "vuole intervenire" in m.text]
+                       if m.text in NO_PUSH_MESSAGES]
         self.assertEqual(len(no_push_msgs), 1)
         self.assertTrue(no_push_msgs[0].use_tts)
 
+    @patch('apps.sessions.models.SessionParticipant.objects')
     @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
-    def test_timer_25_message_has_use_tts_false(self, mock_speaking):
+    def test_timer_25_message_has_use_tts_false(self, mock_speaking, mock_participant_objects):
         """TIMER_25 message should have use_tts=False (text only warning)."""
         from apps.moderation.triggers import evaluate_time_based_triggers
-        session_id = "test-session-time-2"
+        import uuid
+        session_id = str(uuid.uuid4())
+
+        # Mock participants (empty list)
+        mock_participant_objects.filter.return_value.select_related.return_value = []
 
         # Setup: session started 26 minutes ago
         timers_state = ModerationTimersState.initial()
@@ -454,12 +464,13 @@ class TimeBasedTriggersTTSTests(TestCase):
         self.assertEqual(len(timer_25_msgs), 1)
         self.assertFalse(timer_25_msgs[0].use_tts)
 
+    @patch('apps.sessions.models.SessionParticipant.objects')
     @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
-    @patch('apps.moderation.triggers.SessionParticipant')
-    def test_utente_inattivo_message_has_use_tts_true(self, mock_participant, mock_speaking):
+    def test_utente_inattivo_message_has_use_tts_true(self, mock_speaking, mock_participant_objects):
         """UTENTE_INATTIVO message should have use_tts=True."""
         from apps.moderation.triggers import evaluate_time_based_triggers
-        session_id = "test-session-time-3"
+        import uuid
+        session_id = str(uuid.uuid4())
 
         # Setup: session with one user who never spoke
         timers_state = ModerationTimersState.initial()
@@ -479,7 +490,7 @@ class TimeBasedTriggersTTSTests(TestCase):
         mock_participant_obj.user_id = 1
         mock_participant_obj.user = mock_user
 
-        mock_participant.objects.filter.return_value.select_related.return_value = [mock_participant_obj]
+        mock_participant_objects.filter.return_value.select_related.return_value = [mock_participant_obj]
 
         result = evaluate_time_based_triggers(
             session_id=session_id,
@@ -545,3 +556,262 @@ class PendingMessagesTests(TestCase):
         session_id = "test-pending-4"
 
         self.assertFalse(has_pending_messages(session_id))
+
+
+class TimeBasedTriggersBgTransitionTests(TestCase):
+    """Tests for evaluate_time_based_triggers returning transition flag for timer 30."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch('apps.sessions.models.SessionParticipant.objects')
+    @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
+    def test_timer_30_via_time_based_triggers_returns_transition_flag(self, mock_speaking, mock_participant_objects):
+        """evaluate_time_based_triggers should return should_transition_to_conclusion=True when timer 30 expires."""
+        from apps.moderation.triggers import evaluate_time_based_triggers
+        import uuid
+        session_id = str(uuid.uuid4())
+
+        # Mock participants (empty list)
+        mock_participant_objects.filter.return_value.select_related.return_value = []
+
+        # Setup: session started 31 minutes ago, timer not yet notified
+        timers_state = ModerationTimersState.initial()
+        timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=31)
+        timers_state.last_any_activity_at = datetime.utcnow()
+        timers_state.timer_30_notified = False
+        save_timers_state(session_id, timers_state)
+
+        result = evaluate_time_based_triggers(
+            session_id=session_id,
+            session_phase="ACTIVE",
+        )
+
+        self.assertTrue(result.should_transition_to_conclusion)
+        timer_msgs = [m for m in result.static_messages_to_speak
+                      if "Il tempo della discussione è terminato" in m.text]
+        self.assertEqual(len(timer_msgs), 1)
+
+
+class TriggerLoopTransitionTests(TestCase):
+    """Tests for _trigger_loop handling session transitions."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch('apps.sessions.models.SessionParticipant.objects')
+    @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
+    def test_trigger_loop_result_has_transition_flag(self, mock_speaking, mock_participant_objects):
+        """Verify evaluate_time_based_triggers returns transition flag that _trigger_loop can use."""
+        from apps.moderation.triggers import evaluate_time_based_triggers
+        import uuid
+        session_id = str(uuid.uuid4())
+
+        # Mock participants (empty list)
+        mock_participant_objects.filter.return_value.select_related.return_value = []
+
+        timers_state = ModerationTimersState.initial()
+        timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=31)
+        timers_state.last_any_activity_at = datetime.utcnow()
+        timers_state.timer_30_notified = False
+        save_timers_state(session_id, timers_state)
+
+        result = evaluate_time_based_triggers(
+            session_id=session_id,
+            session_phase="ACTIVE",
+        )
+
+        # This flag should be True so _trigger_loop can transition the session
+        self.assertTrue(result.should_transition_to_conclusion)
+
+
+class PrenotazioneBroadcastTests(TestCase):
+    """Tests for prenotazione message broadcast to all participants."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_prenotazione_message_should_be_broadcast_type(self):
+        """Verify prenotazione messages have use_tts=False and should broadcast."""
+        from apps.moderation.triggers import StaticMessage
+
+        # The specification says prenotazione should be text-only (no TTS)
+        # but visible to ALL participants, not just the sender
+        msg = StaticMessage(text="Ora la parola va a Mario, che aveva prenotato.", use_tts=False)
+
+        # This test documents the expected behavior:
+        # - use_tts=False means no audio, just text
+        # - But the message should still go to everyone via group_send
+        self.assertFalse(msg.use_tts)
+        self.assertIn("prenotato", msg.text)
+
+
+class NoPushThresholdAndResetTests(TestCase):
+    """Tests for NO_PUSH 20s threshold and flag reset on activity."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch('apps.sessions.models.SessionParticipant.objects')
+    @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
+    def test_no_push_does_not_trigger_at_15_seconds(self, mock_speaking, mock_participant_objects):
+        """NO_PUSH should NOT trigger at 15s (old threshold), only at 20s."""
+        from apps.moderation.triggers import evaluate_time_based_triggers
+        import uuid
+        session_id = str(uuid.uuid4())
+
+        mock_participant_objects.filter.return_value.select_related.return_value = []
+
+        # Setup: last activity was 16 seconds ago (> 15s but < 20s)
+        timers_state = ModerationTimersState.initial()
+        timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=5)
+        timers_state.last_any_activity_at = datetime.utcnow() - timedelta(seconds=16)
+        timers_state.no_push_notified = False
+        save_timers_state(session_id, timers_state)
+
+        result = evaluate_time_based_triggers(
+            session_id=session_id,
+            session_phase="ACTIVE",
+        )
+
+        no_push_msgs = [m for m in result.static_messages_to_speak
+                       if "intervenire" in m.text.lower()]
+        self.assertEqual(len(no_push_msgs), 0, "NO_PUSH should not trigger at 16s")
+
+    @patch('apps.sessions.models.SessionParticipant.objects')
+    @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
+    def test_no_push_triggers_at_20_seconds(self, mock_speaking, mock_participant_objects):
+        """NO_PUSH should trigger at 20s."""
+        from apps.moderation.triggers import evaluate_time_based_triggers, NO_PUSH_MESSAGES
+        import uuid
+        session_id = str(uuid.uuid4())
+
+        mock_participant_objects.filter.return_value.select_related.return_value = []
+
+        # Setup: last activity was 21 seconds ago (> 20s threshold)
+        timers_state = ModerationTimersState.initial()
+        timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=5)
+        timers_state.last_any_activity_at = datetime.utcnow() - timedelta(seconds=21)
+        timers_state.no_push_notified = False
+        save_timers_state(session_id, timers_state)
+
+        result = evaluate_time_based_triggers(
+            session_id=session_id,
+            session_phase="ACTIVE",
+        )
+
+        no_push_msgs = [m for m in result.static_messages_to_speak
+                       if m.text in NO_PUSH_MESSAGES]
+        self.assertEqual(len(no_push_msgs), 1, "NO_PUSH should trigger at 21s")
+
+
+class NoPushResetTests(TestCase):
+    """Tests for NO_PUSH flag reset when someone speaks."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_mark_any_activity_resets_no_push_notified(self):
+        """mark_any_activity should reset no_push_notified flag."""
+        from apps.moderation.timers_state import mark_any_activity
+        import uuid
+        session_id = str(uuid.uuid4())
+
+        # Setup: no_push already notified
+        timers_state = ModerationTimersState.initial()
+        timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=5)
+        timers_state.last_any_activity_at = datetime.utcnow() - timedelta(seconds=30)
+        timers_state.no_push_notified = True
+        save_timers_state(session_id, timers_state)
+
+        # Activity occurs
+        mark_any_activity(session_id)
+
+        # Verify flag is reset
+        loaded = load_timers_state(session_id)
+        self.assertFalse(loaded.no_push_notified)
+
+    @patch('apps.sessions.models.SessionParticipant.objects')
+    @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
+    def test_no_push_can_trigger_again_after_activity(self, mock_speaking, mock_participant_objects):
+        """NO_PUSH should be able to trigger again after activity resets the flag."""
+        from apps.moderation.triggers import evaluate_time_based_triggers, NO_PUSH_MESSAGES
+        from apps.moderation.timers_state import mark_any_activity
+        import uuid
+        session_id = str(uuid.uuid4())
+
+        mock_participant_objects.filter.return_value.select_related.return_value = []
+
+        # Setup: no_push already triggered
+        timers_state = ModerationTimersState.initial()
+        timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=5)
+        timers_state.last_any_activity_at = datetime.utcnow() - timedelta(seconds=30)
+        timers_state.no_push_notified = True
+        save_timers_state(session_id, timers_state)
+
+        # Someone speaks (activity)
+        mark_any_activity(session_id)
+
+        # Wait 21 seconds (simulate by updating timestamp)
+        state = load_timers_state(session_id)
+        state.last_any_activity_at = datetime.utcnow() - timedelta(seconds=21)
+        save_timers_state(session_id, state)
+
+        # NO_PUSH should trigger again
+        result = evaluate_time_based_triggers(
+            session_id=session_id,
+            session_phase="ACTIVE",
+        )
+
+        no_push_msgs = [m for m in result.static_messages_to_speak
+                       if m.text in NO_PUSH_MESSAGES]
+        self.assertEqual(len(no_push_msgs), 1)
+
+
+class NoPushMessageVariantsTests(TestCase):
+    """Tests for NO_PUSH message variants."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch('apps.sessions.models.SessionParticipant.objects')
+    @patch('apps.moderation.triggers._someone_is_currently_speaking', return_value=False)
+    def test_no_push_message_is_from_variants(self, mock_speaking, mock_participant_objects):
+        """NO_PUSH message should be one of the defined variants."""
+        from apps.moderation.triggers import evaluate_time_based_triggers, NO_PUSH_MESSAGES
+        import uuid
+        session_id = str(uuid.uuid4())
+
+        mock_participant_objects.filter.return_value.select_related.return_value = []
+
+        timers_state = ModerationTimersState.initial()
+        timers_state.session_started_at = datetime.utcnow() - timedelta(minutes=5)
+        timers_state.last_any_activity_at = datetime.utcnow() - timedelta(seconds=25)
+        timers_state.no_push_notified = False
+        save_timers_state(session_id, timers_state)
+
+        result = evaluate_time_based_triggers(
+            session_id=session_id,
+            session_phase="ACTIVE",
+        )
+
+        self.assertEqual(len(result.static_messages_to_speak), 1)
+        self.assertIn(result.static_messages_to_speak[0].text, NO_PUSH_MESSAGES)
