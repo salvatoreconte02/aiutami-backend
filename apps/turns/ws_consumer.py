@@ -1257,6 +1257,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
             # Se il messaggio aveva trigger_conclusion=True, transiziona a CONCLUSION
             if msg.trigger_conclusion:
+                await self._set_conclusion_reason("all_ready")
                 transitioned = await self._transition_session_to_conclusion()
                 if transitioned:
                     await self.channel_layer.group_send(
@@ -1267,3 +1268,5 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                             "new_state": "CONCLUSION",
                         },
                     )
+                    # Execute FORCED_CONCLUSION to generate final summary
+                    await self._execute_forced_conclusion()
