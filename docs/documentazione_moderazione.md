@@ -1,6 +1,6 @@
 # Documentazione Tecnica — Logica di Moderazione delle Sessioni Vocali
 
-*Versione aggiornata: 2026-01-30 (aggiunto FORCED_CONCLUSION con LLM dedicato)*
+*Versione aggiornata: 2026-01-30 (semplificata risposta LLM FORCED_CONCLUSION)*
 
 ## 1. Obiettivo della moderazione
 
@@ -285,7 +285,7 @@ Genera un messaggio che:
 - `all_participants_ready`: valorizza la loro decisione di concludere
 
 ## Output
-JSON con: updated_summary, should_ai_speak, message_to_say, reason, intervention_score
+JSON con: updated_summary, message_to_say
 ```
 
 **User Message (JSON):**

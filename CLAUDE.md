@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Push incrementali**: Quando una feature è completa e funzionante, proponi commit e push per mantenere il repository remoto aggiornato.
 - **CLAUDE.md maintenance**: Keep this file under 200 lines. When updates are needed, ask for permission first and explain the proposed changes and why they are necessary.
 - **Testing**: Claude è connesso direttamente alla VM via SSH. Può eseguire test, gestire Docker e verificare in tempo reale.
+- **Moderation docs**: Quando si modifica e committa qualcosa sulla moderazione, aggiornare `docs/documentazione_moderazione.md`.
 
 ## Project Overview
 
