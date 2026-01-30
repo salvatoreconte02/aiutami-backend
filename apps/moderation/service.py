@@ -21,7 +21,7 @@ from .state import (
 # Parametri configurabili (in seguito si possono spostare in settings)
 MAX_AI_INTERVENTIONS_PER_SESSION = 10
 AI_INTERVENTION_COOLDOWN = timedelta(seconds=30)
-SUMMARY_TURNS_INTERVAL = 1  # DEBUG: forza un riassunto ad ogni turno umano
+SUMMARY_TURNS_INTERVAL = 4  # Riassunto ogni 4 turni umani
 
 class HardModerationAction(str, Enum):
     """
