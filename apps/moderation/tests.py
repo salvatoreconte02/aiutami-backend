@@ -1316,6 +1316,50 @@ class CallLLMStructuredInputTests(TestCase):
         self.assertIn("intervention_score", system_prompt)
 
 
+class HandleHumanTurnPassesStateTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_handle_human_turn_passes_turns_per_participant_to_llm(self, mock_llm):
+        """handle_human_turn_ended should pass turns_per_participant to _call_llm."""
+        session_id = "test-pass-state-1"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": False,
+            "message_to_say": None,
+            "reason": "all_ok",
+            "intervention_score": 0.2,
+        }
+
+        # Setup state with existing turns
+        state = ModerationState.initial()
+        state.turns_per_participant = {"Mario": 3, "Lucia": 1}
+        save_moderation_state(session_id, state)
+
+        ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        # Verify _call_llm was called with turns_per_participant
+        mock_llm.assert_called_once()
+        call_kwargs = mock_llm.call_args[1]
+
+        # After increment, Mario should have 4 turns
+        self.assertIn("turns_per_participant", call_kwargs)
+        self.assertEqual(call_kwargs["turns_per_participant"]["Mario"], 4)
+        self.assertEqual(call_kwargs["turns_per_participant"]["Lucia"], 1)
+
+
 class ModerationStateConclusionReasonTests(TestCase):
     def setUp(self):
         cache.clear()
@@ -1481,3 +1525,100 @@ class InactiveUserTests(TestCase):
         inactive_msgs = [m for m in result.static_messages_to_speak
                         if "TestUser" in m.text]
         self.assertEqual(len(inactive_msgs), 0)
+
+
+class LLMNormalModeIntegrationTests(TestCase):
+    """Integration tests for the complete normal mode flow."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch.object(ModerationService, '_build_azure_client')
+    def test_full_normal_mode_flow_with_participant_tracking(self, mock_client):
+        """Test complete flow: state tracking + structured LLM input + intervention decision."""
+        session_id = "test-integration-1"
+
+        # Mock LLM to return intervention when score >= 0.7
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "updated_summary": "Mario ha dominato la discussione, Lucia non ha parlato",
+            "should_ai_speak": True,
+            "message_to_say": "Lucia, tu cosa ne pensi?",
+            "reason": "exclusion",
+            "intervention_score": 0.75,
+        })
+        mock_client.return_value.chat.completions.create.return_value = mock_response
+
+        # Setup: Mario has spoken 5 times, Lucia 0 times
+        state = ModerationState.initial()
+        state.turns_per_participant = {"Mario": 5, "Lucia": 0}
+        save_moderation_state(session_id, state)
+
+        # Mario speaks again (6th turn)
+        result = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Penso che sia stato il maggiordomo!",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        # Verify AI decides to intervene
+        self.assertTrue(result.ai_should_speak)
+        self.assertEqual(result.ai_message, "Lucia, tu cosa ne pensi?")
+
+        # Verify state was updated
+        loaded_state = load_moderation_state(session_id)
+        self.assertEqual(loaded_state.turns_per_participant["Mario"], 6)
+        self.assertEqual(loaded_state.ai_interventions_count, 1)
+
+        # Verify LLM received structured input
+        call_args = mock_client.return_value.chat.completions.create.call_args
+        messages = call_args[1]['messages']
+        user_message = json.loads(messages[1]['content'])
+
+        self.assertEqual(user_message["participants"]["turns"]["Mario"], 6)
+        self.assertEqual(user_message["participants"]["turns"]["Lucia"], 0)
+        self.assertEqual(user_message["scenario"]["type"], "murder_mystery")
+
+    @patch.object(ModerationService, '_build_azure_client')
+    def test_forced_summary_does_not_use_normal_prompt(self, mock_client):
+        """Forced summary should use its own prompt, not the normal mode prompt."""
+        session_id = "test-integration-2"
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "updated_summary": "Riassunto della discussione",
+            "should_ai_speak": True,
+            "message_to_say": "Ecco il riassunto...",
+            "reason": "forced_summary",
+            "intervention_score": 1.0,
+        })
+        mock_client.return_value.chat.completions.create.return_value = mock_response
+
+        state = ModerationState.initial()
+        save_moderation_state(session_id, state)
+
+        ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.FORCED_SUMMARY,
+            speaker_name="Mario",
+        )
+
+        # Verify prompt was for forced_summary (should not contain "monopol")
+        call_args = mock_client.return_value.chat.completions.create.call_args
+        system_prompt = call_args[1]['messages'][0]['content']
+
+        # forced_summary prompt should mention "riassunto" but not intervention criteria
+        self.assertIn("riassunto", system_prompt.lower())
+        # It should NOT contain detailed intervention criteria like monopolization
+        self.assertNotIn("monopol", system_prompt.lower())

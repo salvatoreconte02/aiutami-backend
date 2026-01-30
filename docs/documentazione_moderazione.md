@@ -1,6 +1,6 @@
 # Documentazione Tecnica — Logica di Moderazione delle Sessioni Vocali
 
-*Versione aggiornata: 2026-01-30 (semplificata risposta LLM FORCED_CONCLUSION)*
+*Versione aggiornata: 2026-01-30 (LLM normal mode redesign)*
 
 ## 1. Obiettivo della moderazione
 
@@ -42,7 +42,8 @@ Conservato in Redis, contiene:
 - numero di interventi AI già effettuati;
 - timestamp dell'ultimo intervento AI;
 - `conclusion_reason`: motivo della conclusione (`"timer_expired"` o `"all_participants_ready"`);
-- `forced_conclusion_done`: flag per evitare ripetizioni del messaggio di chiusura.
+- `forced_conclusion_done`: flag per evitare ripetizioni del messaggio di chiusura;
+- `turns_per_participant`: dizionario con conteggio turni per ogni partecipante (`{"Mario": 5, "Lucia": 2}`).
 
 È aggiornato a ogni turno umano, sempre dopo l'eventuale analisi del modello.
 
@@ -308,8 +309,91 @@ JSON con: updated_summary, message_to_say
 - `timer_expired`: "Il tempo a disposizione è terminato. Ecco un breve riepilogo..."
 - `all_participants_ready`: "Avete deciso di procedere alla votazione. Ecco un breve riepilogo..."
 
-### 4.3 Trigger 9: Intervento Soft/Normal
-*Specifica da completare*
+### 4.3 Trigger 9: Intervento Normal (Soft)
+
+| Aspetto | Valore |
+|---------|--------|
+| **Quando scatta** | Ogni fine turno umano, durante fase ACTIVE |
+| **Condizione** | `hard_action = NONE` (nessun trigger obbligatorio) |
+| **Modalità** | TTS se `intervention_score >= 0.7` |
+| **Budget** | Max 10 interventi per sessione |
+| **Cooldown** | 30 secondi tra interventi |
+
+**Input strutturato all'LLM:**
+
+```json
+{
+  "mode": "normal",
+  "scenario": {
+    "type": "murder_mystery",
+    "objective": "Discutere gli indizi e scoprire chi è l'assassino"
+  },
+  "discussion": {
+    "summary": "Riassunto cumulativo della discussione",
+    "last_turn": "Trascrizione dell'ultimo turno parlato",
+    "last_speaker": "Nome dello speaker"
+  },
+  "participants": {
+    "count": 4,
+    "turns": {"Mario": 5, "Lucia": 2, "Paolo": 1, "Anna": 0}
+  },
+  "session": {
+    "phase": "ACTIVE",
+    "total_turns": 8
+  },
+  "language": "it"
+}
+```
+
+**Criteri di intervento LLM:**
+
+L'LLM interviene (imposta `should_ai_speak: true` e `intervention_score >= 0.7`) solo se rileva:
+
+1. **Monopolizzazione** - Un partecipante ha parlato molti più turni degli altri e continua a dominare
+2. **Esclusione** - Un partecipante non ha quasi mai parlato e nessuno lo coinvolge
+3. **Off-topic evidente** - La discussione deraglia completamente (es. parlano di cose scollegate dal caso)
+4. **Conflitto** - Toni aggressivi, insulti, attacchi personali
+5. **Richiesta diretta** - Qualcuno chiede esplicitamente aiuto al moderatore
+
+**NON interviene per:**
+- Off-topic parziali (aspetta auto-correzione del gruppo)
+- Silenzi brevi o pause naturali
+- Disaccordi civili (parte sana della discussione)
+
+**Scala `intervention_score`:**
+| Range | Significato |
+|-------|-------------|
+| 0.0-0.3 | Tutto ok, nessun problema |
+| 0.4-0.6 | Situazione da monitorare ma non critica |
+| 0.7-0.8 | Problema evidente, intervento consigliato |
+| 0.9-1.0 | Problema grave (insulti, off-topic totale), intervento necessario |
+
+**Filtri backend (dopo decisione LLM):**
+
+Il backend applica filtri aggiuntivi **solo** per mode=normal (i mode forced_summary e forced_conclusion bypassano questi filtri):
+
+- Soglia score: `intervention_score >= 0.7` richiesto per parlare
+- Max interventi: 10 per sessione (`ai_interventions_count`)
+- Cooldown: 30 secondi tra interventi (`last_ai_intervention_at`)
+- Fase: solo durante ACTIVE
+
+**Nota importante:** Gli interventi `forced_summary` e `forced_conclusion` **NON** incrementano `ai_interventions_count` e **NON** sono soggetti a cooldown.
+
+**Stile risposta:**
+- Tono: gentile, indiretto, mai autoritario
+- Lunghezza: 1-2 frasi (20-30 parole max)
+- Esempi: `"Lucia, tu cosa ne pensi di questo indizio?"` / `"Interessante, ma tornando al caso..."`
+
+**Output LLM (JSON):**
+```json
+{
+  "updated_summary": "Riassunto aggiornato includendo l'ultimo turno",
+  "should_ai_speak": true,
+  "message_to_say": "Il messaggio da dire (null se should_ai_speak=false)",
+  "reason": "monopolization | exclusion | off_topic | conflict | user_request | all_ok",
+  "intervention_score": 0.75
+}
+```
 
 ---
 
@@ -326,6 +410,10 @@ JSON con: updated_summary, message_to_say
 | `TRIGGER_LOOP_INTERVAL` | 5 secondi | Frequenza background task |
 | `FORCED_CONCLUSION_TEMPERATURE` | 0.5 | Temperature LLM per tono caldo |
 | `FORCED_CONCLUSION_MAX_TOKENS` | 512 | Max tokens per messaggio chiusura |
+| `MAX_AI_INTERVENTIONS_PER_SESSION` | 10 | Budget interventi normal mode |
+| `AI_INTERVENTION_COOLDOWN` | 30 secondi | Cooldown tra interventi normal mode |
+| `NORMAL_MODE_SCORE_THRESHOLD` | 0.7 | Soglia intervention_score per parlare |
+| `NORMAL_MODE_TEMPERATURE` | 0.4 | Temperature LLM per normal mode |
 
 ---
 

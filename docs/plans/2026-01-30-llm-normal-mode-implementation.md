@@ -1121,6 +1121,6 @@ git commit -m "docs(moderation): document normal mode LLM criteria and structure
 - [x] Task 4: Create _build_normal_mode_prompt() method
 - [x] Task 5: Create _build_system_prompt() dispatcher method
 - [x] Task 6: Update _call_llm with structured input and new system prompt
-- [ ] Task 7: Update handle_human_turn_ended to pass state to _call_llm
-- [ ] Task 8: Final integration test
-- [ ] Task 9: Update moderation documentation
+- [x] Task 7: Update handle_human_turn_ended to pass state to _call_llm
+- [x] Task 8: Final integration test
+- [x] Task 9: Update moderation documentation

@@ -90,6 +90,7 @@ class ModerationService:
             mode=mode,
             session_phase=session_phase,
             speaker_name=speaker_name,
+            turns_per_participant=state.turns_per_participant,
         )
 
         # 3) Aggiornare il riassunto in ogni caso
