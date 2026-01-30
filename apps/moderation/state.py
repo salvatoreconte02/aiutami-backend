@@ -25,6 +25,7 @@ class ModerationState:
     last_ai_intervention_at: Optional[datetime]
     conclusion_reason: Optional[str]  # "timer_expired" or "all_participants_ready"
     forced_conclusion_done: bool  # True dopo il primo FORCED_CONCLUSION
+    turns_per_participant: dict[str, int]  # {"speaker_name": count}
 
     @classmethod
     def initial(cls) -> "ModerationState":
@@ -35,6 +36,7 @@ class ModerationState:
             last_ai_intervention_at=None,
             conclusion_reason=None,
             forced_conclusion_done=False,
+            turns_per_participant={},
         )
 
 
@@ -64,6 +66,7 @@ def load_moderation_state(session_id: int | str) -> ModerationState:
         last_ai_intervention_at=data.get("last_ai_intervention_at"),
         conclusion_reason=data.get("conclusion_reason"),
         forced_conclusion_done=data.get("forced_conclusion_done", False),
+        turns_per_participant=data.get("turns_per_participant", {}),
     )
 
 
@@ -81,6 +84,7 @@ def save_moderation_state(session_id: int | str, state: ModerationState) -> None
             "last_ai_intervention_at": state.last_ai_intervention_at,
             "conclusion_reason": state.conclusion_reason,
             "forced_conclusion_done": state.forced_conclusion_done,
+            "turns_per_participant": state.turns_per_participant,
         },
         timeout=None,  # eventualmente si può impostare una TTL
     )

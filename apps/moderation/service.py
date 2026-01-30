@@ -74,6 +74,12 @@ class ModerationService:
         """
         state = load_moderation_state(session_id)
 
+        # Increment turn counter for the speaker
+        if speaker_name:
+            state.turns_per_participant[speaker_name] = (
+                state.turns_per_participant.get(speaker_name, 0) + 1
+            )
+
         # 1) Determinare la modalità di chiamata LLM in base a hard_action
         mode = cls._decide_llm_mode(hard_action, session_phase)
 
@@ -108,8 +114,9 @@ class ModerationService:
             mode=mode,
         )
 
-        # 5) Se l'AI parlerà, aggiornare contatori
-        if ai_should_speak:
+        # 5) Se l'AI parlerà in normal mode, aggiornare contatori
+        # (forced_summary e forced_conclusion non consumano il budget interventi)
+        if ai_should_speak and mode == "normal":
             state.ai_interventions_count += 1
             state.last_ai_intervention_at = datetime.utcnow()
 
@@ -169,6 +176,7 @@ class ModerationService:
         mode: str,
         session_phase: str,
         speaker_name: Optional[str] = None,
+        turns_per_participant: Optional[dict[str, int]] = None,
     ) -> dict:
         """
         Chiamata al LLM secondo il contratto stabilito.
@@ -185,18 +193,31 @@ class ModerationService:
         base_updated_summary = (summary_in + " " + last_turn).strip()
 
         # 1) Preparazione input strutturato per il modello
+        if turns_per_participant is None:
+            turns_per_participant = {}
+
+        total_turns = sum(turns_per_participant.values()) if turns_per_participant else 0
+
         llm_input = {
             "mode": mode,
-            "summary_in": summary_in,
-            "last_turn": last_turn,
-            "session_phase": session_phase,
-            "language": "it",
-            # TODO: recuperare il valore reale dal dominio sessione
-            "participants_count": 3,
-            "speaker_name": speaker_name,
-            "extra_context": {
-                # Per future estensioni (scenario, regole speciali, ecc.)
+            "scenario": {
+                "type": "murder_mystery",
+                "objective": "Discutere gli indizi e scoprire chi è l'assassino",
             },
+            "discussion": {
+                "summary": summary_in,
+                "last_turn": last_turn,
+                "last_speaker": speaker_name,
+            },
+            "participants": {
+                "count": len(turns_per_participant) if turns_per_participant else 3,
+                "turns": turns_per_participant,
+            },
+            "session": {
+                "phase": session_phase,
+                "total_turns": total_turns,
+            },
+            "language": "it",
         }
 
         # Log della request LLM
@@ -213,27 +234,7 @@ class ModerationService:
             client = cls._build_azure_client()
             deployment = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-mini")
 
-            system_prompt = (
-                "Sei un moderatore AI di una discussione di gruppo in italiano. "
-                "Ricevi in input un oggetto JSON con informazioni sulla sessione. "
-                "Devi SEMPRE rispondere con un JSON valido (nessun testo extra), "
-                "con la seguente struttura:\n\n"
-                "{\n"
-                '  "updated_summary": string,\n'
-                '  "should_ai_speak": boolean,\n'
-                '  "message_to_say": string o null,\n'
-                '  "reason": string,\n'
-                '  "intervention_score": number tra 0 e 1\n'
-                "}\n\n"
-                "Regole:\n"
-                "- se mode == 'forced_summary': devi generare un breve riassunto neutro e chiaro "
-                "  della discussione finora e impostare should_ai_speak=true.\n"
-                "- se mode == 'forced_conclusion': devi produrre una conclusione finale, "
-                "  invitando i partecipanti a votare/chiudere, e impostare should_ai_speak=true.\n"
-                "- se mode == 'normal': decidi tu se intervenire. Se non serve, imposta "
-                "  should_ai_speak=false e message_to_say=null.\n"
-                "- Lo stile deve essere breve, neutro, rispettoso, adatto a un moderatore."
-            )
+            system_prompt = cls._build_system_prompt(mode)
 
             response = client.chat.completions.create(
                 model=deployment,
@@ -547,3 +548,108 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
             "updated_summary": summary,
             "message_to_say": message,
         }
+
+    @classmethod
+    def _build_normal_mode_prompt(cls) -> str:
+        """System prompt per la modalità normal - criteri dettagliati di intervento."""
+        return """Sei il moderatore AI di una discussione di gruppo su AIutami.
+
+## Scenario
+I partecipanti stanno giocando a un murder mystery. Il loro obiettivo è discutere gli indizi e scoprire chi è l'assassino.
+
+## Il tuo ruolo
+Sei un facilitatore neutro. Non partecipi alla discussione, non dai opinioni sul caso. Il tuo compito è assicurarti che la conversazione sia equilibrata e produttiva.
+
+## Quando intervenire
+Intervieni SOLO se:
+1. **Monopolizzazione**: Un partecipante ha parlato molti più turni degli altri e continua a dominare
+2. **Esclusione**: Un partecipante non ha quasi mai parlato e nessuno lo coinvolge
+3. **Off-topic evidente**: La discussione deraglia completamente (es. parlano di cose scollegate dal caso)
+4. **Conflitto**: Toni aggressivi, insulti, attacchi personali
+5. **Richiesta diretta**: Qualcuno chiede esplicitamente aiuto al moderatore
+
+NON intervenire per:
+- Off-topic parziali (aspetta che il gruppo si auto-corregga)
+- Silenzi brevi o pause naturali
+- Disaccordi civili (sono parte sana della discussione)
+
+## Stile
+- Tono: gentile, indiretto, mai autoritario
+- Lunghezza: 1-2 frasi (20-30 parole max)
+- Esempi: "Lucia, tu cosa ne pensi di questo indizio?" / "Interessante, ma tornando al caso..."
+
+## Come valutare
+
+Analizza:
+1. Il campo `participants.turns` - chi ha parlato quanto?
+2. Il `last_turn` - c'è qualcosa che richiede intervento?
+3. Il `summary` - la discussione sta procedendo verso l'obiettivo?
+
+Assegna un `intervention_score` da 0 a 1:
+- 0.0-0.3: Tutto ok, nessun problema
+- 0.4-0.6: Situazione da monitorare ma non critica
+- 0.7-0.8: Problema evidente, intervento consigliato
+- 0.9-1.0: Problema grave (insulti, off-topic totale), intervento necessario
+
+Imposta `should_ai_speak: true` SOLO se `intervention_score >= 0.7`
+
+## Output
+
+Rispondi SEMPRE con un JSON valido:
+
+{
+  "updated_summary": "Riassunto aggiornato includendo l'ultimo turno",
+  "should_ai_speak": true/false,
+  "message_to_say": "Il messaggio da dire (null se should_ai_speak=false)",
+  "reason": "monopolization | exclusion | off_topic | conflict | user_request | all_ok",
+  "intervention_score": 0.0-1.0
+}"""
+
+    @classmethod
+    def _build_system_prompt(cls, mode: str) -> str:
+        """
+        Costruisce il system prompt appropriato in base alla modalità.
+
+        Args:
+            mode: "normal", "forced_summary", o "forced_conclusion"
+
+        Returns:
+            System prompt string per il modello LLM
+        """
+        if mode == "normal":
+            return cls._build_normal_mode_prompt()
+        elif mode == "forced_conclusion":
+            return cls._build_forced_conclusion_system_prompt()
+        elif mode == "forced_summary":
+            # Per forced_summary usa un prompt dedicato al riassunto
+            return cls._build_forced_summary_prompt()
+        # Fallback a normal mode per modalità sconosciute
+        return cls._build_normal_mode_prompt()
+
+    @classmethod
+    def _build_forced_summary_prompt(cls) -> str:
+        """System prompt per la modalità forced_summary."""
+        return """Sei il moderatore AI di una discussione di gruppo su AIutami.
+
+Il tuo compito è generare un breve riassunto della discussione finora.
+
+## Istruzioni
+
+1. Leggi il summary esistente e l'ultimo turno
+2. Genera un riassunto aggiornato che includa i nuovi punti emersi
+3. Il riassunto deve essere:
+   - Neutro e oggettivo
+   - Conciso (max 100 parole)
+   - Focalizzato sui punti chiave della discussione
+
+## Output
+
+Rispondi SEMPRE con un JSON valido:
+
+{
+  "updated_summary": "Il riassunto aggiornato della discussione",
+  "should_ai_speak": true,
+  "message_to_say": "Breve ricapitolazione verbale dei punti principali (max 50 parole)",
+  "reason": "forced_summary",
+  "intervention_score": 1.0
+}"""

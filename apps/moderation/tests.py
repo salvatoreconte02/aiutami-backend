@@ -959,6 +959,363 @@ class ReadyToConcludeTests(TestCase):
         self.assertTrue(result.trigger_conclusion)
 
 
+class ModerationStateTurnsPerParticipantTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_initial_state_has_empty_turns_per_participant(self):
+        """Initial ModerationState should have empty turns_per_participant dict."""
+        state = ModerationState.initial()
+        self.assertEqual(state.turns_per_participant, {})
+
+    def test_turns_per_participant_persists_after_save_and_load(self):
+        """turns_per_participant should be saved to and loaded from Redis."""
+        session_id = "test-session-tpp-1"
+
+        state = ModerationState.initial()
+        state.turns_per_participant = {"Mario": 3, "Lucia": 1}
+        save_moderation_state(session_id, state)
+
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(loaded.turns_per_participant, {"Mario": 3, "Lucia": 1})
+
+
+class TurnsPerParticipantIncrementTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_turns_per_participant_incremented_on_turn_end(self, mock_llm):
+        """handle_human_turn_ended should increment turns_per_participant for speaker."""
+        session_id = "test-tpp-increment-1"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": False,
+            "message_to_say": None,
+            "reason": "all_ok",
+            "intervention_score": 0.2,
+        }
+
+        # Initial state with no turns
+        state = ModerationState.initial()
+        save_moderation_state(session_id, state)
+
+        # First turn from Mario
+        ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(loaded.turns_per_participant.get("Mario"), 1)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_turns_per_participant_accumulates(self, mock_llm):
+        """Multiple turns from same speaker should accumulate."""
+        session_id = "test-tpp-increment-2"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": False,
+            "message_to_say": None,
+            "reason": "all_ok",
+            "intervention_score": 0.2,
+        }
+
+        state = ModerationState.initial()
+        state.turns_per_participant = {"Mario": 2}
+        save_moderation_state(session_id, state)
+
+        ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(loaded.turns_per_participant.get("Mario"), 3)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_turns_per_participant_not_incremented_without_speaker_name(self, mock_llm):
+        """If speaker_name is None, turns_per_participant should not change."""
+        session_id = "test-tpp-no-name"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": False,
+            "message_to_say": None,
+            "reason": "all_ok",
+            "intervention_score": 0.2,
+        }
+
+        state = ModerationState.initial()
+        save_moderation_state(session_id, state)
+
+        ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name=None,  # No speaker name
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(loaded.turns_per_participant, {})
+
+
+class AIInterventionCountModeTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_normal_mode_increments_ai_intervention_count(self, mock_llm):
+        """Normal mode AI intervention should increment ai_interventions_count."""
+        session_id = "test-ai-count-1"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Test intervention",
+            "reason": "monopolization",
+            "intervention_score": 0.8,
+        }
+
+        state = ModerationState.initial()
+        state.ai_interventions_count = 0
+        save_moderation_state(session_id, state)
+
+        ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,  # normal mode
+            speaker_name="Mario",
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(loaded.ai_interventions_count, 1)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_forced_summary_does_not_increment_ai_intervention_count(self, mock_llm):
+        """Forced summary should NOT increment ai_interventions_count."""
+        session_id = "test-ai-count-2"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Summary message",
+            "reason": "forced_summary",
+            "intervention_score": 1.0,
+        }
+
+        state = ModerationState.initial()
+        state.ai_interventions_count = 2
+        save_moderation_state(session_id, state)
+
+        ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.FORCED_SUMMARY,
+            speaker_name="Mario",
+        )
+
+        loaded = load_moderation_state(session_id)
+        # Should still be 2, not 3
+        self.assertEqual(loaded.ai_interventions_count, 2)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_forced_conclusion_does_not_increment_ai_intervention_count(self, mock_llm):
+        """Forced conclusion should NOT increment ai_interventions_count."""
+        session_id = "test-ai-count-3"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Conclusion message",
+            "reason": "forced_conclusion",
+            "intervention_score": 1.0,
+        }
+
+        state = ModerationState.initial()
+        state.ai_interventions_count = 3
+        save_moderation_state(session_id, state)
+
+        ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="CONCLUSION",
+            hard_action=HardModerationAction.FORCED_CONCLUSION,
+            speaker_name="Mario",
+        )
+
+        loaded = load_moderation_state(session_id)
+        # Should still be 3, not 4
+        self.assertEqual(loaded.ai_interventions_count, 3)
+
+
+class BuildNormalModePromptTests(TestCase):
+    def test_build_normal_mode_prompt_exists(self):
+        """_build_normal_mode_prompt should exist and return a string."""
+        prompt = ModerationService._build_normal_mode_prompt()
+        self.assertIsInstance(prompt, str)
+        self.assertGreater(len(prompt), 100)
+
+    def test_build_normal_mode_prompt_contains_intervention_criteria(self):
+        """Prompt should contain specific intervention criteria."""
+        prompt = ModerationService._build_normal_mode_prompt()
+
+        # Check for intervention criteria
+        self.assertIn("monopol", prompt.lower())  # monopolization
+        self.assertIn("esclus", prompt.lower())   # exclusion
+        self.assertIn("off-topic", prompt.lower())
+        self.assertIn("conflitt", prompt.lower()) # conflict
+
+    def test_build_normal_mode_prompt_contains_json_output_spec(self):
+        """Prompt should specify JSON output format."""
+        prompt = ModerationService._build_normal_mode_prompt()
+
+        self.assertIn("updated_summary", prompt)
+        self.assertIn("should_ai_speak", prompt)
+        self.assertIn("message_to_say", prompt)
+        self.assertIn("intervention_score", prompt)
+
+    def test_build_normal_mode_prompt_contains_score_thresholds(self):
+        """Prompt should explain intervention_score thresholds."""
+        prompt = ModerationService._build_normal_mode_prompt()
+
+        self.assertIn("0.7", prompt)  # threshold for intervention
+
+
+class BuildSystemPromptTests(TestCase):
+    def test_build_system_prompt_normal_mode(self):
+        """_build_system_prompt('normal') should return normal mode prompt."""
+        prompt = ModerationService._build_system_prompt("normal")
+        # Should contain intervention criteria specific to normal mode
+        self.assertIn("monopol", prompt.lower())
+
+    def test_build_system_prompt_forced_summary_mode(self):
+        """_build_system_prompt('forced_summary') should return appropriate prompt."""
+        prompt = ModerationService._build_system_prompt("forced_summary")
+        self.assertIsInstance(prompt, str)
+        # forced_summary uses the existing generic prompt (for now)
+        self.assertIn("riassunto", prompt.lower())
+
+    def test_build_system_prompt_forced_conclusion_mode(self):
+        """_build_system_prompt('forced_conclusion') should return conclusion prompt."""
+        prompt = ModerationService._build_system_prompt("forced_conclusion")
+        # Should use existing _build_forced_conclusion_system_prompt
+        self.assertIn("conclus", prompt.lower())
+
+    def test_build_system_prompt_unknown_mode_defaults_to_normal(self):
+        """Unknown mode should default to normal mode prompt."""
+        prompt = ModerationService._build_system_prompt("unknown_mode")
+        normal_prompt = ModerationService._build_normal_mode_prompt()
+        self.assertEqual(prompt, normal_prompt)
+
+
+class CallLLMStructuredInputTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch.object(ModerationService, '_build_azure_client')
+    def test_call_llm_sends_structured_input_with_participants(self, mock_client):
+        """_call_llm should send structured input including participants.turns."""
+        # Setup mock
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "updated_summary": "Test summary",
+            "should_ai_speak": False,
+            "message_to_say": None,
+            "reason": "all_ok",
+            "intervention_score": 0.2,
+        })
+        mock_client.return_value.chat.completions.create.return_value = mock_response
+
+        # Create state with turns_per_participant
+        turns_per_participant = {"Mario": 5, "Lucia": 2}
+
+        # Call _call_llm with state
+        ModerationService._call_llm(
+            summary_in="Test summary",
+            last_turn="Test turn",
+            mode="normal",
+            session_phase="ACTIVE",
+            speaker_name="Mario",
+            turns_per_participant=turns_per_participant,
+        )
+
+        # Verify the call was made
+        mock_client.return_value.chat.completions.create.assert_called_once()
+        call_args = mock_client.return_value.chat.completions.create.call_args
+
+        # Extract the user message content
+        messages = call_args[1]['messages']
+        user_message = messages[1]['content']
+        user_data = json.loads(user_message)
+
+        # Verify structured input
+        self.assertIn("participants", user_data)
+        self.assertIn("turns", user_data["participants"])
+        self.assertEqual(user_data["participants"]["turns"], {"Mario": 5, "Lucia": 2})
+
+    @patch.object(ModerationService, '_build_azure_client')
+    def test_call_llm_uses_normal_mode_prompt(self, mock_client):
+        """_call_llm in normal mode should use _build_normal_mode_prompt."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "updated_summary": "Test",
+            "should_ai_speak": False,
+            "message_to_say": None,
+            "reason": "all_ok",
+            "intervention_score": 0.1,
+        })
+        mock_client.return_value.chat.completions.create.return_value = mock_response
+
+        ModerationService._call_llm(
+            summary_in="Test",
+            last_turn="Turn",
+            mode="normal",
+            session_phase="ACTIVE",
+            speaker_name="Mario",
+            turns_per_participant={},
+        )
+
+        call_args = mock_client.return_value.chat.completions.create.call_args
+        messages = call_args[1]['messages']
+        system_prompt = messages[0]['content']
+
+        # Should contain intervention criteria from normal mode prompt
+        self.assertIn("monopol", system_prompt.lower())
+        self.assertIn("intervention_score", system_prompt)
+
+
 class ModerationStateConclusionReasonTests(TestCase):
     def setUp(self):
         cache.clear()
