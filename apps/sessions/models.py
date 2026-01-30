@@ -36,6 +36,11 @@ class SessionEventType(models.TextChoices):
     CLOSED_AUTO = "CLOSED_AUTO", "Closed (auto)"
 
 
+# Hardcoded suspects for Murder Mystery MVP
+MURDER_MYSTERY_SUSPECTS = ["Eddie", "Mickey", "Billy"]
+MURDER_MYSTERY_GUILTY = "Eddie"
+
+
 class Session(models.Model):
     """
     Contenitore della stanza vocale e del suo ciclo di vita.
@@ -75,6 +80,11 @@ class Session(models.Model):
         blank=True,
         null=True,
         help_text="Summary finale della sessione dal moderatore AI"
+    )
+    report_text = models.TextField(
+        blank=True,
+        default="",
+        help_text="Testo del report generato da LLM alla chiusura"
     )
 
     class Meta:
@@ -216,3 +226,34 @@ class SessionEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.session_id} - {self.type}"
+
+
+class SessionVote(models.Model):
+    """
+    Voto di un partecipante per il colpevole (Murder Mystery).
+    Un solo voto per partecipante per sessione.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    session = models.ForeignKey(
+        Session,
+        on_delete=models.CASCADE,
+        related_name="votes"
+    )
+    participant = models.ForeignKey(
+        SessionParticipant,
+        on_delete=models.CASCADE,
+        related_name="votes"
+    )
+    suspect_chosen = models.CharField(max_length=32)  # "Eddie", "Mickey", "Billy"
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "session_vote"
+        unique_together = [("session", "participant")]
+        indexes = [
+            models.Index(fields=["session"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.participant.user_id} voted {self.suspect_chosen} in {self.session_id}"

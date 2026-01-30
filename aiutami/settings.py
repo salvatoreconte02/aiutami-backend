@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     # "apps.moderation",
     # "apps.realtime",
      "apps.asr.apps.AsrConfig",
+     "apps.reports",
     # "apps.notifications",
     # "apps.audit",
     # "apps.exports",

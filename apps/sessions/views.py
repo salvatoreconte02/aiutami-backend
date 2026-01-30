@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
-from .models import Session, SessionParticipant, SessionState
+from .models import Session, SessionParticipant, SessionState, SessionVote, MURDER_MYSTERY_SUSPECTS, MURDER_MYSTERY_GUILTY
 from .services import close_session
 from .serializers import (
     InvitationCreateSerializer,
@@ -374,3 +374,196 @@ class SessionDebugForceCloseView(APIView):
         )
 
         return Response(detail_data)
+
+
+class SessionVoteView(APIView):
+    """
+    POST /api/sessions/{session_id}/vote/
+    Registra il voto del partecipante per il colpevole (Murder Mystery).
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, session_id: str):
+        session = get_object_or_404(Session, pk=session_id)
+
+        # Check session state
+        if session.state != SessionState.CONCLUSION:
+            return Response(
+                {"detail": "La sessione non è in fase di votazione."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # Check user is participant
+        try:
+            participant = SessionParticipant.objects.get(
+                session=session, user=request.user
+            )
+        except SessionParticipant.DoesNotExist:
+            return Response(
+                {"detail": "Non sei un partecipante di questa sessione."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Validate suspect
+        suspect = request.data.get("suspect")
+        if suspect not in MURDER_MYSTERY_SUSPECTS:
+            return Response(
+                {"detail": f"Sospetto non valido. Scegli tra: {', '.join(MURDER_MYSTERY_SUSPECTS)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Check if already voted
+        if SessionVote.objects.filter(session=session, participant=participant).exists():
+            return Response(
+                {"detail": "Hai già votato."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Create vote
+        SessionVote.objects.create(
+            session=session,
+            participant=participant,
+            suspect_chosen=suspect,
+        )
+
+        # Count votes
+        total_participants = SessionParticipant.objects.filter(session=session).count()
+        votes_cast = SessionVote.objects.filter(session=session).count()
+
+        # Broadcast VOTE_CAST event
+        _broadcast_session_event(
+            session_id=str(session.id),
+            event_type="VOTE_CAST",
+            payload={"user_id": request.user.id},
+        )
+
+        # Check if all voted
+        if votes_cast == total_participants:
+            # Build results payload
+            votes = SessionVote.objects.filter(session=session).select_related(
+                "participant__user"
+            )
+            results = []
+            correct_count = 0
+            for vote in votes:
+                is_correct = vote.suspect_chosen == MURDER_MYSTERY_GUILTY
+                if is_correct:
+                    correct_count += 1
+                results.append({
+                    "user_id": vote.participant.user_id,
+                    "username": getattr(vote.participant.user, "display_name", None)
+                               or vote.participant.user.get_username(),
+                    "chose": vote.suspect_chosen,
+                    "correct": is_correct,
+                })
+
+            success_rate = int((correct_count / total_participants) * 100)
+
+            # Broadcast ALL_VOTED with results
+            _broadcast_session_event(
+                session_id=str(session.id),
+                event_type="ALL_VOTED",
+                payload={
+                    "results": results,
+                    "guilty": MURDER_MYSTERY_GUILTY,
+                    "success_rate": success_rate,
+                    "closing_in_seconds": 15,
+                },
+            )
+
+        return Response(
+            {
+                "success": True,
+                "votes_cast": votes_cast,
+                "total_participants": total_participants,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SessionVoteStatusView(APIView):
+    """
+    GET /api/sessions/{session_id}/vote-status/
+    Ritorna lo stato attuale della votazione.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsSessionMember]
+
+    def get(self, request, session_id: str):
+        session = get_object_or_404(Session, pk=session_id)
+        self.check_object_permissions(request, session)
+
+        total_participants = SessionParticipant.objects.filter(session=session).count()
+        votes_cast = SessionVote.objects.filter(session=session).count()
+
+        # Check if current user has voted
+        try:
+            participant = SessionParticipant.objects.get(
+                session=session, user=request.user
+            )
+            has_voted = SessionVote.objects.filter(
+                session=session, participant=participant
+            ).exists()
+        except SessionParticipant.DoesNotExist:
+            has_voted = False
+
+        return Response({
+            "total_participants": total_participants,
+            "votes_cast": votes_cast,
+            "has_current_user_voted": has_voted,
+            "all_voted": votes_cast == total_participants,
+        })
+
+
+class SessionCloseView(APIView):
+    """
+    POST /api/sessions/{session_id}/close/
+    Chiude la sessione anticipatamente (solo host, solo dopo che tutti hanno votato).
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, session_id: str):
+        session = get_object_or_404(Session, pk=session_id)
+
+        # Only host can close
+        if session.host_id != request.user.id:
+            return Response(
+                {"detail": "Solo l'host può chiudere la sessione."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Check session state
+        if session.state != SessionState.CONCLUSION:
+            return Response(
+                {"detail": "La sessione non è in fase di conclusione."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # Check all voted
+        total_participants = SessionParticipant.objects.filter(session=session).count()
+        votes_cast = SessionVote.objects.filter(session=session).count()
+
+        if votes_cast < total_participants:
+            return Response(
+                {"detail": "Non tutti i partecipanti hanno ancora votato."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # Close session (generates report_text via LLM and sets CLOSED)
+        session = close_session(str(session.id))
+
+        # Broadcast SESSION_CLOSED
+        detail_data = SessionDetailSerializer(
+            session,
+            context={"request": request},
+        ).data
+
+        _broadcast_session_event(
+            session_id=str(session.id),
+            event_type="SESSION_CLOSED",
+            payload=detail_data,
+        )
+
+        return Response({
+            "success": True,
+            "session_id": str(session.id),
+        })

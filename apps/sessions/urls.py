@@ -10,7 +10,10 @@ from .views import (
     SessionDetailView,
     SessionStartView,
     SessionDebugForceCloseView,
-    SessionReadyToConcludeView,   # ⬅️ nuovo import
+    SessionReadyToConcludeView,
+    SessionVoteView,
+    SessionVoteStatusView,
+    SessionCloseView,
 )
 
 urlpatterns = [
@@ -26,6 +29,23 @@ urlpatterns = [
         SessionReadyToConcludeView.as_view(),
         name="session_ready_to_conclude",
     ),  # POST /<id>/ready_to_conclude/
+
+    # Votazione
+    path(
+        "<uuid:session_id>/vote/",
+        SessionVoteView.as_view(),
+        name="session_vote",
+    ),  # POST /<id>/vote/
+    path(
+        "<uuid:session_id>/vote-status/",
+        SessionVoteStatusView.as_view(),
+        name="session_vote_status",
+    ),  # GET /<id>/vote-status/
+    path(
+        "<uuid:session_id>/close/",
+        SessionCloseView.as_view(),
+        name="session_close",
+    ),  # POST /<id>/close/
 
     # Partecipanti
     path(
