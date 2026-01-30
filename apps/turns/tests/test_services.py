@@ -1,6 +1,7 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from unittest.mock import patch
 
 from apps.turns.services import (
     TurnManager,
@@ -72,7 +73,8 @@ class TurnManagerTests(TestCase):
         - user1 parla
         - user2 si prenota
         - user1 termina
-        - si apre la finestra prioritaria per user2
+        - La finestra prioritaria non si apre subito (aspetta fine moderazione)
+        - Dopo la moderazione, la finestra viene aperta con start_reservation_window
         - user2 inizia a parlare dalla prenotazione
         """
         # user1 inizia a parlare
@@ -87,11 +89,19 @@ class TurnManagerTests(TestCase):
         end_result = TurnManager.end_speak(self.session_id, self.user1)
         self.assertTrue(end_result.success)
         self.assertEqual(end_result.state.state, TURN_STATE_IDLE)
-        self.assertIsNotNone(end_result.state.reservation_expires_at)
 
         event_types = [e.type for e in end_result.events]
         self.assertIn("HUMAN_ENDED", event_types)
-        self.assertIn("RESERVATION_WINDOW_STARTED", event_types)
+        # La finestra di priorità NON si apre subito (aspetta fine moderazione)
+        self.assertNotIn("RESERVATION_WINDOW_STARTED", event_types)
+        # La prenotazione esiste ma non ha ancora una scadenza
+        self.assertEqual(end_result.state.reservation_user_id, self.user2.id)
+        self.assertIsNone(end_result.state.reservation_expires_at)
+
+        # Dopo la moderazione, la finestra viene aperta manualmente
+        window_event = TurnManager.start_reservation_window(self.session_id)
+        self.assertIsNotNone(window_event)
+        self.assertEqual(window_event.type, "RESERVATION_WINDOW_STARTED")
 
         # user2 parla sfruttando la prenotazione
         speak_result = TurnManager.request_speak(self.session_id, self.user2)
@@ -127,3 +137,24 @@ class TurnManagerTests(TestCase):
 
         event_types = [e.type for e in end_result.events]
         self.assertIn("AI_ENDED", event_types)
+
+
+class TurnManagerConclusionTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.user1 = User.objects.create_user(
+            username="user1", email="user1@example.com", password="pass"
+        )
+        self.session_id = "session-conclusion-test-1"
+
+    def test_request_speak_blocked_in_conclusion_phase(self):
+        """
+        Human turns should be blocked when session is in CONCLUSION phase.
+        """
+        # We mock _get_session_phase to return CONCLUSION
+        with patch.object(TurnManager, '_get_session_phase', return_value='CONCLUSION'):
+            result = TurnManager.request_speak(self.session_id, self.user1)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_code, "SESSION_IN_CONCLUSION")
+        self.assertIn("conclusione", result.error_detail.lower())

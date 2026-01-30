@@ -163,6 +163,17 @@ class TurnManager:
                 error_detail="È in corso una fase di moderazione: attendere che il moderatore termini.",
             )
 
+        # Block turns during CONCLUSION phase
+        session_phase = cls._get_session_phase(session_id)
+        if session_phase == "CONCLUSION":
+            return TurnResult(
+                success=False,
+                state=state,
+                events=events,
+                error_code="SESSION_IN_CONCLUSION",
+                error_detail="La sessione è in fase di conclusione. Non è possibile prendere la parola.",
+            )
+
         expired_event = cls._expire_reservation_if_needed(state)
         if expired_event is not None:
             events.append(expired_event)
@@ -583,3 +594,16 @@ class TurnManager:
                 "window_seconds": PRIORITY_WINDOW_SECONDS,
             },
         )
+
+    @classmethod
+    def _get_session_phase(cls, session_id: str) -> Optional[str]:
+        """
+        Recupera la fase corrente della sessione dal database.
+        Returns None se la sessione non esiste o se l'ID non è valido.
+        """
+        from apps.sessions.models import Session
+        from django.core.exceptions import ValidationError
+        try:
+            return Session.objects.values_list("state", flat=True).get(id=session_id)
+        except (Session.DoesNotExist, ValidationError):
+            return None

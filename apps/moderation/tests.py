@@ -1,3 +1,5 @@
+import json
+
 from django.test import TestCase
 from django.core.cache import cache
 
@@ -943,6 +945,84 @@ class ReadyToConcludeTests(TestCase):
         )
         # Should trigger conclusion (4/4)
         self.assertTrue(result.trigger_conclusion)
+
+
+class ModerationStateConclusionReasonTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_moderation_state_has_conclusion_reason_field(self):
+        """ModerationState should have conclusion_reason field."""
+        state = ModerationState.initial()
+        self.assertIsNone(state.conclusion_reason)
+
+    def test_conclusion_reason_persists_after_save_and_load(self):
+        """conclusion_reason should persist in Redis."""
+        session_id = "test-conclusion-reason-1"
+
+        state = ModerationState.initial()
+        state.conclusion_reason = "timer_expired"
+        save_moderation_state(session_id, state)
+
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(loaded.conclusion_reason, "timer_expired")
+
+
+class ForcedConclusionLLMTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch.object(ModerationService, '_build_azure_client')
+    def test_call_llm_for_conclusion_returns_expected_structure(self, mock_client):
+        """call_llm_for_conclusion should return expected dict structure."""
+        # Mock the Azure response
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Closing message",
+            "reason": "forced_conclusion",
+            "intervention_score": 1.0,
+        })
+        mock_client.return_value.chat.completions.create.return_value = mock_response
+
+        result = ModerationService.call_llm_for_conclusion(
+            summary_in="Discussion summary",
+            conclusion_reason="all_participants_ready",
+            session_duration_minutes=25,
+        )
+
+        self.assertIn("updated_summary", result)
+        self.assertIn("message_to_say", result)
+        self.assertTrue(result["should_ai_speak"])
+        self.assertIsNotNone(result["message_to_say"])
+
+    def test_call_llm_for_conclusion_fallback_timer_expired(self):
+        """Fallback for conclusion_reason='timer_expired' should mention time."""
+        result = ModerationService._fallback_forced_conclusion(
+            summary="Test summary",
+            conclusion_reason="timer_expired",
+        )
+
+        self.assertIn("terminato", result["message_to_say"].lower())
+        self.assertTrue(result["should_ai_speak"])
+
+    def test_call_llm_for_conclusion_fallback_all_ready(self):
+        """Fallback for conclusion_reason='all_participants_ready' should mention decision."""
+        result = ModerationService._fallback_forced_conclusion(
+            summary="Test summary",
+            conclusion_reason="all_participants_ready",
+        )
+
+        self.assertIn("deciso", result["message_to_say"].lower())
+        self.assertTrue(result["should_ai_speak"])
 
 
 class InactiveUserTests(TestCase):

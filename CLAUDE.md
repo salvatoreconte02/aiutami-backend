@@ -81,3 +81,11 @@ AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_OPENAI_API_VERSION
 - `docs/specs/` - Functional specifications (sessions_v1_spec.md, turns_v1_spec.md)
 - `docs/adr/` - Architecture Decision Records
 - `docs/redis/` - Redis key schema
+- `docs/plans/` - Implementation plans for multi-task features
+
+## Executing Plans
+
+Quando si esegue un piano con `/superpowers:execute-plan`:
+- **Limite contesto ~55%**: Quando la conversazione raggiunge circa il 55% del contesto, committare i progressi e aprire una nuova sessione
+- **Checklist nel piano**: I piani hanno una checklist finale con `[x]` per i task completati. Claude riprende dal primo `[ ]`
+- **Ripresa**: Riaprire con lo stesso comando `/superpowers:execute-plan <path-to-plan.md>` per continuare

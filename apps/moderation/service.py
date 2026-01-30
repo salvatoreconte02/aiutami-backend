@@ -403,3 +403,156 @@ class ModerationService:
 
         # Se si arriva qui, l'intervento AI è consentito.
         return True, llm_message
+
+    @classmethod
+    def call_llm_for_conclusion(
+        cls,
+        *,
+        summary_in: str,
+        conclusion_reason: str,  # "timer_expired" or "all_participants_ready"
+        session_duration_minutes: int = 30,
+    ) -> dict:
+        """
+        Chiamata LLM dedicata per FORCED_CONCLUSION.
+
+        A differenza di _call_llm(), non richiede last_turn o speaker_name
+        perché viene chiamata alla transizione, non dopo un turno.
+
+        Returns dict with:
+        - updated_summary
+        - should_ai_speak (always True)
+        - message_to_say
+        - reason
+        - intervention_score
+        """
+        logger.info(
+            "[MODERATION][LLM][CONCLUSION_REQUEST] reason=%s duration=%d",
+            conclusion_reason,
+            session_duration_minutes,
+        )
+
+        try:
+            client = cls._build_azure_client()
+            deployment = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-mini")
+
+            system_prompt = cls._build_forced_conclusion_system_prompt()
+
+            llm_input = {
+                "mode": "forced_conclusion",
+                "summary_in": summary_in,
+                "conclusion_reason": conclusion_reason,
+                "session_duration_minutes": session_duration_minutes,
+                "scenario": {
+                    "type": "murder_mystery",
+                    "vote_action": "selezionare il colpevole",
+                    "vote_outcome": "scoprirete se avete indovinato l'assassino"
+                },
+                "language": "it",
+            }
+
+            response = client.chat.completions.create(
+                model=deployment,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": json.dumps(llm_input, ensure_ascii=False)},
+                ],
+                temperature=0.5,  # Slightly higher for warmer tone
+                max_tokens=512,
+            )
+
+            raw_output = response.choices[0].message.content
+            if isinstance(raw_output, list):
+                raw_output = "".join(part.get("text", "") for part in raw_output)
+
+        except Exception as e:
+            logger.warning("[MODERATION][LLM][CONCLUSION_ERROR] error=%s", str(e))
+            return cls._fallback_forced_conclusion(summary_in, conclusion_reason)
+
+        try:
+            parsed = json.loads(raw_output)
+        except Exception as e:
+            logger.warning(
+                "[MODERATION][LLM][CONCLUSION_PARSE_ERROR] raw=%r error=%s",
+                raw_output, str(e)
+            )
+            return cls._fallback_forced_conclusion(summary_in, conclusion_reason)
+
+        logger.info(
+            "[MODERATION][LLM][CONCLUSION_RESPONSE] message=%r",
+            parsed.get("message_to_say", "")[:50],
+        )
+
+        return {
+            "updated_summary": parsed.get("updated_summary", summary_in),
+            "should_ai_speak": True,  # Always speak in forced_conclusion
+            "message_to_say": parsed.get("message_to_say"),
+            "reason": parsed.get("reason", "forced_conclusion"),
+            "intervention_score": 1.0,
+        }
+
+    @classmethod
+    def _build_forced_conclusion_system_prompt(cls) -> str:
+        """Prompt di sistema per FORCED_CONCLUSION."""
+        return """Sei il moderatore AI di AIutami, una piattaforma per discussioni di gruppo moderate.
+
+La sessione sta per concludersi e devi generare il messaggio finale di chiusura.
+
+## Il tuo compito
+
+Genera un messaggio che:
+1. **Riassuma la discussione** - Parti dal summary fornito e adattalo per un contesto di chiusura. Evidenzia i punti chiave emersi, le posizioni principali, eventuali accordi o disaccordi.
+
+2. **Dia istruzioni per il voto** - Spiega chiaramente cosa devono fare i partecipanti (es. selezionare il colpevole) e cosa succederà dopo (es. quando tutti avranno votato, vedranno i risultati).
+
+3. **Ringrazi i partecipanti** - Concludi con un ringraziamento generale per aver usato AIutami per la moderazione.
+
+## Tono e stile
+
+- **Caldo e coinvolgente**: non freddo o robotico
+- **Valorizza la partecipazione**: fai sentire che la discussione è stata significativa
+- **Lunghezza**: 100-150 parole (circa 30-60 secondi di parlato)
+
+## Adatta il tono al motivo della conclusione
+
+- Se `conclusion_reason == "timer_expired"`: il tempo è terminato, usa un tono che riconosca il lavoro svolto nonostante il limite di tempo
+- Se `conclusion_reason == "all_participants_ready"`: i partecipanti hanno scelto di concludere, valorizza la loro decisione
+
+## Output
+
+Rispondi SOLO con un JSON valido:
+
+{
+    "updated_summary": "Il riassunto finale della discussione",
+    "should_ai_speak": true,
+    "message_to_say": "Il messaggio completo da pronunciare",
+    "reason": "forced_conclusion",
+    "intervention_score": 1.0
+}
+
+IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ringraziamento) in un unico messaggio fluido e ben collegato."""
+
+    @classmethod
+    def _fallback_forced_conclusion(cls, summary: str, conclusion_reason: str) -> dict:
+        """
+        Messaggio di fallback se la chiamata LLM per conclusion fallisce.
+        """
+        if conclusion_reason == "timer_expired":
+            intro = "Il tempo a disposizione è terminato."
+        else:
+            intro = "Avete deciso di procedere alla votazione."
+
+        message = (
+            f"{intro} "
+            f"Ecco un breve riepilogo della vostra discussione: {summary}. "
+            f"Ora è il momento di selezionare chi pensate sia il colpevole. "
+            f"Quando tutti avranno votato, scoprirete se avete indovinato. "
+            f"Grazie per aver usato AIutami per la vostra sessione!"
+        )
+
+        return {
+            "updated_summary": summary,
+            "should_ai_speak": True,
+            "message_to_say": message,
+            "reason": "forced_conclusion_fallback",
+            "intervention_score": 1.0,
+        }

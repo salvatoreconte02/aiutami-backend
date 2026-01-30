@@ -23,6 +23,7 @@ class ModerationState:
     human_turns_since_last_summary: int
     ai_interventions_count: int
     last_ai_intervention_at: Optional[datetime]
+    conclusion_reason: Optional[str]  # "timer_expired" or "all_participants_ready"
     forced_conclusion_done: bool  # True dopo il primo FORCED_CONCLUSION
 
     @classmethod
@@ -32,6 +33,7 @@ class ModerationState:
             human_turns_since_last_summary=0,
             ai_interventions_count=0,
             last_ai_intervention_at=None,
+            conclusion_reason=None,
             forced_conclusion_done=False,
         )
 
@@ -60,6 +62,7 @@ def load_moderation_state(session_id: int | str) -> ModerationState:
         ),
         ai_interventions_count=data.get("ai_interventions_count", 0),
         last_ai_intervention_at=data.get("last_ai_intervention_at"),
+        conclusion_reason=data.get("conclusion_reason"),
         forced_conclusion_done=data.get("forced_conclusion_done", False),
     )
 
@@ -76,6 +79,7 @@ def save_moderation_state(session_id: int | str, state: ModerationState) -> None
             "human_turns_since_last_summary": state.human_turns_since_last_summary,
             "ai_interventions_count": state.ai_interventions_count,
             "last_ai_intervention_at": state.last_ai_intervention_at,
+            "conclusion_reason": state.conclusion_reason,
             "forced_conclusion_done": state.forced_conclusion_done,
         },
         timeout=None,  # eventualmente si può impostare una TTL
