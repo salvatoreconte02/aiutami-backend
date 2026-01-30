@@ -52,6 +52,16 @@ def enqueue_message(
 
     # Django cache non ha rpush nativo, usiamo get/set
     existing = cache.get(key) or []
+
+    # Evita duplicati: se esiste già un messaggio con lo stesso testo, skip
+    for raw in existing:
+        try:
+            data = json.loads(raw)
+            if data.get("text") == text:
+                return  # Messaggio già in coda, non aggiungere duplicato
+        except (json.JSONDecodeError, KeyError):
+            continue
+
     existing.append(json.dumps(message_data))
     cache.set(key, existing, timeout=PENDING_MESSAGES_TTL)
 

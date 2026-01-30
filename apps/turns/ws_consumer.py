@@ -798,11 +798,26 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         Esegue il messaggio TTS e, se trigger_conclusion=True, transiziona a CONCLUSION.
 
         Se qualcuno sta parlando, accoda il messaggio invece di eseguirlo subito.
+
+        NOTA: Questo handler viene chiamato da tutti i consumer nel gruppo (uno per
+        partecipante). Usiamo un lock Redis per garantire che solo uno esegua il TTS.
         """
+        from django.core.cache import cache
         text = event.get("text", "")
         trigger_conclusion = event.get("trigger_conclusion", False)
 
         if text:
+            # Lock per evitare che più consumer eseguano lo stesso messaggio
+            # Usa hash del testo come chiave per identificare lo stesso messaggio
+            lock_key = f"tts_lock:{self.session_id}:{hash(text)}"
+            if not cache.add(lock_key, "1", timeout=30):
+                # Un altro consumer ha già il lock, ignora
+                logger.debug(
+                    "[READY_TO_CONCLUDE][SKIP_DUPLICATE] session=%s text=%s",
+                    self.session_id, text[:50]
+                )
+                return
+
             # Check if someone is speaking - queue if so
             from apps.turns.services import TurnManager
             from apps.moderation.pending_messages import enqueue_message
