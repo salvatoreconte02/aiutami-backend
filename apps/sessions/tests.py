@@ -399,3 +399,258 @@ class CloseSessionEndpointTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data["success"])
         mock_close.assert_called_once()
+
+
+from django.core.cache import cache
+
+
+class CloseSessionReportGenerationTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.user1 = User.objects.create_user(
+            username="host", email="host@example.com", password="pass123"
+        )
+        self.user2 = User.objects.create_user(
+            username="player", email="player@example.com", password="pass123"
+        )
+
+        self.session = Session.objects.create(
+            title="Test Murder Mystery",
+            context=SessionContext.MURDER_MYSTERY,
+            state=SessionState.CONCLUSION,
+            min_size=3,
+            max_size=3,
+            host=self.user1,
+            final_summary="Test discussion summary",
+        )
+        self.p1 = SessionParticipant.objects.create(
+            session=self.session, user=self.user1, role=ParticipantRole.HOST
+        )
+        self.p2 = SessionParticipant.objects.create(
+            session=self.session, user=self.user2, role=ParticipantRole.PARTICIPANT
+        )
+        SessionVote.objects.create(
+            session=self.session, participant=self.p1, suspect_chosen="Eddie"
+        )
+        SessionVote.objects.create(
+            session=self.session, participant=self.p2, suspect_chosen="Mickey"
+        )
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch("apps.reports.llm_service.ReportLLMService.generate_report_text")
+    def test_close_session_generates_report_text(self, mock_llm):
+        """close_session should generate report_text via LLM."""
+        mock_llm.return_value = "Generated report text"
+
+        from apps.sessions.services import close_session
+        session = close_session(str(self.session.id))
+
+        mock_llm.assert_called_once()
+        self.assertEqual(session.report_text, "Generated report text")
+        self.assertEqual(session.state, SessionState.CLOSED)
+
+    @patch("apps.reports.llm_service.ReportLLMService.generate_report_text")
+    def test_close_session_report_data_includes_votes(self, mock_llm):
+        """Report generation data should include vote information."""
+        mock_llm.return_value = "Report"
+
+        from apps.sessions.services import close_session
+        close_session(str(self.session.id))
+
+        # Inspect the call arguments
+        call_args = mock_llm.call_args[0][0]  # First positional arg (data dict)
+        self.assertIn("votes", call_args)
+        self.assertEqual(len(call_args["votes"]), 2)
+        self.assertEqual(call_args["guilty"], "Eddie")
+
+
+class SessionDetailSerializerVotesTests(TestCase):
+    def setUp(self):
+        self.user1 = User.objects.create_user(
+            username="host", email="host@example.com", password="pass123"
+        )
+        self.user2 = User.objects.create_user(
+            username="player", email="player@example.com", password="pass123"
+        )
+
+        self.session = Session.objects.create(
+            title="Test Murder Mystery",
+            context=SessionContext.MURDER_MYSTERY,
+            state=SessionState.CLOSED,
+            min_size=3,
+            max_size=3,
+            host=self.user1,
+        )
+        self.p1 = SessionParticipant.objects.create(
+            session=self.session, user=self.user1, role=ParticipantRole.HOST
+        )
+        self.p2 = SessionParticipant.objects.create(
+            session=self.session, user=self.user2, role=ParticipantRole.PARTICIPANT
+        )
+        SessionVote.objects.create(
+            session=self.session, participant=self.p1, suspect_chosen="Eddie"
+        )
+        SessionVote.objects.create(
+            session=self.session, participant=self.p2, suspect_chosen="Mickey"
+        )
+
+    def test_report_available_true_when_closed(self):
+        """report_available is True when session is CLOSED."""
+        from apps.sessions.serializers import SessionDetailSerializer
+        from rest_framework.test import APIRequestFactory
+
+        factory = APIRequestFactory()
+        request = factory.get('/')
+        request.user = self.user1
+
+        serializer = SessionDetailSerializer(self.session, context={'request': request})
+        self.assertTrue(serializer.data['report_available'])
+
+    def test_report_available_false_when_not_closed(self):
+        """report_available is False when session is not CLOSED."""
+        from apps.sessions.serializers import SessionDetailSerializer
+        from rest_framework.test import APIRequestFactory
+
+        self.session.state = SessionState.ACTIVE
+        self.session.save()
+
+        factory = APIRequestFactory()
+        request = factory.get('/')
+        request.user = self.user1
+
+        serializer = SessionDetailSerializer(self.session, context={'request': request})
+        self.assertFalse(serializer.data['report_available'])
+
+    def test_votes_summary_present_when_closed(self):
+        """votes_summary is present when session is CLOSED."""
+        from apps.sessions.serializers import SessionDetailSerializer
+        from rest_framework.test import APIRequestFactory
+
+        factory = APIRequestFactory()
+        request = factory.get('/')
+        request.user = self.user1
+
+        serializer = SessionDetailSerializer(self.session, context={'request': request})
+
+        self.assertIn('votes_summary', serializer.data)
+        votes_summary = serializer.data['votes_summary']
+        self.assertEqual(len(votes_summary['results']), 2)
+        self.assertEqual(votes_summary['guilty'], 'Eddie')
+        self.assertEqual(votes_summary['success_rate'], 50)
+
+    def test_votes_summary_none_when_not_closed(self):
+        """votes_summary is None when session is not CLOSED."""
+        from apps.sessions.serializers import SessionDetailSerializer
+        from rest_framework.test import APIRequestFactory
+
+        self.session.state = SessionState.ACTIVE
+        self.session.save()
+
+        factory = APIRequestFactory()
+        request = factory.get('/')
+        request.user = self.user1
+
+        serializer = SessionDetailSerializer(self.session, context={'request': request})
+        self.assertIsNone(serializer.data['votes_summary'])
+
+
+class VotingFlowIntegrationTests(APITestCase):
+    """End-to-end test of the voting flow."""
+
+    def setUp(self):
+        cache.clear()
+        self.host = User.objects.create_user(
+            username="host", email="host@example.com", password="pass123"
+        )
+        self.player2 = User.objects.create_user(
+            username="player2", email="p2@example.com", password="pass123"
+        )
+        self.player3 = User.objects.create_user(
+            username="player3", email="p3@example.com", password="pass123"
+        )
+
+        self.session = Session.objects.create(
+            title="Integration Test Session",
+            context=SessionContext.MURDER_MYSTERY,
+            state=SessionState.CONCLUSION,
+            min_size=3,
+            max_size=3,
+            host=self.host,
+            final_summary="Test summary from moderation",
+        )
+        self.p1 = SessionParticipant.objects.create(
+            session=self.session, user=self.host, role=ParticipantRole.HOST
+        )
+        self.p2 = SessionParticipant.objects.create(
+            session=self.session, user=self.player2, role=ParticipantRole.PARTICIPANT
+        )
+        self.p3 = SessionParticipant.objects.create(
+            session=self.session, user=self.player3, role=ParticipantRole.PARTICIPANT
+        )
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch("apps.sessions.views._broadcast_session_event")
+    @patch("apps.reports.llm_service.ReportLLMService.generate_report_text")
+    def test_full_voting_flow(self, mock_llm, mock_broadcast):
+        """Test complete flow: votes -> ALL_VOTED -> close -> download."""
+        mock_llm.return_value = "LLM generated report text"
+
+        # 1. First vote
+        self.client.force_authenticate(user=self.host)
+        response = self.client.post(
+            f"/api/sessions/{self.session.id}/vote/",
+            {"suspect": "Eddie"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        # 2. Second vote
+        self.client.force_authenticate(user=self.player2)
+        response = self.client.post(
+            f"/api/sessions/{self.session.id}/vote/",
+            {"suspect": "Mickey"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        # 3. Third vote (triggers ALL_VOTED)
+        self.client.force_authenticate(user=self.player3)
+        response = self.client.post(
+            f"/api/sessions/{self.session.id}/vote/",
+            {"suspect": "Eddie"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        # Verify ALL_VOTED was broadcast
+        all_voted_calls = [
+            call for call in mock_broadcast.call_args_list
+            if call[1].get("event_type") == "ALL_VOTED"
+        ]
+        self.assertEqual(len(all_voted_calls), 1)
+
+        # 4. Host closes session
+        self.client.force_authenticate(user=self.host)
+        response = self.client.post(f"/api/sessions/{self.session.id}/close/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # Verify session is CLOSED
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.state, SessionState.CLOSED)
+        self.assertEqual(self.session.report_text, "LLM generated report text")
+
+        # 5. Download report
+        response = self.client.get(f"/api/sessions/{self.session.id}/report/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+
+        # 6. Verify session detail includes votes_summary
+        response = self.client.get(f"/api/sessions/{self.session.id}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['report_available'])
+        self.assertIsNotNone(response.data['votes_summary'])
+        self.assertEqual(response.data['votes_summary']['success_rate'], 66)

@@ -14,3 +14,4 @@ daphne
 aiortc
 numpy
 azure-cognitiveservices-speech==1.38.0
+reportlab>=4.0.0

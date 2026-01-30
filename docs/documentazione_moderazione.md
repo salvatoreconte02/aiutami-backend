@@ -1,6 +1,6 @@
 # Documentazione Tecnica — Logica di Moderazione delle Sessioni Vocali
 
-*Versione aggiornata: 2026-01-30 (LLM normal mode redesign)*
+*Versione aggiornata: 2026-01-30 (aggiunta sezione votazione e report)*
 
 ## 1. Obiettivo della moderazione
 
@@ -497,3 +497,60 @@ TTL: 1 ora. I messaggi vengono riprodotti appena il turno torna IDLE.
 │  - priority window                       │
 └──────────────────────────────────────────┘
 ```
+
+---
+
+## 8. Votazione e Report (CONCLUSION → CLOSED)
+
+### 8.1 Flusso Votazione
+
+1. **Entrata in CONCLUSION**: La sessione entra in CONCLUSION (via timer 30min o 3/3 pronti)
+2. **TTS forced_conclusion**: Il moderatore pronuncia il messaggio di chiusura
+3. **AI_ENDED**: Frontend riceve evento e abilita i bottoni di voto
+4. **Voti**: I partecipanti votano uno alla volta
+   - `POST /api/sessions/{id}/vote/` con `{"suspect": "Eddie|Mickey|Billy"}`
+   - Ogni voto genera evento WebSocket `VOTE_CAST`
+5. **ALL_VOTED**: Quando tutti votano, broadcast `ALL_VOTED` con risultati completi
+6. **Countdown**: 15 secondi per visualizzare i risultati
+7. **Chiusura**:
+   - Host può anticipare con `POST /api/sessions/{id}/close/`
+   - Altrimenti timeout automatico (non implementato MVP)
+8. **Report**: LLM genera `report_text`, sessione passa a CLOSED
+
+### 8.2 Endpoint Votazione
+
+| Metodo | Endpoint | Descrizione |
+|--------|----------|-------------|
+| POST | `/api/sessions/{id}/vote/` | Registra voto |
+| GET | `/api/sessions/{id}/vote-status/` | Stato voti |
+| POST | `/api/sessions/{id}/close/` | Chiusura anticipata (host) |
+| GET | `/api/sessions/{id}/report/` | Download PDF |
+
+### 8.3 Costanti MVP
+
+```python
+MURDER_MYSTERY_SUSPECTS = ["Eddie", "Mickey", "Billy"]
+MURDER_MYSTERY_GUILTY = "Eddie"
+REVEAL_TIMEOUT_SECONDS = 15
+```
+
+### 8.4 WebSocket Events
+
+- `VOTE_CAST`: `{"user_id": 123}` - qualcuno ha votato
+- `ALL_VOTED`: risultati completi con `results`, `guilty`, `success_rate`, `closing_in_seconds`
+- `SESSION_CLOSED`: sessione chiusa, redirect a storico
+
+### 8.5 Report PDF
+
+Il report PDF viene generato on-demand quando un partecipante chiama `GET /api/sessions/{id}/report/`.
+
+**Contenuto:**
+- Titolo sessione e data
+- Risultato finale (colpevole, percentuale successo)
+- Tabella voti con esito per partecipante
+- Analisi generata da LLM (se disponibile)
+- Riassunto discussione
+
+**Requisiti:**
+- Solo partecipanti possono scaricare
+- Solo sessioni in stato CLOSED

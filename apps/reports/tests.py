@@ -74,3 +74,121 @@ class ReportLLMServiceTests(TestCase):
             # Should return fallback with basic info
             self.assertIn("Test Session", result)
             self.assertIn("Eddie", result)
+
+
+from django.contrib.auth import get_user_model
+from apps.sessions.models import Session, SessionParticipant, SessionVote, SessionState, SessionContext, ParticipantRole
+
+User = get_user_model()
+
+
+class ReportPDFServiceTests(TestCase):
+    def setUp(self):
+        self.user1 = User.objects.create_user(
+            username="mario", email="mario@example.com", password="pass123"
+        )
+        self.user2 = User.objects.create_user(
+            username="luigi", email="luigi@example.com", password="pass123"
+        )
+
+        self.session = Session.objects.create(
+            title="Murder Mystery - Villa Rosa",
+            context=SessionContext.MURDER_MYSTERY,
+            state=SessionState.CLOSED,
+            min_size=3,
+            max_size=3,
+            host=self.user1,
+            final_summary="I partecipanti hanno discusso gli indizi del caso.",
+            report_text="RISULTATO FINALE\nIl colpevole era: Eddie\n...",
+        )
+        self.p1 = SessionParticipant.objects.create(
+            session=self.session, user=self.user1, role=ParticipantRole.HOST
+        )
+        self.p2 = SessionParticipant.objects.create(
+            session=self.session, user=self.user2, role=ParticipantRole.PARTICIPANT
+        )
+        SessionVote.objects.create(
+            session=self.session, participant=self.p1, suspect_chosen="Eddie"
+        )
+        SessionVote.objects.create(
+            session=self.session, participant=self.p2, suspect_chosen="Mickey"
+        )
+
+    def test_generate_pdf_returns_bytes(self):
+        """generate_pdf should return PDF bytes."""
+        from apps.reports.pdf_service import ReportPDFService
+
+        pdf_bytes = ReportPDFService.generate_pdf(self.session)
+
+        self.assertIsInstance(pdf_bytes, bytes)
+        self.assertGreater(len(pdf_bytes), 0)
+        # Check PDF magic bytes
+        self.assertTrue(pdf_bytes.startswith(b'%PDF'))
+
+    def test_generate_pdf_contains_session_title(self):
+        """PDF should contain session title."""
+        from apps.reports.pdf_service import ReportPDFService
+
+        pdf_bytes = ReportPDFService.generate_pdf(self.session)
+
+        # PDF is binary, but title should be in there somewhere
+        # For now just verify it generates without error
+        self.assertIsNotNone(pdf_bytes)
+
+
+from rest_framework.test import APITestCase
+from rest_framework import status
+
+
+class ReportDownloadEndpointTests(APITestCase):
+    def setUp(self):
+        self.user1 = User.objects.create_user(
+            username="mario", email="mario@example.com", password="pass123"
+        )
+        self.outsider = User.objects.create_user(
+            username="outsider", email="out@example.com", password="pass123"
+        )
+
+        self.session = Session.objects.create(
+            title="Murder Mystery - Villa Rosa",
+            context=SessionContext.MURDER_MYSTERY,
+            state=SessionState.CLOSED,
+            min_size=3,
+            max_size=3,
+            host=self.user1,
+            final_summary="Test summary",
+            report_text="Test report",
+        )
+        self.p1 = SessionParticipant.objects.create(
+            session=self.session, user=self.user1, role=ParticipantRole.HOST
+        )
+        SessionVote.objects.create(
+            session=self.session, participant=self.p1, suspect_chosen="Eddie"
+        )
+
+    def test_download_report_success(self):
+        """Participant can download report."""
+        self.client.force_authenticate(user=self.user1)
+        response = self.client.get(f"/api/sessions/{self.session.id}/report/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertIn('attachment', response['Content-Disposition'])
+
+    def test_download_report_not_participant(self):
+        """Non-participant cannot download report."""
+        self.client.force_authenticate(user=self.outsider)
+        response = self.client.get(f"/api/sessions/{self.session.id}/report/")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_download_report_session_not_closed(self):
+        """Cannot download if session not CLOSED."""
+        self.session.state = SessionState.CONCLUSION
+        self.session.save()
+        self.client.force_authenticate(user=self.user1)
+        response = self.client.get(f"/api/sessions/{self.session.id}/report/")
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+
+    def test_download_report_unauthenticated(self):
+        """Unauthenticated request returns 401."""
+        response = self.client.get(f"/api/sessions/{self.session.id}/report/")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)

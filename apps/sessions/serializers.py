@@ -16,6 +16,8 @@ from .models import (
     SessionEventType,
     SessionState,
     SessionParticipant,
+    SessionVote,
+    MURDER_MYSTERY_GUILTY,
 )
 
 
@@ -135,6 +137,8 @@ class SessionDetailSerializer(serializers.ModelSerializer):
     me = serializers.SerializerMethodField()
     host = serializers.SerializerMethodField()
     invite_url = serializers.SerializerMethodField()
+    report_available = serializers.SerializerMethodField()
+    votes_summary = serializers.SerializerMethodField()
 
     class Meta:
         model = Session
@@ -153,6 +157,8 @@ class SessionDetailSerializer(serializers.ModelSerializer):
             "started_at",
             "conclusion_at",
             "ended_at",
+            "report_available",
+            "votes_summary",
         )
         read_only_fields = fields
 
@@ -180,6 +186,40 @@ class SessionDetailSerializer(serializers.ModelSerializer):
             return ""
         inv = obj.invitations.order_by("-created_at").only("token").first()
         return _build_invite_url(request, inv.token) if inv else ""
+
+    def get_report_available(self, obj: Session) -> bool:
+        """Report is available when session is CLOSED."""
+        return obj.state == SessionState.CLOSED
+
+    def get_votes_summary(self, obj: Session) -> Optional[Dict[str, Any]]:
+        """Returns vote results summary when session is CLOSED."""
+        if obj.state != SessionState.CLOSED:
+            return None
+
+        votes = SessionVote.objects.filter(session=obj).select_related("participant__user")
+        results = []
+        correct_count = 0
+
+        for vote in votes:
+            username = getattr(vote.participant.user, "display_name", None) or vote.participant.user.get_username()
+            is_correct = vote.suspect_chosen == MURDER_MYSTERY_GUILTY
+            if is_correct:
+                correct_count += 1
+            results.append({
+                "user_id": vote.participant.user_id,
+                "username": username,
+                "chose": vote.suspect_chosen,
+                "correct": is_correct,
+            })
+
+        total = len(results)
+        success_rate = int((correct_count / total) * 100) if total > 0 else 0
+
+        return {
+            "results": results,
+            "guilty": MURDER_MYSTERY_GUILTY,
+            "success_rate": success_rate,
+        }
 
 
 # -------------------------

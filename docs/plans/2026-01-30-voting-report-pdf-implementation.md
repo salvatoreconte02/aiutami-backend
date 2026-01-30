@@ -2332,9 +2332,9 @@ git commit -m "test(sessions): add full voting flow integration test"
 - [x] Task 4: Implement ALL_VOTED Broadcast and 15s Countdown Logic
 - [x] Task 5: Implement Close Session Endpoint (POST /sessions/{id}/close/)
 - [x] Task 6: Create Reports App with LLM Service
-- [ ] Task 7: Create PDF Service with ReportLab
-- [ ] Task 8: Implement Report Download Endpoint (GET /sessions/{id}/report/)
-- [ ] Task 9: Integrate LLM Report Generation into close_session
-- [ ] Task 10: Update SessionDetailSerializer with report_available and votes_summary
-- [ ] Task 11: Run Full Test Suite and Update Documentation
-- [ ] Task 12: Integration Test - Full Flow
+- [x] Task 7: Create PDF Service with ReportLab
+- [x] Task 8: Implement Report Download Endpoint (GET /sessions/{id}/report/)
+- [x] Task 9: Integrate LLM Report Generation into close_session
+- [x] Task 10: Update SessionDetailSerializer with report_available and votes_summary
+- [x] Task 11: Run Full Test Suite and Update Documentation
+- [x] Task 12: Integration Test - Full Flow
