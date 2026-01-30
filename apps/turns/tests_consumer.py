@@ -57,10 +57,7 @@ class ExecuteForcedConclusionTests(TestCase):
         # Setup mock LLM response
         mock_llm.return_value = {
             "updated_summary": "Final summary",
-            "should_ai_speak": True,
             "message_to_say": "Closing message",
-            "reason": "forced_conclusion",
-            "intervention_score": 1.0,
         }
 
         # This is a unit test - we just verify the method signature exists

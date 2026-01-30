@@ -484,10 +484,7 @@ class ModerationService:
 
         return {
             "updated_summary": parsed.get("updated_summary", summary_in),
-            "should_ai_speak": True,  # Always speak in forced_conclusion
             "message_to_say": parsed.get("message_to_say"),
-            "reason": parsed.get("reason", "forced_conclusion"),
-            "intervention_score": 1.0,
         }
 
     @classmethod
@@ -523,10 +520,7 @@ Rispondi SOLO con un JSON valido:
 
 {
     "updated_summary": "Il riassunto finale della discussione",
-    "should_ai_speak": true,
-    "message_to_say": "Il messaggio completo da pronunciare",
-    "reason": "forced_conclusion",
-    "intervention_score": 1.0
+    "message_to_say": "Il messaggio completo da pronunciare"
 }
 
 IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ringraziamento) in un unico messaggio fluido e ben collegato."""
@@ -551,8 +545,5 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
 
         return {
             "updated_summary": summary,
-            "should_ai_speak": True,
             "message_to_say": message,
-            "reason": "forced_conclusion_fallback",
-            "intervention_score": 1.0,
         }

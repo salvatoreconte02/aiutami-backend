@@ -36,7 +36,7 @@ class ForcedConclusionIntegrationTests(TestCase):
         # Setup mock LLM response
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = '{"updated_summary": "Final", "should_ai_speak": true, "message_to_say": "Closing", "reason": "forced_conclusion", "intervention_score": 1.0}'
+        mock_response.choices[0].message.content = '{"updated_summary": "Final", "message_to_say": "Closing"}'
         mock_client.return_value.chat.completions.create.return_value = mock_response
 
         # Setup moderation state
@@ -53,7 +53,6 @@ class ForcedConclusionIntegrationTests(TestCase):
         )
 
         # Verify result
-        self.assertTrue(result["should_ai_speak"])
         self.assertIsNotNone(result["message_to_say"])
 
         # Simulate marking as done

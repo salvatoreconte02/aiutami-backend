@@ -998,10 +998,7 @@ class ForcedConclusionLLMTests(TestCase):
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = json.dumps({
             "updated_summary": "Test summary",
-            "should_ai_speak": True,
             "message_to_say": "Closing message",
-            "reason": "forced_conclusion",
-            "intervention_score": 1.0,
         })
         mock_client.return_value.chat.completions.create.return_value = mock_response
 
@@ -1013,7 +1010,6 @@ class ForcedConclusionLLMTests(TestCase):
 
         self.assertIn("updated_summary", result)
         self.assertIn("message_to_say", result)
-        self.assertTrue(result["should_ai_speak"])
         self.assertIsNotNone(result["message_to_say"])
 
     def test_call_llm_for_conclusion_fallback_timer_expired(self):
@@ -1024,7 +1020,6 @@ class ForcedConclusionLLMTests(TestCase):
         )
 
         self.assertIn("terminato", result["message_to_say"].lower())
-        self.assertTrue(result["should_ai_speak"])
 
     def test_call_llm_for_conclusion_fallback_all_ready(self):
         """Fallback for conclusion_reason='all_participants_ready' should mention decision."""
@@ -1034,7 +1029,6 @@ class ForcedConclusionLLMTests(TestCase):
         )
 
         self.assertIn("deciso", result["message_to_say"].lower())
-        self.assertTrue(result["should_ai_speak"])
 
 
 class InactiveUserTests(TestCase):
