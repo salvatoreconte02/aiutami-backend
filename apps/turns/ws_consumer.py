@@ -239,8 +239,9 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             return
 
         from apps.turns.services import TurnManager
+        from channels.db import database_sync_to_async
 
-        result = TurnManager.request_speak(self.session_id, user)
+        result = await database_sync_to_async(TurnManager.request_speak)(self.session_id, user)
 
         # 🔹 Se il turno umano è effettivamente partito, si aggiorna lo stato dei timer.
         if result.success:
