@@ -497,6 +497,8 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
             # 7) Gestione transizione a CONCLUSION (timer 30 min scaduto)
             if decision.should_transition_to_conclusion:
+                # Set the reason for conclusion before transitioning
+                await self._set_conclusion_reason("timer_expired")
                 transitioned = await self._transition_session_to_conclusion()
                 if transitioned:
                     # Broadcast del cambio di stato sessione
@@ -507,6 +509,8 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                             "new_state": "CONCLUSION",
                         },
                     )
+                    # Execute FORCED_CONCLUSION immediately
+                    await self._execute_forced_conclusion()
 
             # 8) Flush messaggi TTS pendenti (accodati durante la moderazione)
             await self._flush_pending_tts_messages()
@@ -791,15 +795,39 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         """
         Handler per messaggi ready_to_conclude inviati dal view.
         Esegue il messaggio TTS e, se trigger_conclusion=True, transiziona a CONCLUSION.
+
+        Se qualcuno sta parlando, accoda il messaggio invece di eseguirlo subito.
         """
         text = event.get("text", "")
         trigger_conclusion = event.get("trigger_conclusion", False)
 
         if text:
-            await self._execute_tts_message(text)
+            # Check if someone is speaking - queue if so
+            from apps.turns.services import TurnManager
+            from apps.moderation.pending_messages import enqueue_message
 
-        # Se tutti erano pronti (3/3), transiziona a CONCLUSION dopo il TTS
+            state = TurnManager.get_state_only(self.session_id)
+            if state and state.state != "IDLE":
+                # Queue the message for later execution
+                enqueue_message(
+                    self.session_id,
+                    text,
+                    "READY_TO_CONCLUDE",
+                    trigger_conclusion=trigger_conclusion,
+                )
+                logger.info(
+                    "[READY_TO_CONCLUDE][QUEUED] session=%s trigger_conclusion=%s",
+                    self.session_id, trigger_conclusion
+                )
+                return  # Don't execute TTS or transition now
+            else:
+                # Execute TTS immediately
+                await self._execute_tts_message(text)
+
+        # Only transition if we executed immediately (not queued)
         if trigger_conclusion:
+            # Set the reason for conclusion before transitioning
+            await self._set_conclusion_reason("all_participants_ready")
             transitioned = await self._transition_session_to_conclusion()
             if transitioned:
                 await self.channel_layer.group_send(
@@ -810,6 +838,8 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                         "new_state": "CONCLUSION",
                     },
                 )
+                # Execute FORCED_CONCLUSION immediately
+                await self._execute_forced_conclusion()
 
     # -------------------------------------------------------------------------
     # CHECKS UTILI (sync → async)
@@ -921,6 +951,74 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             pass
         return False
 
+    async def _execute_forced_conclusion(self) -> None:
+        """
+        Esegue il trigger FORCED_CONCLUSION immediatamente dopo la transizione.
+        Chiama l'LLM per generare il messaggio di chiusura.
+        """
+        from apps.moderation.state import load_moderation_state, save_moderation_state
+        from apps.moderation.service import ModerationService
+
+        # Load moderation state
+        state = await database_sync_to_async(load_moderation_state)(self.session_id)
+
+        if state.forced_conclusion_done:
+            logger.info("[FORCED_CONCLUSION][SKIP] session=%s already done", self.session_id)
+            return
+
+        logger.info("[FORCED_CONCLUSION][START] session=%s", self.session_id)
+
+        # Determine conclusion reason
+        conclusion_reason = state.conclusion_reason or "timer_expired"
+
+        # Get session duration
+        try:
+            duration_minutes = await self._get_session_duration_minutes()
+        except Exception:
+            duration_minutes = 30
+
+        # Call LLM with forced_conclusion mode
+        result = await database_sync_to_async(ModerationService.call_llm_for_conclusion)(
+            summary_in=state.summary,
+            conclusion_reason=conclusion_reason,
+            session_duration_minutes=duration_minutes,
+        )
+
+        # Execute TTS message
+        if result.get("message_to_say"):
+            await self._execute_tts_message(result["message_to_say"])
+
+        # Mark as done
+        state.forced_conclusion_done = True
+        state.summary = result.get("updated_summary", state.summary)
+        await database_sync_to_async(save_moderation_state)(self.session_id, state)
+
+        logger.info("[FORCED_CONCLUSION][END] session=%s", self.session_id)
+
+    @database_sync_to_async
+    def _get_session_duration_minutes(self) -> int:
+        """Calcola la durata della sessione in minuti."""
+        from apps.sessions.models import Session
+        from django.utils import timezone
+
+        try:
+            session = Session.objects.get(pk=self.session_id)
+            if session.started_at:
+                delta = timezone.now() - session.started_at
+                return int(delta.total_seconds() / 60)
+        except Session.DoesNotExist:
+            pass
+        return 30  # Default
+
+    @database_sync_to_async
+    def _set_conclusion_reason(self, reason: str) -> None:
+        """Imposta il motivo della conclusione nello stato di moderazione."""
+        from apps.moderation.state import load_moderation_state, save_moderation_state
+
+        state = load_moderation_state(self.session_id)
+        state.conclusion_reason = reason
+        save_moderation_state(self.session_id, state)
+
     # -------------------------------------------------------------------------
     # Background trigger task lifecycle
     # -------------------------------------------------------------------------
@@ -1026,6 +1124,8 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 # NON transizionare se il messaggio TTS è stato accodato - la transizione
                 # avverrà quando il messaggio viene eseguito in _flush_pending_tts_messages
                 if trig_result.should_transition_to_conclusion and not message_was_queued:
+                    # Set the reason for conclusion before transitioning
+                    await self._set_conclusion_reason("timer_expired")
                     transitioned = await database_sync_to_async(self._transition_session_to_conclusion)()
                     if transitioned:
                         logger.info("[TRIGGER_LOOP][TRANSITION] session=%s -> CONCLUSION", session_id)
@@ -1037,6 +1137,8 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                                 "new_state": "CONCLUSION",
                             },
                         )
+                        # Execute FORCED_CONCLUSION immediately
+                        await self._execute_forced_conclusion()
 
                 # Svuota coda messaggi pendenti se IDLE
                 await self._flush_pending_tts_messages()

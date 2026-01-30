@@ -153,15 +153,10 @@ def evaluate_triggers_on_human_turn_end(
     if _should_force_summary(moderation_state):
         hard_action = HardModerationAction.FORCED_SUMMARY
 
-    # 2) Trigger hard: fase di conclusione (FORCED_CONCLUSION)
-    if _should_force_conclusion(
-        session_id=session_id,
-        session_phase=session_phase,
-        moderation_state=moderation_state,
-    ):
-        hard_action = HardModerationAction.FORCED_CONCLUSION
+    # NOTE: FORCED_CONCLUSION trigger removed - now executed immediately at session
+    # transition via _execute_forced_conclusion() in ws_consumer.py
 
-    # 3) Trigger meccanici legati allo stato corrente
+    # 2) Trigger meccanici legati allo stato corrente
     static_messages.extend(
         _collect_static_messages_for_current_state(
             session_id=session_id,
@@ -253,11 +248,15 @@ def _should_force_conclusion(
     moderation_state: ModerationState,
 ) -> bool:
     """
-    Determina se scatta il trigger hard di conclusione.
+    DEPRECATED: No longer used in post-turn evaluation.
+    FORCED_CONCLUSION is now triggered immediately at session transition
+    via _execute_forced_conclusion() in ws_consumer.py.
 
-    Condizioni:
-    - la sessione deve essere già in fase "CONCLUSION"
-    - la conclusione forzata non deve essere già stata eseguita
+    Kept for reference only.
+
+    Original logic:
+    - Fires when session is in CONCLUSION phase
+    - Only fires once (checks forced_conclusion_done flag)
     """
     if session_phase != "CONCLUSION":
         return False

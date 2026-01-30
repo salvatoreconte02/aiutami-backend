@@ -93,11 +93,10 @@ class ForcedConclusionOnlyOnceTests(TestCase):
 
     @patch('apps.moderation.triggers._get_next_reserved_speaker_name', return_value=None)
     @patch('apps.moderation.triggers._get_ready_to_conclude_status', return_value=(0, 3))
-    def test_forced_conclusion_fires_when_not_done(self, mock_ready, mock_reserved):
-        """FORCED_CONCLUSION should fire on first human turn in CONCLUSION phase."""
+    def test_forced_conclusion_no_longer_fires_at_turn_end(self, mock_ready, mock_reserved):
+        """FORCED_CONCLUSION no longer fires on human turn end (moved to transition)."""
         session_id = "test-session-fc-1"
 
-        # Setup: state with forced_conclusion_done=False
         state = ModerationState.initial()
         save_moderation_state(session_id, state)
 
@@ -108,26 +107,39 @@ class ForcedConclusionOnlyOnceTests(TestCase):
             moderation_state=state,
         )
 
-        self.assertEqual(result.hard_action, HardModerationAction.FORCED_CONCLUSION)
+        # Should NOT return FORCED_CONCLUSION (now handled at transition)
+        self.assertNotEqual(result.hard_action, HardModerationAction.FORCED_CONCLUSION)
+
+
+class ForcedConclusionNotInPostTurnTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
 
     @patch('apps.moderation.triggers._get_next_reserved_speaker_name', return_value=None)
     @patch('apps.moderation.triggers._get_ready_to_conclude_status', return_value=(0, 3))
-    def test_forced_conclusion_does_not_fire_when_already_done(self, mock_ready, mock_reserved):
-        """FORCED_CONCLUSION should NOT fire if forced_conclusion_done=True."""
-        session_id = "test-session-fc-2"
+    def test_forced_conclusion_not_triggered_at_turn_end_in_conclusion(self, mock_ready, mock_reserved):
+        """FORCED_CONCLUSION should NOT be triggered in evaluate_triggers_on_human_turn_end.
 
-        # Setup: state with forced_conclusion_done=True
+        The redesign moves FORCED_CONCLUSION to session transition time,
+        so it should not appear in post-turn trigger evaluation anymore.
+        """
+        session_id = "test-no-fc-at-turn-1"
+
         state = ModerationState.initial()
-        state.forced_conclusion_done = True
+        state.forced_conclusion_done = False  # Not done yet
         save_moderation_state(session_id, state)
 
         result = evaluate_triggers_on_human_turn_end(
             session_id=session_id,
             user_id=1,
-            session_phase="CONCLUSION",
+            session_phase="CONCLUSION",  # Even in CONCLUSION phase
             moderation_state=state,
         )
 
+        # Should NOT return FORCED_CONCLUSION anymore
         self.assertNotEqual(result.hard_action, HardModerationAction.FORCED_CONCLUSION)
 
 

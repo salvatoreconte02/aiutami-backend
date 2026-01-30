@@ -1198,13 +1198,13 @@ git commit -m "chore(moderation): mark _should_force_conclusion as deprecated"
 - [x] Task 1: Block human turns in CONCLUSION phase
 - [x] Task 2: Add dedicated LLM method for forced conclusion
 - [x] Task 3: Add conclusion_reason to ModerationState
-- [ ] Task 4: Implement _execute_forced_conclusion in consumer
-- [ ] Task 5: Call forced conclusion at session transition
-- [ ] Task 6: Remove FORCED_CONCLUSION from post-turn triggers
-- [ ] Task 7: Fix ready_to_conclude TTS queuing
-- [ ] Task 8: Set conclusion_reason at transition points
-- [ ] Task 9: Integration tests
-- [ ] Task 10: Clean up unused code
+- [x] Task 4: Implement _execute_forced_conclusion in consumer
+- [x] Task 5: Call forced conclusion at session transition
+- [x] Task 6: Remove FORCED_CONCLUSION from post-turn triggers
+- [x] Task 7: Fix ready_to_conclude TTS queuing
+- [x] Task 8: Set conclusion_reason at transition points
+- [x] Task 9: Integration tests
+- [x] Task 10: Clean up unused code
 
 ---
 
