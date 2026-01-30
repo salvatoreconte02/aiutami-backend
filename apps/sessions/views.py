@@ -30,7 +30,7 @@ from .permissions import IsSessionMember
 
 # 🔹 import per i timer di moderazione
 from apps.moderation.timers_state import mark_session_started
-from apps.moderation.triggers import generate_ready_to_conclude_message, _someone_is_currently_speaking
+from apps.moderation.triggers import generate_ready_to_conclude_message
 from apps.moderation.pending_messages import enqueue_message
 
 
@@ -184,32 +184,21 @@ class SessionReadyToConcludeView(APIView):
         total_count = qs.count()
         ready_count = qs.filter(ready_to_conclude=True).count()
 
-        # Genera e invia messaggio (incluso caso 3/3 - la transizione avviene dopo TTS)
+        # Genera e accoda messaggio (incluso caso 3/3 - la transizione avviene dopo TTS)
+        # Il messaggio viene sempre accodato e eseguito da _flush_pending_tts_messages
+        # nel trigger_loop (ogni 5s) o a fine turno. Questo evita errori "No handler"
+        # causati dal group_send a consumer che non supportano trigger.ready_to_conclude.
         if session.state == SessionState.ACTIVE:
             user_name = getattr(request.user, "display_name", None) or request.user.get_username()
             result = generate_ready_to_conclude_message(user_name, ready_count, total_count)
             msg = result.message
 
-            # Verifica se qualcuno sta parlando
-            if _someone_is_currently_speaking(session_id):
-                # Accoda il messaggio (con flag trigger_conclusion)
-                enqueue_message(
-                    session_id,
-                    msg.text,
-                    "READY_TO_CONCLUDE",
-                    trigger_conclusion=result.trigger_conclusion,
-                )
-            else:
-                # Invia messaggio TTS immediatamente via WebSocket
-                channel_layer = get_channel_layer()
-                async_to_sync(channel_layer.group_send)(
-                    f"turns_{session_id}",
-                    {
-                        "type": "trigger.ready_to_conclude",
-                        "text": msg.text,
-                        "trigger_conclusion": result.trigger_conclusion,
-                    },
-                )
+            enqueue_message(
+                session_id,
+                msg.text,
+                "READY_TO_CONCLUDE",
+                trigger_conclusion=result.trigger_conclusion,
+            )
 
         # NOTA: La transizione a CONCLUSION avviene DOPO il TTS nel ws_consumer,
         # non più qui, per uniformare il comportamento con il timer 30min.
