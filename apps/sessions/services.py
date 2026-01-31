@@ -32,6 +32,12 @@ def close_session(session_id: str) -> Session:
         Session aggiornata
     """
     session = Session.objects.get(id=session_id)
+
+    # Early return if already closed (prevents race condition)
+    if session.state == SessionState.CLOSED:
+        logger.info(f"Session {session_id} already closed, skipping")
+        return session
+
     mod_state = None
 
     # 1. Recupera summary da ModerationState (se disponibile)
