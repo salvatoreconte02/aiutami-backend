@@ -3,6 +3,7 @@ Session services - business logic for session management.
 """
 import logging
 from django.core.cache import cache
+from django.db import transaction
 from django.utils import timezone
 
 from apps.sessions.models import (
@@ -31,13 +32,21 @@ def close_session(session_id: str) -> Session:
     Returns:
         Session aggiornata
     """
-    session = Session.objects.get(id=session_id)
+    # Lock row to prevent race condition with parallel close requests
+    with transaction.atomic():
+        session = Session.objects.select_for_update().get(id=session_id)
 
-    # Early return if already closed (prevents race condition)
-    if session.state == SessionState.CLOSED:
-        logger.info(f"Session {session_id} already closed, skipping")
-        return session
+        # Early return if already closed
+        if session.state == SessionState.CLOSED:
+            logger.info(f"Session {session_id} already closed, skipping")
+            return session
 
+        # Mark as CLOSED immediately to block other requests
+        session.state = SessionState.CLOSED
+        session.ended_at = timezone.now()
+        session.save(update_fields=["state", "ended_at"])
+
+    # From here, session is locked as CLOSED - safe to do expensive operations
     mod_state = None
 
     # 1. Recupera summary da ModerationState (se disponibile)
@@ -58,17 +67,11 @@ def close_session(session_id: str) -> Session:
         logger.warning(f"Could not generate report for session {session_id}: {e}")
         session.report_text = ""
 
-    # 3. Aggiorna stato
-    if session.state != SessionState.CLOSED:
-        session.state = SessionState.CLOSED
-        session.ended_at = timezone.now()
-
-        # Determina quali campi aggiornare
-        update_fields = ["state", "ended_at", "report_text"]
-        if session.final_summary:
-            update_fields.append("final_summary")
-
-        session.save(update_fields=update_fields)
+    # 3. Salva report e summary (stato già aggiornato sopra)
+    update_fields = ["report_text"]
+    if session.final_summary:
+        update_fields.append("final_summary")
+    session.save(update_fields=update_fields)
 
     # 4. Cleanup Redis keys
     _cleanup_session_redis_keys(session_id)
