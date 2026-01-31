@@ -502,12 +502,14 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 await self._set_conclusion_reason("timer_expired")
                 transitioned = await self._transition_session_to_conclusion()
                 if transitioned:
-                    # Broadcast del cambio di stato sessione
+                    # Broadcast del cambio di stato sessione con payload completo
+                    payload = await self._get_session_detail_payload(user=None)
                     await self.channel_layer.group_send(
                         f"sessions_{self.session_id}",
                         {
-                            "type": "session.state_changed",
-                            "new_state": "CONCLUSION",
+                            "type": "sessions.event",
+                            "event_type": "STATE_CHANGED",
+                            "payload": payload,
                         },
                     )
                     # Execute FORCED_CONCLUSION immediately
@@ -970,6 +972,29 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         state.conclusion_reason = reason
         save_moderation_state(self.session_id, state)
 
+    @database_sync_to_async
+    def _get_session_detail_payload(self, user=None) -> dict:
+        """
+        Restituisce il payload serializzato della sessione per il broadcast.
+        Usa SessionDetailSerializer per coerenza con le views.
+
+        Args:
+            user: Utente per il campo "me". Se None, il campo sarà null.
+        """
+        from apps.sessions.models import Session
+        from apps.sessions.serializers import SessionDetailSerializer
+
+        session = Session.objects.get(pk=self.session_id)
+
+        # Crea un context minimale per il serializer
+        # Il serializer usa request.user per il campo "me"
+        class FakeRequest:
+            def __init__(self, user):
+                self.user = user
+
+        context = {"request": FakeRequest(user)} if user else {}
+        return SessionDetailSerializer(session, context=context).data
+
     # -------------------------------------------------------------------------
     # Background trigger task lifecycle
     # -------------------------------------------------------------------------
@@ -1080,12 +1105,14 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     transitioned = await database_sync_to_async(self._transition_session_to_conclusion)()
                     if transitioned:
                         logger.info("[TRIGGER_LOOP][TRANSITION] session=%s -> CONCLUSION", session_id)
+                        # Broadcast del cambio di stato sessione con payload completo
+                        payload = await self._get_session_detail_payload(user=None)
                         await self.channel_layer.group_send(
                             f"sessions_{session_id}",
                             {
                                 "type": "sessions.event",
                                 "event_type": "STATE_CHANGED",
-                                "new_state": "CONCLUSION",
+                                "payload": payload,
                             },
                         )
                         # Execute FORCED_CONCLUSION immediately
@@ -1260,12 +1287,14 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 await self._set_conclusion_reason("all_ready")
                 transitioned = await self._transition_session_to_conclusion()
                 if transitioned:
+                    # Broadcast del cambio di stato sessione con payload completo
+                    payload = await self._get_session_detail_payload(user=None)
                     await self.channel_layer.group_send(
                         f"sessions_{self.session_id}",
                         {
                             "type": "sessions.event",
                             "event_type": "STATE_CHANGED",
-                            "new_state": "CONCLUSION",
+                            "payload": payload,
                         },
                     )
                     # Execute FORCED_CONCLUSION to generate final summary
