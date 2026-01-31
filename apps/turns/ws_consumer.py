@@ -504,6 +504,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 if transitioned:
                     # Broadcast del cambio di stato sessione con payload completo
                     payload = await self._get_session_detail_payload(user=None)
+                    payload["new_state"] = "CONCLUSION"  # retrocompatibilità
                     await self.channel_layer.group_send(
                         f"sessions_{self.session_id}",
                         {
@@ -1107,6 +1108,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                         logger.info("[TRIGGER_LOOP][TRANSITION] session=%s -> CONCLUSION", session_id)
                         # Broadcast del cambio di stato sessione con payload completo
                         payload = await self._get_session_detail_payload(user=None)
+                        payload["new_state"] = "CONCLUSION"  # retrocompatibilità
                         await self.channel_layer.group_send(
                             f"sessions_{session_id}",
                             {
@@ -1289,6 +1291,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 if transitioned:
                     # Broadcast del cambio di stato sessione con payload completo
                     payload = await self._get_session_detail_payload(user=None)
+                    payload["new_state"] = "CONCLUSION"  # retrocompatibilità
                     await self.channel_layer.group_send(
                         f"sessions_{self.session_id}",
                         {
