@@ -166,7 +166,10 @@ class SessionDetailSerializer(serializers.ModelSerializer):
         return {"id": obj.host_id}
 
     def get_me(self, obj: Session) -> Optional[Dict[str, Any]]:
-        user = self.context["request"].user
+        request = self.context.get("request")
+        user = request.user if request else None
+        if not user:
+            return None
         sp = obj.participants.filter(user_id=user.id).only("role").first()
         if not sp:
             return None

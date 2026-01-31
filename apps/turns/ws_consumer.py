@@ -993,7 +993,9 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             def __init__(self, user):
                 self.user = user
 
-        context = {"request": FakeRequest(user)} if user else {}
+        # Passa sempre FakeRequest, anche con user=None
+        # Il serializer gestirà user=None restituendo me=null
+        context = {"request": FakeRequest(user)}
         return SessionDetailSerializer(session, context=context).data
 
     # -------------------------------------------------------------------------
