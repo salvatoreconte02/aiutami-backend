@@ -375,14 +375,15 @@ def _collect_time_based_static_messages(
     state = load_timers_state(session_id)
     now = datetime.utcnow()
 
-    # 1) NO PUSH (silenzio prolungato nella sessione) - TTS
-    if state.last_any_activity_at is not None and not state.no_push_notified:
-        if now - state.last_any_activity_at >= NO_PUSH_THRESHOLD:
-            messages.append(StaticMessage(
-                text=random.choice(NO_PUSH_MESSAGES),
-                use_tts=True,
-            ))
-            state.no_push_notified = True
+    # 1) NO PUSH (silenzio prolungato nella sessione) - TTS, solo in fase ACTIVE
+    if session_phase == SessionStateEnum.ACTIVE:
+        if state.last_any_activity_at is not None and not state.no_push_notified:
+            if now - state.last_any_activity_at >= NO_PUSH_THRESHOLD:
+                messages.append(StaticMessage(
+                    text=random.choice(NO_PUSH_MESSAGES),
+                    use_tts=True,
+                ))
+                state.no_push_notified = True
 
     # 2) TIMER 25'/30' – solo in fase ACTIVE
     if session_phase == SessionStateEnum.ACTIVE and state.session_started_at is not None:
