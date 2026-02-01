@@ -1,6 +1,6 @@
 # Documentazione Tecnica — Logica di Moderazione delle Sessioni Vocali
 
-*Versione aggiornata: 2026-01-30 (aggiunta sezione votazione e report)*
+*Versione aggiornata: 2026-02-01 (specifica FORCED_SUMMARY completa)*
 
 ## 1. Obiettivo della moderazione
 
@@ -240,7 +240,111 @@ Sistema a due livelli con reset dopo sollecito vocale.
 ## 4. Trigger con LLM (da definire)
 
 ### 4.1 Trigger 7: FORCED_SUMMARY
-*Specifica da completare*
+
+| Aspetto | Valore |
+|---------|--------|
+| **Quando scatta** | Ogni N turni umani (attualmente 4) |
+| **Contatore** | `human_turns_since_last_summary` |
+| **Modalità** | TTS (chiamata LLM dedicata) |
+| **Reset contatore** | Dopo ogni FORCED_SUMMARY |
+
+**Comportamento ibrido:**
+
+FORCED_SUMMARY combina due responsabilità in una sola chiamata LLM:
+
+1. **Valutazione problemi** - Come normal mode, rileva monopolizzazione, esclusione, off-topic, conflitto
+2. **Ricapitolazione periodica** - Riassume gli indizi emersi per sospettato nel contesto murder mystery
+
+**Struttura del messaggio generato:**
+
+1. **[Solo se necessario] Correzione gentile** - Se rileva un problema (monopolizzazione, esclusione, off-topic, conflitto)
+2. **Ricapitolazione fluida** - Indizi per sospettato, chi ha detto cosa
+3. **Apertura sul contenuto** - Invita ad approfondire un aspetto non discusso
+
+**Chiamata LLM:**
+
+| Parametro | Valore |
+|-----------|--------|
+| Model | `gpt-4o-mini` (o env `AZURE_OPENAI_MODEL`) |
+| Temperature | `0.4` |
+| Max tokens | `512` |
+
+**Input LLM (JSON):**
+```json
+{
+    "mode": "forced_summary",
+    "summary_in": "Riassunto cumulativo (senza ultimo turno)",
+    "last_turn": {
+        "speaker": "Mario",
+        "text": "Secondo me Eddie aveva un movente economico..."
+    },
+    "participants": {
+        "count": 3,
+        "names": ["Mario", "Lucia", "Paolo"],
+        "turns": {"Mario": 5, "Lucia": 3, "Paolo": 2}
+    },
+    "session": {
+        "total_turns": 10
+    },
+    "scenario": {
+        "type": "murder_mystery",
+        "objective": "Scoprire chi è l'assassino tra i sospettati"
+    },
+    "language": "it"
+}
+```
+
+**Output LLM (JSON):**
+```json
+{
+    "updated_summary": "Riassunto aggiornato includendo l'ultimo turno",
+    "message_to_say": "Il messaggio vocale completo",
+    "correction_reason": "monopolization | exclusion | off_topic | conflict | null"
+}
+```
+
+- `correction_reason` è per logging/analytics, non per filtraggio (trigger mandatory)
+
+**Fallback (se LLM fallisce):**
+
+```python
+{
+    "updated_summary": f"{summary_in} {last_turn_text}",
+    "message_to_say": "Facciamo il punto della situazione. [summary]. Ci sono aspetti che volete approfondire?",
+    "correction_reason": None,
+}
+```
+
+**Gestione stato:**
+
+| Aspetto | Responsabile |
+|---------|--------------|
+| Incremento `turns_per_participant` | Prima della biforcazione (sempre) |
+| Incremento `human_turns_since_last_summary` | Solo se NOT forced_summary |
+| Reset `human_turns_since_last_summary` a 0 | Solo se forced_summary |
+| Update `summary` | Entrambi i path |
+| Salvataggio stato Redis | Entrambi i path |
+
+**Architettura:**
+
+```
+ModerationOrchestrator.handle_human_turn_end()
+    ↓
+evaluate_triggers_on_human_turn_end() → hard_action, should_transition
+    ↓
+┌─────────────────────────────────────────────────────┐
+│ IF hard_action == FORCED_SUMMARY:                   │
+│     _handle_forced_summary()                        │
+│         → call_llm_for_summary()                    │
+│         → reset human_turns_since_last_summary = 0  │
+│         → TTS (sempre, mandatory)                   │
+├─────────────────────────────────────────────────────┤
+│ ELSE:                                               │
+│     ModerationService.handle_human_turn_ended()     │
+│         → _call_llm() (normal mode)                 │
+│         → TTS se score >= 0.7                       │
+└─────────────────────────────────────────────────────┘
+```
 
 ### 4.2 Trigger 8: FORCED_CONCLUSION
 
@@ -414,6 +518,9 @@ Il backend applica filtri aggiuntivi **solo** per mode=normal (i mode forced_sum
 | `AI_INTERVENTION_COOLDOWN` | 30 secondi | Cooldown tra interventi normal mode |
 | `NORMAL_MODE_SCORE_THRESHOLD` | 0.7 | Soglia intervention_score per parlare |
 | `NORMAL_MODE_TEMPERATURE` | 0.4 | Temperature LLM per normal mode |
+| `SUMMARY_TURNS_INTERVAL` | 4 | Turni umani tra ogni FORCED_SUMMARY |
+| `FORCED_SUMMARY_TEMPERATURE` | 0.4 | Temperature LLM per forced_summary |
+| `FORCED_SUMMARY_MAX_TOKENS` | 512 | Max tokens per messaggio summary |
 
 ---
 

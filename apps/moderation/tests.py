@@ -15,7 +15,7 @@ from apps.moderation.pending_messages import (
     dequeue_all_messages,
     has_pending_messages,
 )
-from apps.moderation.service import HardModerationAction, ModerationService
+from apps.moderation.service import HardModerationAction, ModerationService, ModerationResult
 from apps.moderation.orchestrator import FullModerationDecision, ModerationOrchestrator
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta
@@ -1648,6 +1648,295 @@ class ForcedSummaryFallbackTests(TestCase):
         )
 
         self.assertIn("approfondire", result["message_to_say"].lower())
+
+
+class OrchestratorForcedSummaryBifurcationTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch('apps.moderation.orchestrator.evaluate_triggers_on_human_turn_end')
+    @patch.object(ModerationService, 'call_llm_for_summary')
+    @patch.object(ModerationService, 'handle_human_turn_ended')
+    def test_forced_summary_uses_dedicated_method(self, mock_handle, mock_summary, mock_triggers):
+        """When FORCED_SUMMARY triggers, orchestrator should call call_llm_for_summary."""
+        session_id = "test-orch-fs-1"
+
+        # Setup trigger to return FORCED_SUMMARY
+        mock_triggers.return_value = TriggerEvaluationResult(
+            hard_action=HardModerationAction.FORCED_SUMMARY,
+            static_messages_to_speak=[],
+            should_transition_to_conclusion=False,
+        )
+
+        # Setup summary LLM response
+        mock_summary.return_value = {
+            "updated_summary": "Updated summary",
+            "message_to_say": "Recap message",
+            "correction_reason": None,
+        }
+
+        # Setup initial state
+        state = ModerationState.initial()
+        state.turns_per_participant = {"Mario": 3}
+        save_moderation_state(session_id, state)
+
+        decision = ModerationOrchestrator.handle_human_turn_end(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            speaker_name="Mario",
+        )
+
+        # call_llm_for_summary should be called
+        mock_summary.assert_called_once()
+        # handle_human_turn_ended should NOT be called (bifurcation)
+        mock_handle.assert_not_called()
+        # AI should speak
+        self.assertTrue(decision.ai_should_speak)
+        self.assertEqual(decision.ai_message, "Recap message")
+
+    @patch('apps.moderation.orchestrator.evaluate_triggers_on_human_turn_end')
+    @patch.object(ModerationService, 'call_llm_for_summary')
+    @patch.object(ModerationService, 'handle_human_turn_ended')
+    def test_normal_mode_uses_handle_human_turn_ended(self, mock_handle, mock_summary, mock_triggers):
+        """When no hard action, orchestrator should call handle_human_turn_ended (normal path)."""
+        session_id = "test-orch-normal-1"
+
+        mock_triggers.return_value = TriggerEvaluationResult(
+            hard_action=HardModerationAction.NONE,
+            static_messages_to_speak=[],
+            should_transition_to_conclusion=False,
+        )
+
+        mock_handle.return_value = ModerationResult(
+            ai_should_speak=False,
+            ai_message=None,
+            updated_state=ModerationState.initial(),
+        )
+
+        state = ModerationState.initial()
+        save_moderation_state(session_id, state)
+
+        ModerationOrchestrator.handle_human_turn_end(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            speaker_name="Mario",
+        )
+
+        # handle_human_turn_ended should be called (normal path)
+        mock_handle.assert_called_once()
+        # call_llm_for_summary should NOT be called
+        mock_summary.assert_not_called()
+
+
+class SummaryUpdateBothPathsTests(TestCase):
+    """Verify summary is always updated in both FORCED_SUMMARY and normal paths."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch('apps.moderation.orchestrator.evaluate_triggers_on_human_turn_end')
+    @patch.object(ModerationService, 'call_llm_for_summary')
+    def test_forced_summary_updates_summary(self, mock_summary, mock_triggers):
+        """FORCED_SUMMARY path should update moderation_state.summary."""
+        session_id = "test-summary-fs-1"
+
+        mock_triggers.return_value = TriggerEvaluationResult(
+            hard_action=HardModerationAction.FORCED_SUMMARY,
+            static_messages_to_speak=[],
+            should_transition_to_conclusion=False,
+        )
+
+        mock_summary.return_value = {
+            "updated_summary": "NEW SUMMARY FROM LLM",
+            "message_to_say": "Recap",
+            "correction_reason": None,
+        }
+
+        state = ModerationState.initial()
+        state.summary = "OLD SUMMARY"
+        state.human_turns_since_last_summary = 3
+        save_moderation_state(session_id, state)
+
+        ModerationOrchestrator.handle_human_turn_end(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            speaker_name="Mario",
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(loaded.summary, "NEW SUMMARY FROM LLM")
+        # Counter should be reset
+        self.assertEqual(loaded.human_turns_since_last_summary, 0)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_normal_path_updates_summary(self, mock_llm):
+        """Normal path should also update moderation_state.summary."""
+        session_id = "test-summary-normal-1"
+
+        mock_llm.return_value = {
+            "updated_summary": "UPDATED NORMAL SUMMARY",
+            "should_ai_speak": False,
+            "message_to_say": None,
+            "reason": "all_ok",
+            "intervention_score": 0.2,
+        }
+
+        state = ModerationState.initial()
+        state.summary = "OLD SUMMARY"
+        state.human_turns_since_last_summary = 1  # Not enough to trigger FORCED_SUMMARY
+        save_moderation_state(session_id, state)
+
+        ModerationOrchestrator.handle_human_turn_end(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            speaker_name="Mario",
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(loaded.summary, "UPDATED NORMAL SUMMARY")
+        # Counter should be incremented (not reset)
+        self.assertEqual(loaded.human_turns_since_last_summary, 2)
+
+
+class ForcedSummaryCompatibilityWithConclusionTests(TestCase):
+    """Verify FORCED_SUMMARY doesn't break FORCED_CONCLUSION flow."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch('apps.moderation.orchestrator.evaluate_triggers_on_human_turn_end')
+    @patch.object(ModerationService, 'call_llm_for_summary')
+    def test_forced_summary_preserves_transition_flag(self, mock_summary, mock_triggers):
+        """FORCED_SUMMARY path should preserve should_transition_to_conclusion from triggers."""
+        session_id = "test-compat-1"
+
+        # Trigger returns FORCED_SUMMARY AND should_transition_to_conclusion=True
+        # (edge case: timer expired on same turn as summary)
+        mock_triggers.return_value = TriggerEvaluationResult(
+            hard_action=HardModerationAction.FORCED_SUMMARY,
+            static_messages_to_speak=[],
+            should_transition_to_conclusion=True,
+        )
+
+        mock_summary.return_value = {
+            "updated_summary": "Summary",
+            "message_to_say": "Message",
+            "correction_reason": None,
+        }
+
+        state = ModerationState.initial()
+        save_moderation_state(session_id, state)
+
+        decision = ModerationOrchestrator.handle_human_turn_end(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test",
+            session_phase="ACTIVE",
+            speaker_name="Mario",
+        )
+
+        # Transition flag should be preserved
+        self.assertTrue(decision.should_transition_to_conclusion)
+
+    @patch('apps.moderation.orchestrator.evaluate_triggers_on_human_turn_end')
+    @patch.object(ModerationService, 'call_llm_for_summary')
+    def test_forced_summary_leaves_summary_for_conclusion(self, mock_summary, mock_triggers):
+        """After FORCED_SUMMARY, summary should be available for FORCED_CONCLUSION."""
+        session_id = "test-compat-2"
+
+        mock_triggers.return_value = TriggerEvaluationResult(
+            hard_action=HardModerationAction.FORCED_SUMMARY,
+            static_messages_to_speak=[],
+            should_transition_to_conclusion=False,
+        )
+
+        mock_summary.return_value = {
+            "updated_summary": "Complete discussion summary with all clues",
+            "message_to_say": "Recap message",
+            "correction_reason": None,
+        }
+
+        state = ModerationState.initial()
+        state.human_turns_since_last_summary = 3  # Will trigger FORCED_SUMMARY
+        save_moderation_state(session_id, state)
+
+        ModerationOrchestrator.handle_human_turn_end(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Final clue about Eddie",
+            session_phase="ACTIVE",
+            speaker_name="Mario",
+        )
+
+        # Summary should be updated and available for subsequent FORCED_CONCLUSION
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(loaded.summary, "Complete discussion summary with all clues")
+
+
+class TurnsCounterIncrementOrderTests(TestCase):
+    """Verify turns counter is incremented BEFORE LLM call in both paths."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch('apps.moderation.orchestrator.evaluate_triggers_on_human_turn_end')
+    @patch.object(ModerationService, 'call_llm_for_summary')
+    def test_forced_summary_increments_turns_before_llm(self, mock_summary, mock_triggers):
+        """FORCED_SUMMARY should increment turns BEFORE calling LLM."""
+        session_id = "test-turns-order-1"
+
+        mock_triggers.return_value = TriggerEvaluationResult(
+            hard_action=HardModerationAction.FORCED_SUMMARY,
+            static_messages_to_speak=[],
+            should_transition_to_conclusion=False,
+        )
+
+        captured_turns = {}
+
+        def capture_turns(**kwargs):
+            captured_turns.update(kwargs.get("participants_turns", {}))
+            return {
+                "updated_summary": "Summary",
+                "message_to_say": "Message",
+                "correction_reason": None,
+            }
+
+        mock_summary.side_effect = capture_turns
+
+        state = ModerationState.initial()
+        state.turns_per_participant = {"Mario": 3}
+        save_moderation_state(session_id, state)
+
+        ModerationOrchestrator.handle_human_turn_end(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            speaker_name="Mario",
+        )
+
+        # LLM should have received Mario: 4 (incremented BEFORE call)
+        self.assertEqual(captured_turns.get("Mario"), 4)
 
 
 class LLMNormalModeIntegrationTests(TestCase):
