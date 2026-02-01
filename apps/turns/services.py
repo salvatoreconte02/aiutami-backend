@@ -287,9 +287,9 @@ class TurnManager:
         events.append(human_ended)
 
         # NOTA: Se c'è una prenotazione, NON apriamo subito la finestra di priorità.
-        # La finestra verrà aperta DOPO la fase di moderazione (in ai_end se l'AI parla,
-        # oppure manualmente se l'AI non parla). Questo evita che la finestra scada
-        # mentre il moderatore sta parlando.
+        # La finestra verrà aperta SOLO da start_reservation_window() nel finally di
+        # _handle_end_speak, DOPO che tutti i messaggi del moderatore sono stati
+        # pronunciati. Questo evita che la finestra scada prematuramente.
 
         cls._save_state(session_id, state)
         return TurnResult(success=True, state=state, events=events)
@@ -434,21 +434,9 @@ class TurnManager:
         )
         events.append(ai_ended)
 
-        # Se c'era una prenotazione "congelata", ora si apre la finestra di priorità
-        if state.reservation_user_id is not None:
-            now = timezone.now()
-            state.reservation_expires_at = now + timedelta(seconds=PRIORITY_WINDOW_SECONDS)
-            state.version += 1
-
-            reservation_started = TurnEvent(
-                type="RESERVATION_WINDOW_STARTED",
-                payload={
-                    "user_id": state.reservation_user_id,
-                    "expires_at": state.reservation_expires_at.isoformat(),
-                    "window_seconds": PRIORITY_WINDOW_SECONDS,
-                },
-            )
-            events.append(reservation_started)
+        # NOTA: La finestra di prenotazione NON viene aperta qui.
+        # Viene aperta solo da start_reservation_window() nel finally di _handle_end_speak,
+        # DOPO che tutti i messaggi del moderatore sono stati pronunciati.
 
         cls._save_state(session_id, state)
         return TurnResult(success=True, state=state, events=events)
@@ -564,8 +552,8 @@ class TurnManager:
         """
         Apre la finestra di priorità per una prenotazione esistente.
 
-        Da chiamare DOPO la fase di moderazione se l'AI non ha parlato.
-        Se l'AI ha parlato, la finestra viene aperta da ai_end().
+        Da chiamare DOPO la fase di moderazione, nel finally di _handle_end_speak.
+        Questa è l'UNICA funzione che apre la finestra di priorità.
 
         Ritorna l'evento RESERVATION_WINDOW_STARTED se la finestra è stata aperta,
         None altrimenti.

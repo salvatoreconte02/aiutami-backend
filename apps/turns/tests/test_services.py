@@ -138,6 +138,45 @@ class TurnManagerTests(TestCase):
         event_types = [e.type for e in end_result.events]
         self.assertIn("AI_ENDED", event_types)
 
+    def test_ai_end_does_not_open_reservation_window(self):
+        """
+        Verifica che ai_end() NON apra la finestra di prenotazione.
+        La finestra viene aperta solo da start_reservation_window().
+        """
+        # user1 parla
+        result = TurnManager.request_speak(self.session_id, self.user1)
+        self.assertTrue(result.success)
+
+        # user2 si prenota
+        result = TurnManager.request_reserve(self.session_id, self.user2)
+        self.assertTrue(result.success)
+
+        # user1 termina
+        result = TurnManager.end_speak(self.session_id, self.user1)
+        self.assertTrue(result.success)
+
+        # AI parla
+        result = TurnManager.ai_start(self.session_id)
+        self.assertTrue(result.success)
+
+        # AI termina - NON deve aprire la finestra
+        result = TurnManager.ai_end(self.session_id)
+        self.assertTrue(result.success)
+
+        event_types = [e.type for e in result.events]
+        self.assertIn("AI_ENDED", event_types)
+        # La finestra NON deve essere aperta da ai_end
+        self.assertNotIn("RESERVATION_WINDOW_STARTED", event_types)
+
+        # La prenotazione esiste ma non ha ancora una scadenza
+        self.assertEqual(result.state.reservation_user_id, self.user2.id)
+        self.assertIsNone(result.state.reservation_expires_at)
+
+        # Solo start_reservation_window apre la finestra
+        window_event = TurnManager.start_reservation_window(self.session_id)
+        self.assertIsNotNone(window_event)
+        self.assertEqual(window_event.type, "RESERVATION_WINDOW_STARTED")
+
 
 class TurnManagerConclusionTests(TestCase):
     def setUp(self):

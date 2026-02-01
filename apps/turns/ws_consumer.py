@@ -486,7 +486,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     await self._mark_any_activity()
                     await self._broadcast_events(ai_end_res.events)
 
-                    # 6.7 Se ai_end ha aperto una finestra di prenotazione, schedula il timer
+                    # 6.7 (Legacy) ai_end non apre più la finestra, ma lasciamo il check per sicurezza
                     for ev in ai_end_res.events:
                         if ev.type == "RESERVATION_WINDOW_STARTED":
                             asyncio.create_task(
@@ -714,10 +714,18 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             )
             return
 
+        from apps.moderation.pending_messages import enqueue_message
+
         for msg in trig_result.static_messages_to_speak:
             if msg.use_tts:
-                # Messaggio con TTS - esegui come turno AI completo
-                await self._execute_tts_message(msg.text)
+                # Verifica se c'è qualcuno che parla o una finestra di prenotazione attiva
+                state = TurnManager.get_state_only(self.session_id)
+                if state and (state.state != "IDLE" or state.reservation_expires_at is not None):
+                    # Accoda il messaggio
+                    enqueue_message(self.session_id, msg.text, msg.trigger_type or "TRIGGER")
+                else:
+                    # Messaggio con TTS - esegui come turno AI completo
+                    await self._execute_tts_message(msg.text)
             else:
                 # Solo testo - broadcast a tutti i partecipanti
                 payload = {"text": msg.text, "use_tts": False}
@@ -1160,9 +1168,9 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 continue
 
             if msg.use_tts:
-                # Verifica se qualcuno sta parlando
+                # Verifica se qualcuno sta parlando o se c'è una finestra di prenotazione attiva
                 state = TurnManager.get_state_only(self.session_id)
-                if state and state.state != "IDLE":
+                if state and (state.state != "IDLE" or state.reservation_expires_at is not None):
                     # Accoda il messaggio (con trigger_conclusion se applicabile)
                     enqueue_message(
                         self.session_id,
@@ -1255,7 +1263,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             await self._mark_any_activity()
             await self._broadcast_events(ai_end_res.events)
 
-            # Se ai_end ha aperto una finestra di prenotazione, schedula il timer
+            # (Legacy) ai_end non apre più la finestra, ma lasciamo il check per sicurezza
             for ev in ai_end_res.events:
                 if ev.type == "RESERVATION_WINDOW_STARTED":
                     asyncio.create_task(
