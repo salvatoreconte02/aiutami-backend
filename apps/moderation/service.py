@@ -550,6 +550,168 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
             "message_to_say": message,
         }
 
+    # -------------------------------------------------------------------------
+    # FORCED_SUMMARY dedicated LLM call
+    # -------------------------------------------------------------------------
+
+    @classmethod
+    def call_llm_for_summary(
+        cls,
+        *,
+        summary_in: str,
+        last_turn_text: str,
+        last_turn_speaker: Optional[str],
+        participants_turns: dict[str, int],
+        total_turns: int,
+    ) -> dict:
+        """
+        Chiamata LLM dedicata per FORCED_SUMMARY.
+
+        A differenza di _call_llm(), usa un prompt specifico per murder mystery
+        che combina:
+        1. Valutazione problemi (monopolizzazione, esclusione, off-topic, conflitto)
+        2. Ricapitolazione periodica degli indizi
+
+        Returns dict with:
+        - updated_summary
+        - message_to_say
+        - correction_reason (monopolization|exclusion|off_topic|conflict|null)
+        """
+        logger.info(
+            "[MODERATION][LLM][SUMMARY_REQUEST] speaker=%s total_turns=%d",
+            last_turn_speaker,
+            total_turns,
+        )
+
+        llm_input = {
+            "mode": "forced_summary",
+            "summary_in": summary_in,
+            "last_turn": {
+                "speaker": last_turn_speaker,
+                "text": last_turn_text,
+            },
+            "participants": {
+                "count": len(participants_turns),
+                "names": list(participants_turns.keys()),
+                "turns": participants_turns,
+            },
+            "session": {
+                "total_turns": total_turns,
+            },
+            "scenario": {
+                "type": "murder_mystery",
+                "objective": "Scoprire chi è l'assassino tra i sospettati",
+            },
+            "language": "it",
+        }
+
+        try:
+            client = cls._build_azure_client()
+            deployment = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-mini")
+
+            system_prompt = cls._build_forced_summary_system_prompt()
+
+            response = client.chat.completions.create(
+                model=deployment,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": json.dumps(llm_input, ensure_ascii=False)},
+                ],
+                temperature=0.4,
+                max_tokens=512,
+            )
+
+            raw_output = response.choices[0].message.content
+            if isinstance(raw_output, list):
+                raw_output = "".join(part.get("text", "") for part in raw_output)
+
+        except Exception as e:
+            logger.warning("[MODERATION][LLM][SUMMARY_ERROR] error=%s", str(e))
+            return cls._fallback_forced_summary(summary_in, last_turn_text)
+
+        try:
+            parsed = json.loads(raw_output)
+        except Exception as e:
+            logger.warning(
+                "[MODERATION][LLM][SUMMARY_PARSE_ERROR] raw=%r error=%s",
+                raw_output, str(e)
+            )
+            return cls._fallback_forced_summary(summary_in, last_turn_text)
+
+        logger.info(
+            "[MODERATION][LLM][SUMMARY_RESPONSE] correction=%s message=%r",
+            parsed.get("correction_reason"),
+            (parsed.get("message_to_say", "") or "")[:50],
+        )
+
+        return {
+            "updated_summary": parsed.get("updated_summary", summary_in),
+            "message_to_say": parsed.get("message_to_say"),
+            "correction_reason": parsed.get("correction_reason"),
+        }
+
+    @classmethod
+    def _fallback_forced_summary(cls, summary_in: str, last_turn_text: str) -> dict:
+        """
+        Comportamento di riserva se la chiamata LLM per summary fallisce.
+        """
+        combined = f"{summary_in} {last_turn_text}".strip()
+
+        return {
+            "updated_summary": combined,
+            "message_to_say": (
+                "Facciamo il punto della situazione. "
+                f"{combined} "
+                "Ci sono aspetti che volete approfondire?"
+            ),
+            "correction_reason": None,
+        }
+
+    @classmethod
+    def _build_forced_summary_system_prompt(cls) -> str:
+        """System prompt dedicato per FORCED_SUMMARY con comportamento ibrido."""
+        return """Sei il moderatore AI di AIutami, una piattaforma per discussioni di gruppo.
+
+## Scenario
+I partecipanti stanno giocando a un murder mystery. Devono discutere gli indizi e scoprire chi è l'assassino.
+
+## Il tuo compito
+
+Genera un messaggio di ricapitolazione periodica. Parla in modo naturale e coinvolgente, come un facilitatore esperto.
+
+### Struttura del messaggio
+
+1. **[Solo se necessario] Correzione gentile** - Se rilevi un problema (monopolizzazione, esclusione, off-topic, conflitto), inizia con un invito delicato a riequilibrare
+2. **Ricapitolazione fluida** - Riassumi gli indizi emersi in modo discorsivo, menzionando chi ha sollevato cosa e su quale sospettato
+3. **Apertura sul contenuto** - Concludi invitando ad approfondire un aspetto non ancora esplorato
+
+## Criteri per la correzione
+
+Includi una correzione solo se:
+- **Monopolizzazione**: un partecipante ha parlato molto più degli altri (guarda il campo `participants.turns`)
+- **Esclusione**: qualcuno non ha mai parlato o ha pochissimi turni
+- **Off-topic**: discussione lontana dal caso del murder mystery
+- **Conflitto**: toni aggressivi nel contenuto dell'ultimo turno
+
+Se non rilevi problemi, vai diretto alla ricapitolazione senza correzione.
+
+## Tono e stile
+- Caldo e naturale, come un facilitatore esperto
+- Fluido e discorsivo, non a elenco
+- Lunghezza: 60-100 parole (30-45 secondi di parlato)
+
+## Output
+
+Rispondi SOLO con un JSON valido:
+
+{
+    "updated_summary": "Riassunto aggiornato includendo l'ultimo turno",
+    "message_to_say": "Il messaggio vocale completo",
+    "correction_reason": "monopolization | exclusion | off_topic | conflict | null"
+}
+
+IMPORTANTE: `correction_reason` indica il tipo di problema rilevato. Se non c'è problema, usa null."""
+
     @classmethod
     def _build_normal_mode_prompt(cls) -> str:
         """System prompt per la modalità normal - criteri dettagliati di intervento."""

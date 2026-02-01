@@ -1527,6 +1527,129 @@ class InactiveUserTests(TestCase):
         self.assertEqual(len(inactive_msgs), 0)
 
 
+class CallLLMForSummaryTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch.object(ModerationService, '_build_azure_client')
+    def test_call_llm_for_summary_returns_expected_structure(self, mock_client):
+        """call_llm_for_summary should return dict with updated_summary, message_to_say, correction_reason."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "updated_summary": "Updated summary",
+            "message_to_say": "Recap message",
+            "correction_reason": None,
+        })
+        mock_client.return_value.chat.completions.create.return_value = mock_response
+
+        result = ModerationService.call_llm_for_summary(
+            summary_in="Previous summary",
+            last_turn_text="Mario said something about Eddie",
+            last_turn_speaker="Mario",
+            participants_turns={"Mario": 5, "Lucia": 3, "Paolo": 2},
+            total_turns=10,
+        )
+
+        self.assertIn("updated_summary", result)
+        self.assertIn("message_to_say", result)
+        self.assertIn("correction_reason", result)
+        self.assertIsNotNone(result["message_to_say"])
+
+    @patch.object(ModerationService, '_build_azure_client')
+    def test_call_llm_for_summary_uses_fallback_on_api_error(self, mock_client):
+        """call_llm_for_summary should use fallback when Azure API fails."""
+        mock_client.return_value.chat.completions.create.side_effect = Exception("API Error")
+
+        result = ModerationService.call_llm_for_summary(
+            summary_in="Previous summary",
+            last_turn_text="Last turn",
+            last_turn_speaker="Mario",
+            participants_turns={"Mario": 3},
+            total_turns=3,
+        )
+
+        # Should return fallback structure
+        self.assertIn("updated_summary", result)
+        self.assertIn("message_to_say", result)
+        self.assertIn("approfondire", result["message_to_say"].lower())
+        self.assertIsNone(result["correction_reason"])
+
+    @patch.object(ModerationService, '_build_azure_client')
+    def test_call_llm_for_summary_uses_fallback_on_invalid_json(self, mock_client):
+        """call_llm_for_summary should use fallback when LLM returns invalid JSON."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Not valid JSON"
+        mock_client.return_value.chat.completions.create.return_value = mock_response
+
+        result = ModerationService.call_llm_for_summary(
+            summary_in="Previous summary",
+            last_turn_text="Last turn",
+            last_turn_speaker="Mario",
+            participants_turns={"Mario": 3},
+            total_turns=3,
+        )
+
+        self.assertIn("approfondire", result["message_to_say"].lower())
+
+
+class ForcedSummarySystemPromptTests(TestCase):
+    def test_forced_summary_system_prompt_contains_murder_mystery_context(self):
+        """FORCED_SUMMARY prompt should contain murder mystery context."""
+        prompt = ModerationService._build_forced_summary_system_prompt()
+        self.assertIn("murder mystery", prompt.lower())
+
+    def test_forced_summary_system_prompt_contains_hybrid_instructions(self):
+        """FORCED_SUMMARY prompt should mention both correction and recap."""
+        prompt = ModerationService._build_forced_summary_system_prompt()
+        self.assertIn("correzione", prompt.lower())
+        self.assertIn("ricapitolazione", prompt.lower())
+
+    def test_forced_summary_system_prompt_contains_output_format(self):
+        """FORCED_SUMMARY prompt should specify JSON output with correction_reason."""
+        prompt = ModerationService._build_forced_summary_system_prompt()
+        self.assertIn("correction_reason", prompt)
+        self.assertIn("updated_summary", prompt)
+        self.assertIn("message_to_say", prompt)
+
+
+class ForcedSummaryFallbackTests(TestCase):
+    def test_fallback_forced_summary_returns_expected_structure(self):
+        """_fallback_forced_summary should return dict with required fields."""
+        result = ModerationService._fallback_forced_summary(
+            summary_in="Previous discussion",
+            last_turn_text="Mario mentioned Eddie",
+        )
+
+        self.assertIn("updated_summary", result)
+        self.assertIn("message_to_say", result)
+        self.assertIn("correction_reason", result)
+        self.assertIsNone(result["correction_reason"])
+
+    def test_fallback_forced_summary_combines_summary_and_turn(self):
+        """Fallback should combine summary and last turn in updated_summary."""
+        result = ModerationService._fallback_forced_summary(
+            summary_in="Summary A",
+            last_turn_text="Turn B",
+        )
+
+        self.assertIn("Summary A", result["updated_summary"])
+        self.assertIn("Turn B", result["updated_summary"])
+
+    def test_fallback_forced_summary_message_invites_discussion(self):
+        """Fallback message should invite further discussion."""
+        result = ModerationService._fallback_forced_summary(
+            summary_in="Test",
+            last_turn_text="Test turn",
+        )
+
+        self.assertIn("approfondire", result["message_to_say"].lower())
+
+
 class LLMNormalModeIntegrationTests(TestCase):
     """Integration tests for the complete normal mode flow."""
 
