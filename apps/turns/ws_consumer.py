@@ -430,6 +430,10 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     payload = {"text": msg.text, "use_tts": False}
                     if msg.trigger_type:
                         payload["trigger_type"] = msg.trigger_type
+                    if msg.target_user_id:
+                        payload["target_user_id"] = msg.target_user_id
+                    if msg.target_user_name:
+                        payload["target_user_name"] = msg.target_user_name
                     await self.channel_layer.group_send(
                         self.group_name,
                         {
@@ -731,6 +735,10 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 payload = {"text": msg.text, "use_tts": False}
                 if msg.trigger_type:
                     payload["trigger_type"] = msg.trigger_type
+                if msg.target_user_id:
+                    payload["target_user_id"] = msg.target_user_id
+                if msg.target_user_name:
+                    payload["target_user_name"] = msg.target_user_name
                 await self.channel_layer.group_send(
                     self.group_name,
                     {
@@ -1191,6 +1199,10 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 payload = {"text": msg.text, "use_tts": False}
                 if msg.trigger_type:
                     payload["trigger_type"] = msg.trigger_type
+                if msg.target_user_id:
+                    payload["target_user_id"] = msg.target_user_id
+                if msg.target_user_name:
+                    payload["target_user_name"] = msg.target_user_name
                 await self.channel_layer.group_send(
                     self.group_name,
                     {

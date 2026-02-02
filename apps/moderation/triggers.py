@@ -37,13 +37,16 @@ READY_TO_CONCLUDE_ALL_READY_MESSAGES = [
     "Siete tutti pronti. Possiamo avviarci alla fase di conclusione.",
 ]
 
-# Message variants for INACTIVE_USER trigger
+# Message variants for INACTIVE_USER trigger (Level 2: voice, 10 min)
 INACTIVE_VOICE_MESSAGES = [
     "{nome}, se vuoi condividere un'idea, questo è un buon momento per intervenire.",
     "{nome}, non ti abbiamo ancora sentito. Se hai qualcosa da aggiungere, puoi parlare ora.",
     "{nome}, c'è qualcosa che vorresti condividere con il gruppo?",
     "{nome}, se hai un pensiero sulla discussione, sentiti libero di intervenire.",
 ]
+
+# Message for INACTIVE_USER Level 1: private text notification (5 min)
+INACTIVE_TEXT_MESSAGE = "Non intervieni da un po'. Se vuoi condividere qualcosa, questo è un buon momento."
 
 
 @dataclass
@@ -52,6 +55,8 @@ class StaticMessage:
     text: str
     use_tts: bool = True  # True = TTS audio, False = solo testo WebSocket
     trigger_type: Optional[str] = None  # Tipo trigger per identificazione frontend (es. TIMER_25)
+    target_user_id: Optional[int] = None  # Per messaggi privati: ID utente destinatario
+    target_user_name: Optional[str] = None  # Per messaggi privati: nome utente per display
 
 
 @dataclass
@@ -113,6 +118,7 @@ from .timers_state import (
     TIMER_25_THRESHOLD,
     TIMER_30_THRESHOLD,
     INACTIVE_USER_THRESHOLD,
+    INACTIVE_TEXT_THRESHOLD,
     MAX_VOICE_SOLICITS_PER_USER,
 )
 
@@ -407,7 +413,7 @@ def _collect_time_based_static_messages(
             state.timer_30_notified = True
             should_transition_to_conclusion = True
 
-    # 3) UTENTE INATTIVO - TTS (max 2 per utente, timer resets dopo sollecito)
+    # 3) UTENTE INATTIVO - Due livelli di notifica
     if session_phase == SessionStateEnum.ACTIVE and state.session_started_at is not None:
         participants = (
             SessionParticipant.objects
@@ -418,32 +424,68 @@ def _collect_time_based_static_messages(
         for p in participants:
             user_id_str = str(p.user_id)
 
+            # Tempo di riferimento per Level 1 (testo):
+            # ultimo text solicit > ultimo voice solicit > ultimo turno > inizio sessione
+            last_text_solicit = state.last_text_solicit_at.get(user_id_str)
+            last_voice_solicit = state.last_voice_solicit_at.get(user_id_str)
+            last_spoke = state.last_user_speak_at.get(user_id_str)
+
+            if last_text_solicit is not None:
+                reference_time_text = last_text_solicit
+            elif last_voice_solicit is not None:
+                reference_time_text = last_voice_solicit
+            elif last_spoke is not None:
+                reference_time_text = last_spoke
+            else:
+                reference_time_text = state.session_started_at
+
+            if reference_time_text is None:
+                continue
+
+            elapsed_text = now - reference_time_text
+
+            # Level 1: Avviso testuale privato (5 min, ma non oltre 10 min)
+            if INACTIVE_TEXT_THRESHOLD <= elapsed_text < INACTIVE_USER_THRESHOLD:
+                display_name = getattr(p.user, "display_name", None) or p.user.get_username()
+                messages.append(StaticMessage(
+                    text=INACTIVE_TEXT_MESSAGE,
+                    use_tts=False,
+                    trigger_type="INACTIVE_USER_TEXT",
+                    target_user_id=p.user_id,
+                    target_user_name=display_name,
+                ))
+                state.last_text_solicit_at[user_id_str] = now
+                # Un solo utente per ciclo
+                break
+
+            # Level 2: Sollecito vocale pubblico (10 min, max 2 per utente)
+            # Tempo di riferimento per Level 2 (voce):
+            # ultimo voice solicit > ultimo turno > inizio sessione
+            if last_voice_solicit is not None:
+                reference_time_voice = last_voice_solicit
+            elif last_spoke is not None:
+                reference_time_voice = last_spoke
+            else:
+                reference_time_voice = state.session_started_at
+
+            if reference_time_voice is None:
+                continue
+
+            elapsed_voice = now - reference_time_voice
+
             # Controlla limite solleciti vocali
             voice_count = state.voice_solicits_count.get(user_id_str, 0)
             if voice_count >= MAX_VOICE_SOLICITS_PER_USER:
                 continue
 
-            # Tempo di riferimento: ultimo sollecito vocale > ultimo turno > inizio sessione
-            last_voice_solicit = state.last_voice_solicit_at.get(user_id_str)
-            last_spoke = state.last_user_speak_at.get(user_id_str)
-
-            if last_voice_solicit is not None:
-                reference_time = last_voice_solicit
-            elif last_spoke is not None:
-                reference_time = last_spoke
-            else:
-                reference_time = state.session_started_at
-
-            if reference_time is None:
-                continue
-
-            elapsed = now - reference_time
-
-            if elapsed >= INACTIVE_USER_THRESHOLD:
+            if elapsed_voice >= INACTIVE_USER_THRESHOLD:
                 display_name = getattr(p.user, "display_name", None) or p.user.get_username()
                 messages.append(StaticMessage(
                     text=random.choice(INACTIVE_VOICE_MESSAGES).format(nome=display_name),
                     use_tts=True,
+                    trigger_type="INACTIVE_USER_VOICE",
+                    target_user_id=p.user_id,
+                    target_user_name=display_name,
                 ))
                 # Aggiorna contatore e timestamp
                 state.voice_solicits_count[user_id_str] = voice_count + 1

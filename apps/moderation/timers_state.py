@@ -44,6 +44,9 @@ class ModerationTimersState:
     # Ultimo sollecito vocale per utente (per reset timer)
     last_voice_solicit_at: Dict[str, datetime] = field(default_factory=dict)
 
+    # Ultimo sollecito testuale per utente (per reset timer livello 1)
+    last_text_solicit_at: Dict[str, datetime] = field(default_factory=dict)
+
     @classmethod
     def initial(cls) -> "ModerationTimersState":
         """
@@ -75,6 +78,11 @@ class ModerationTimersState:
         # last_voice_solicit_at: dict[str, datetime] -> dict[str, str]
         data["last_voice_solicit_at"] = {
             user_id: _dt_to_str(dt) for user_id, dt in self.last_voice_solicit_at.items()
+        }
+
+        # last_text_solicit_at: dict[str, datetime] -> dict[str, str]
+        data["last_text_solicit_at"] = {
+            user_id: _dt_to_str(dt) for user_id, dt in self.last_text_solicit_at.items()
         }
 
         return data
@@ -109,6 +117,13 @@ class ModerationTimersState:
             if dt is not None:
                 last_voice_solicit_at[user_id] = dt
 
+        raw_last_text_solicit_at: dict[str, Any] = data.get("last_text_solicit_at", {}) or {}
+        last_text_solicit_at: dict[str, datetime] = {}
+        for user_id, ts_str in raw_last_text_solicit_at.items():
+            dt = _str_to_dt(ts_str)
+            if dt is not None:
+                last_text_solicit_at[user_id] = dt
+
         return cls(
             session_started_at=session_started_at,
             last_any_activity_at=last_any_activity_at,
@@ -119,6 +134,7 @@ class ModerationTimersState:
             inactive_notified_user_ids=list(data.get("inactive_notified_user_ids", []) or []),
             voice_solicits_count=dict(data.get("voice_solicits_count", {}) or {}),
             last_voice_solicit_at=last_voice_solicit_at,
+            last_text_solicit_at=last_text_solicit_at,
         )
 
 
@@ -180,6 +196,9 @@ TIMER_30_THRESHOLD = timedelta(minutes=30)     # fine discussione
 
 # Soglia per UTENTE INATTIVO (messaggio vocale)
 INACTIVE_USER_THRESHOLD = timedelta(minutes=10)
+
+# Soglia per UTENTE INATTIVO livello 1 (avviso testuale privato)
+INACTIVE_TEXT_THRESHOLD = timedelta(minutes=5)
 
 # Limite solleciti vocali per utente
 MAX_VOICE_SOLICITS_PER_USER = 2

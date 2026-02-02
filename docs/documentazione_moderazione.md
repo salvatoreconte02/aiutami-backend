@@ -204,6 +204,39 @@ Sistema a due livelli con reset dopo sollecito vocale.
 - 25 min: avviso testuale
 - 30 min: fine sessione
 
+**Payload WebSocket (STATIC_MESSAGE):**
+```json
+// Livello 1 (testo privato)
+{
+  "type": "turns.event",
+  "event_type": "STATIC_MESSAGE",
+  "payload": {
+    "text": "Non intervieni da un po'...",
+    "use_tts": false,
+    "trigger_type": "INACTIVE_USER_TEXT",
+    "target_user_id": 123,
+    "target_user_name": "Mario"
+  }
+}
+
+// Livello 2 (voce pubblica)
+{
+  "type": "turns.event",
+  "event_type": "STATIC_MESSAGE",
+  "payload": {
+    "text": "Mario, se vuoi condividere...",
+    "use_tts": true,
+    "trigger_type": "INACTIVE_USER_VOICE",
+    "target_user_id": 123,
+    "target_user_name": "Mario"
+  }
+}
+```
+
+**Gestione frontend:**
+- Livello 1: Mostra messaggio solo se `current_user.id == target_user_id`
+- Livello 2: Mostra a tutti (è pubblico), `target_user_id` indica chi è il target
+
 ### 3.5 Trigger 5: TIMER 25 Minuti
 
 | Aspetto | Valore |
@@ -507,7 +540,7 @@ Il backend applica filtri aggiuntivi **solo** per mode=normal (i mode forced_sum
 |----------|--------|-------------|
 | `NO_PUSH_THRESHOLD` | 20 secondi | Soglia silenzio per NO PUSH |
 | `INACTIVE_TEXT_THRESHOLD` | 5 minuti | Soglia per avviso testuale inattività |
-| `INACTIVE_VOICE_THRESHOLD` | 10 minuti | Soglia per sollecito vocale inattività |
+| `INACTIVE_USER_THRESHOLD` | 10 minuti | Soglia per sollecito vocale inattività |
 | `MAX_VOICE_SOLICITS_PER_USER` | 2 | Limite solleciti vocali per utente |
 | `TIMER_25_THRESHOLD` | 25 minuti | Avviso tempo rimanente |
 | `TIMER_30_THRESHOLD` | 30 minuti | Fine discussione |
