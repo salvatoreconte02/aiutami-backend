@@ -704,7 +704,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         from apps.turns.services import TurnManager
 
-        trig_result = evaluate_time_based_triggers(
+        trig_result = await database_sync_to_async(evaluate_time_based_triggers)(
             session_id=self.session_id,
             session_phase=session_phase,
         )
