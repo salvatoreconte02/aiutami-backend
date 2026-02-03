@@ -191,8 +191,8 @@ def save_timers_state(session_id: int | str, state: ModerationTimersState) -> No
 # ----------------------------------------------------------------------
 
 NO_PUSH_THRESHOLD = timedelta(seconds=20)      # silenzio 20s
-TIMER_25_THRESHOLD = timedelta(minutes=25)     # avviso 5 minuti rimanenti
-TIMER_30_THRESHOLD = timedelta(minutes=30)     # fine discussione
+TIMER_25_THRESHOLD = timedelta(minutes=10)     # DEBUG: ridotto da 25 per test
+TIMER_30_THRESHOLD = timedelta(minutes=15)     # DEBUG: ridotto da 30 per test
 
 # Soglia per UTENTE INATTIVO (messaggio vocale)
 INACTIVE_USER_THRESHOLD = timedelta(minutes=10)
