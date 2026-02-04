@@ -2238,3 +2238,23 @@ class CooldownBypassTests(TestCase):
 
         # Should speak because cooldown (60s) has expired
         self.assertTrue(result.ai_should_speak)
+
+
+class SomeoneIsSpeakingDuringIntroTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_someone_speaking_true_during_ai_introducing(self):
+        """_someone_is_currently_speaking should return True during AI_INTRODUCING."""
+        from apps.moderation.triggers import _someone_is_currently_speaking
+        from apps.turns.services import TurnManager
+
+        session_id = "test-session-intro"
+        TurnManager.set_introducing(session_id)
+
+        result = _someone_is_currently_speaking(session_id)
+
+        self.assertTrue(result)

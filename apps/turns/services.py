@@ -15,6 +15,7 @@ from django.utils import timezone
 TURN_STATE_IDLE = "IDLE"
 TURN_STATE_HUMAN_SPEAKING = "HUMAN_SPEAKING"
 TURN_STATE_AI_SPEAKING = "AI_SPEAKING"
+TURN_STATE_AI_INTRODUCING = "AI_INTRODUCING"
 
 # Durata (concettuale) della finestra di priorità, in secondi
 PRIORITY_WINDOW_SECONDS = 8
@@ -174,6 +175,16 @@ class TurnManager:
                 error_detail="La sessione è in fase di conclusione. Non è possibile prendere la parola.",
             )
 
+        # Block turns during AI_INTRODUCING (intro in progress)
+        if state.state == TURN_STATE_AI_INTRODUCING:
+            return TurnResult(
+                success=False,
+                state=state,
+                events=events,
+                error_code="INTRO_IN_PROGRESS",
+                error_detail="Il moderatore sta introducendo la sessione.",
+            )
+
         expired_event = cls._expire_reservation_if_needed(state)
         if expired_event is not None:
             events.append(expired_event)
@@ -325,6 +336,16 @@ class TurnManager:
                 events=events,
                 error_code="MODERATION_IN_PROGRESS",
                 error_detail="È in corso una fase di moderazione: attendere che il moderatore termini.",
+            )
+
+        # Block reservations during AI_INTRODUCING (intro in progress)
+        if state.state == TURN_STATE_AI_INTRODUCING:
+            return TurnResult(
+                success=False,
+                state=state,
+                events=events,
+                error_code="INTRO_IN_PROGRESS",
+                error_detail="Il moderatore sta introducendo la sessione.",
             )
 
         # 3) Check stato - prenotazione consentita solo mentre qualcuno sta parlando
@@ -545,6 +566,33 @@ class TurnManager:
             state.moderation_in_progress = value
             state.version += 1
             cls._save_state(session_id, state)
+        return state
+
+    @classmethod
+    def set_introducing(cls, session_id: str) -> TurnState:
+        """
+        Set turn state to AI_INTRODUCING for session intro.
+
+        Called when session transitions from LOBBY to ACTIVE to block
+        all user interactions while the AI moderator speaks the introduction.
+        """
+        state = cls._load_state(session_id)
+        state.state = TURN_STATE_AI_INTRODUCING
+        state.version += 1
+        cls._save_state(session_id, state)
+        return state
+
+    @classmethod
+    def end_introducing(cls, session_id: str) -> TurnState:
+        """
+        End the intro phase and transition to IDLE.
+
+        Called after the AI moderator finishes speaking the introduction.
+        """
+        state = cls._load_state(session_id)
+        state.state = TURN_STATE_IDLE
+        state.version += 1
+        cls._save_state(session_id, state)
         return state
 
     @classmethod

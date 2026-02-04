@@ -1,6 +1,6 @@
 # Documentazione Tecnica — Logica di Moderazione delle Sessioni Vocali
 
-*Versione aggiornata: 2026-02-01 (specifica FORCED_SUMMARY completa)*
+*Versione aggiornata: 2026-02-04 (aggiunto messaggio introduttivo)*
 
 ## 1. Obiettivo della moderazione
 
@@ -699,3 +699,40 @@ Il report PDF viene generato on-demand quando un partecipante chiama `GET /api/s
 **Requisiti:**
 - Solo partecipanti possono scaricare
 - Solo sessioni in stato CLOSED
+
+---
+
+## 9. Messaggio Introduttivo del Moderatore
+
+Quando una sessione passa da LOBBY ad ACTIVE, il moderatore AI pronuncia automaticamente un messaggio di benvenuto che spiega come usare l'applicativo.
+
+### 9.1 Stato AI_INTRODUCING
+
+Durante l'introduzione, lo stato dei turni è `AI_INTRODUCING`:
+- Blocca `request_speak` (ritorna errore `INTRO_IN_PROGRESS`)
+- Blocca `request_reserve` (ritorna errore `INTRO_IN_PROGRESS`)
+- Considerato "qualcuno sta parlando" per i trigger temporali
+- Transiziona a `IDLE` solo quando il TTS finisce
+
+### 9.2 Flusso
+
+1. `SessionStartView.post()` imposta lo stato turni a `AI_INTRODUCING` e marca l'intro come pendente
+2. Il trigger loop (ogni 5s) rileva l'intro pendente
+3. Dopo un delay di ~2.5s, viene generato e pronunciato il messaggio intro via TTS
+4. Al termine del TTS, lo stato transiziona a `IDLE` e i partecipanti possono interagire
+
+### 9.3 Messaggio Template
+
+Il messaggio include i nomi dei partecipanti e le istruzioni per:
+- Usare il pulsante microfono per parlare
+- Prenotarsi se qualcuno sta già parlando
+- Usare "Pronto alla conclusione" quando pronti
+
+### 9.4 Gestione Errori
+
+- Se il TTS fallisce, il messaggio viene inviato come testo via WebSocket
+- Il flag `intro_pending` ha un TTL di 300 secondi come sicurezza
+
+### 9.5 Redis Keys
+
+- `session:intro_pending:{session_id}` - Flag booleano che indica intro pendente (TTL 300s)

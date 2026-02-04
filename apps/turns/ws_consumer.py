@@ -20,6 +20,11 @@ from apps.moderation.orchestrator import ModerationOrchestrator
 from apps.moderation.triggers import evaluate_time_based_triggers
 from apps.tts.service import TTSService
 from apps.webrtc.audio_hub import get_hub, AI_MODERATOR_ID
+from apps.moderation.intro import (
+    has_intro_pending,
+    clear_intro_pending,
+    generate_intro_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1083,6 +1088,13 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
                 logger.debug("[TRIGGER_LOOP][TICK] session=%s", session_id)
 
+                # CHECK INTRO PENDING (before everything else)
+                if has_intro_pending(session_id):
+                    state = TurnManager.get_state_only(session_id)
+                    if state and state.state == "AI_INTRODUCING":
+                        await self._execute_intro_message(session_id)
+                        continue  # Skip rest of loop iteration
+
                 try:
                     session_phase = await self._get_session_state(session_id)
                 except Exception as e:
@@ -1286,6 +1298,94 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     )
 
             logger.info("[TTS_MESSAGE][END] session=%s", self.session_id)
+
+    async def _execute_intro_message(self, session_id: str) -> None:
+        """
+        Execute the AI moderator introduction message.
+
+        Called when a session starts with intro pending.
+        """
+        from apps.turns.services import TurnManager
+
+        logger.info("[INTRO_MESSAGE][START] session=%s", session_id)
+
+        # 1. Brief delay for clients to settle
+        await asyncio.sleep(2.5)
+
+        # 2. Generate message with participant names
+        intro_text = await database_sync_to_async(generate_intro_message)(session_id)
+
+        # 3. Execute TTS (state is already AI_INTRODUCING, no need to change to AI_SPEAKING)
+        hub = get_hub(session_id)
+        hub.init_ai_track()
+        hub.set_speaker(AI_MODERATOR_ID)
+
+        try:
+            tts = TTSService()
+            tts_result = await tts.synthesize_stream(
+                text=intro_text,
+                on_audio_chunk=lambda pcm, samples, sr: self._inject_ai_audio(hub, pcm, samples, sr)
+            )
+            logger.info("[INTRO_MESSAGE][TTS_DONE] session=%s success=%s", session_id, tts_result.success)
+
+            if not tts_result.success:
+                logger.warning("[INTRO_MESSAGE][TTS_FAILED] session=%s error=%s", session_id, tts_result.error)
+                # Fallback to text message
+                await self.channel_layer.group_send(
+                    self.group_name,
+                    {
+                        "type": "turns.event",
+                        "event_type": "STATIC_MESSAGE",
+                        "payload": {"text": intro_text, "use_tts": False},
+                    },
+                )
+
+            # Append to transcript
+            _append_to_session_transcript(session_id, {
+                "type": "ai",
+                "text": intro_text,
+                "trigger": "intro",
+                "timestamp": datetime.utcnow().isoformat()
+            })
+
+        except Exception as e:
+            logger.error("[INTRO_MESSAGE][ERROR] session=%s error=%s", session_id, e, exc_info=True)
+
+        finally:
+            hub.set_speaker(None)
+
+            # 4. Transition to IDLE
+            TurnManager.end_introducing(session_id)
+
+            # 5. Reset NO_PUSH timer (activity just happened)
+            await self._mark_any_activity()
+
+            # 6. Broadcast AI_ENDED event
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "turns.event",
+                    "event_type": "AI_ENDED",
+                    "payload": {},
+                },
+            )
+
+            # 7. Broadcast state change to IDLE
+            state = TurnManager.get_state_only(session_id)
+            if state:
+                await self.channel_layer.group_send(
+                    self.group_name,
+                    {
+                        "type": "turns.event",
+                        "event_type": "STATE_CHANGED",
+                        "payload": state.to_dict(),
+                    },
+                )
+
+            # 8. Remove pending flag
+            clear_intro_pending(session_id)
+
+            logger.info("[INTRO_MESSAGE][END] session=%s", session_id)
 
     async def _flush_pending_tts_messages(self) -> None:
         """

@@ -32,6 +32,8 @@ from .permissions import IsSessionMember
 from apps.moderation.timers_state import mark_session_started
 from apps.moderation.triggers import generate_ready_to_conclude_message
 from apps.moderation.pending_messages import enqueue_message
+from apps.turns.services import TurnManager
+from apps.moderation.intro import set_intro_pending
 
 
 # -------------------------------------------------------------------
@@ -110,6 +112,12 @@ class SessionStartView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         session = serializer.save()
+
+        # Initialize turn state to AI_INTRODUCING (blocks all interactions)
+        TurnManager.set_introducing(session_id=str(session.id))
+
+        # Mark intro as pending (will be executed by trigger loop)
+        set_intro_pending(session_id=str(session.id))
 
         # 🔹 La sessione è appena entrata in ACTIVE:
         #    si inizializzano i timer di moderazione (NO PUSH, TIMER 25'/30').

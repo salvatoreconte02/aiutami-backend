@@ -108,6 +108,7 @@ from apps.turns.services import (
     TurnState,
     TURN_STATE_HUMAN_SPEAKING,
     TURN_STATE_AI_SPEAKING,
+    TURN_STATE_AI_INTRODUCING,
 )
 
 # Import stato timer moderazione
@@ -350,7 +351,7 @@ def _get_ready_to_conclude_status(
 
 def _someone_is_currently_speaking(session_id: int | str) -> bool:
     """
-    Verifica, tramite lo stato dei turni, se c'è un HUMAN_SPEAKING o AI_SPEAKING attivo.
+    Verifica, tramite lo stato dei turni, se c'è un HUMAN_SPEAKING, AI_SPEAKING o AI_INTRODUCING attivo.
     """
     key = f"turns:{session_id}"
     stored = cache.get(key)
@@ -358,7 +359,7 @@ def _someone_is_currently_speaking(session_id: int | str) -> bool:
     if not isinstance(stored, TurnState):
         return False
 
-    return stored.state in (TURN_STATE_HUMAN_SPEAKING, TURN_STATE_AI_SPEAKING)
+    return stored.state in (TURN_STATE_HUMAN_SPEAKING, TURN_STATE_AI_SPEAKING, TURN_STATE_AI_INTRODUCING)
 
 
 def _collect_time_based_static_messages(
