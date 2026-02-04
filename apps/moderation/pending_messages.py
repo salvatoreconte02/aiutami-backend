@@ -53,6 +53,16 @@ def enqueue_message(
     # Django cache non ha rpush nativo, usiamo get/set
     existing = cache.get(key) or []
 
+    # Se c'è già un messaggio con trigger_conclusion, non accodare nulla
+    # La sessione sta per transizionare a CONCLUSION
+    for raw in existing:
+        try:
+            data = json.loads(raw)
+            if data.get("trigger_conclusion"):
+                return  # Sessione in fase di conclusione, ignora nuovi messaggi
+        except (json.JSONDecodeError, KeyError):
+            continue
+
     # Evita duplicati: se esiste già un messaggio con lo stesso testo, skip
     for raw in existing:
         try:

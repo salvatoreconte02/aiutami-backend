@@ -579,6 +579,42 @@ class PendingMessagesTests(TestCase):
 
         self.assertFalse(has_pending_messages(session_id))
 
+    def test_enqueue_blocked_after_trigger_conclusion(self):
+        """New messages should be blocked when trigger_conclusion message exists."""
+        session_id = "test-pending-block-1"
+
+        # Accoda messaggio con trigger_conclusion=True
+        enqueue_message(session_id, "Tutti pronti", "READY_3_3", trigger_conclusion=True)
+
+        # Tenta di accodare altri messaggi
+        enqueue_message(session_id, "NO PUSH message", "NO_PUSH")
+        enqueue_message(session_id, "Another message", "TIMER_25")
+
+        # Verifica che solo il messaggio trigger_conclusion sia in coda
+        messages = dequeue_all_messages(session_id)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].text, "Tutti pronti")
+        self.assertTrue(messages[0].trigger_conclusion)
+
+    def test_enqueue_before_trigger_conclusion_allowed(self):
+        """Messages enqueued before trigger_conclusion should remain in queue."""
+        session_id = "test-pending-block-2"
+
+        # Accoda messaggi normali prima
+        enqueue_message(session_id, "First message", "NO_PUSH")
+        enqueue_message(session_id, "Second message", "TIMER_25")
+
+        # Poi accoda messaggio con trigger_conclusion
+        enqueue_message(session_id, "Tutti pronti", "READY_3_3", trigger_conclusion=True)
+
+        # Verifica che tutti e tre i messaggi siano presenti
+        messages = dequeue_all_messages(session_id)
+        self.assertEqual(len(messages), 3)
+        self.assertEqual(messages[0].text, "First message")
+        self.assertEqual(messages[1].text, "Second message")
+        self.assertEqual(messages[2].text, "Tutti pronti")
+        self.assertTrue(messages[2].trigger_conclusion)
+
 
 class TimeBasedTriggersBgTransitionTests(TestCase):
     """Tests for evaluate_time_based_triggers returning transition flag for timer 30."""

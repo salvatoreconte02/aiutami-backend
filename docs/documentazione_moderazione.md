@@ -580,6 +580,11 @@ class PendingMessage:
 - Applicabile a: trigger "tutti pronti" (3/3), timer 30 minuti
 - La transizione avviene **dopo** la riproduzione del TTS
 
+**Blocco accodamento:**
+- Quando esiste un messaggio con `trigger_conclusion=True` in coda, tutti i nuovi messaggi vengono ignorati
+- Questo garantisce che il messaggio di conclusione sia sempre l'ultimo riprodotto
+- I messaggi già accodati prima del messaggio di conclusione vengono mantenuti
+
 TTL: 1 ora. I messaggi vengono riprodotti appena il turno torna IDLE.
 
 ---
