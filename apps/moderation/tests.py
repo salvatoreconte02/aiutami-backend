@@ -15,7 +15,13 @@ from apps.moderation.pending_messages import (
     dequeue_all_messages,
     has_pending_messages,
 )
-from apps.moderation.service import HardModerationAction, ModerationService, ModerationResult
+from apps.moderation.service import (
+    HardModerationAction,
+    ModerationService,
+    ModerationResult,
+    AI_INTERVENTION_COOLDOWN,
+    COOLDOWN_BYPASS_REASONS,
+)
 from apps.moderation.orchestrator import FullModerationDecision, ModerationOrchestrator
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta
@@ -2034,3 +2040,165 @@ class LLMNormalModeIntegrationTests(TestCase):
         self.assertIn("riassunto", system_prompt.lower())
         # It should NOT contain detailed intervention criteria like monopolization
         self.assertNotIn("monopol", system_prompt.lower())
+
+
+class CooldownBypassTests(TestCase):
+    """Tests for differentiated cooldown behavior based on intervention reason."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_conflict_bypasses_cooldown(self, mock_llm):
+        """Intervento 'conflict' deve bypassare il cooldown."""
+        session_id = "test-cooldown-bypass-1"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Stop, c'è un conflitto",
+            "reason": "conflict",
+            "intervention_score": 0.9,
+        }
+
+        # Set up state with a recent AI intervention
+        state = ModerationState.initial()
+        state.last_ai_intervention_at = datetime.utcnow() - timedelta(seconds=10)  # 10s ago
+        save_moderation_state(session_id, state)
+
+        result = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        # Should speak despite being within cooldown
+        self.assertTrue(result.ai_should_speak)
+        self.assertIn("conflitto", result.ai_message)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_user_request_bypasses_cooldown(self, mock_llm):
+        """Intervento 'user_request' deve bypassare il cooldown."""
+        session_id = "test-cooldown-bypass-2"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Certo, rispondo alla richiesta",
+            "reason": "user_request",
+            "intervention_score": 0.9,
+        }
+
+        # Set up state with a recent AI intervention
+        state = ModerationState.initial()
+        state.last_ai_intervention_at = datetime.utcnow() - timedelta(seconds=10)  # 10s ago
+        save_moderation_state(session_id, state)
+
+        result = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        # Should speak despite being within cooldown
+        self.assertTrue(result.ai_should_speak)
+        self.assertIn("richiesta", result.ai_message)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_monopolization_respects_cooldown(self, mock_llm):
+        """Intervento 'monopolization' deve rispettare il cooldown di 60s."""
+        session_id = "test-cooldown-respect-1"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Diamo spazio agli altri",
+            "reason": "monopolization",
+            "intervention_score": 0.9,
+        }
+
+        # Set up state with a recent AI intervention (30s ago, within 60s cooldown)
+        state = ModerationState.initial()
+        state.last_ai_intervention_at = datetime.utcnow() - timedelta(seconds=30)
+        save_moderation_state(session_id, state)
+
+        result = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        # Should NOT speak because cooldown (60s) not expired
+        self.assertFalse(result.ai_should_speak)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_exclusion_respects_cooldown(self, mock_llm):
+        """Intervento 'exclusion' deve rispettare il cooldown di 60s."""
+        session_id = "test-cooldown-respect-2"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Coinvolgiamo anche Luigi",
+            "reason": "exclusion",
+            "intervention_score": 0.9,
+        }
+
+        # Set up state with a recent AI intervention (30s ago, within 60s cooldown)
+        state = ModerationState.initial()
+        state.last_ai_intervention_at = datetime.utcnow() - timedelta(seconds=30)
+        save_moderation_state(session_id, state)
+
+        result = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        # Should NOT speak because cooldown (60s) not expired
+        self.assertFalse(result.ai_should_speak)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_monopolization_speaks_after_cooldown_expired(self, mock_llm):
+        """Intervento 'monopolization' deve parlare se il cooldown è scaduto."""
+        session_id = "test-cooldown-expired-1"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Diamo spazio agli altri",
+            "reason": "monopolization",
+            "intervention_score": 0.9,
+        }
+
+        # Set up state with an old AI intervention (70s ago, beyond 60s cooldown)
+        state = ModerationState.initial()
+        state.last_ai_intervention_at = datetime.utcnow() - timedelta(seconds=70)
+        save_moderation_state(session_id, state)
+
+        result = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        # Should speak because cooldown (60s) has expired
+        self.assertTrue(result.ai_should_speak)

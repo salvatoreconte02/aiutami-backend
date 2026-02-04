@@ -19,8 +19,8 @@ from .state import (
 )
 
 # Parametri configurabili (in seguito si possono spostare in settings)
-MAX_AI_INTERVENTIONS_PER_SESSION = 10
-AI_INTERVENTION_COOLDOWN = timedelta(seconds=30)
+AI_INTERVENTION_COOLDOWN = timedelta(seconds=60)
+COOLDOWN_BYPASS_REASONS = {"conflict", "user_request"}
 SUMMARY_TURNS_INTERVAL = 4  # Riassunto ogni 4 turni umani
 
 class HardModerationAction(str, Enum):
@@ -388,17 +388,14 @@ class ModerationService:
             # soglia esemplificativa, da tarare
             return False, None
 
-        # 3) Limite massimo interventi per sessione
-        if state.ai_interventions_count >= MAX_AI_INTERVENTIONS_PER_SESSION:
-            return False, None
+        # 3) Cooldown minimo tra interventi (bypass per conflict/user_request)
+        if llm_reason not in COOLDOWN_BYPASS_REASONS:
+            if state.last_ai_intervention_at is not None:
+                now = datetime.utcnow()
+                if now - state.last_ai_intervention_at < AI_INTERVENTION_COOLDOWN:
+                    return False, None
 
-        # 4) Cooldown minimo tra interventi
-        if state.last_ai_intervention_at is not None:
-            now = datetime.utcnow()
-            if now - state.last_ai_intervention_at < AI_INTERVENTION_COOLDOWN:
-                return False, None
-
-        # 5) Regole legate alla fase della sessione
+        # 4) Regole legate alla fase della sessione
         if session_phase != "ACTIVE":
             # In prima battuta si evita che l'AI intervenga fuori da ACTIVE.
             return False, None
