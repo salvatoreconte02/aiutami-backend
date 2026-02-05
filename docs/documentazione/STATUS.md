@@ -10,7 +10,7 @@
 - [ ] **02-contributions.tex** - Members' Contribution (tabella ruoli)
 - [x] **05-state-of-art.tex** - State of the Art (related works/products)
 - [x] **06-ux-design.tex** - Solution UX Design (workflow, scenarios, conversational interaction) - mancano diagrammi workflow e screenshot
-- [ ] **07-implementation.tex** - Solution Implementation (HW/SW architecture)
+- [x] **07-implementation.tex** - Solution Implementation (deployment, SW architecture, AI moderation system, data flow) - mancano 6 diagrammi
 - [ ] **08-evaluation.tex** - Empirical Evaluation (se effettuata)
 - [ ] **09-value.tex** - Value Proposition / Onliness Statement
 - [ ] **10-discussion.tex** - Discussion and Future Work
