@@ -489,13 +489,17 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                         "timestamp": datetime.utcnow().isoformat()
                     })
 
-                    # 6.6 End AI turn (synchronous with audio end)
+                    # 6.6 Wait for audio playout to finish
+                    hub.mark_ai_stream_end()
+                    await hub.wait_ai_playout()
+
+                    # 6.7 End AI turn
                     hub.set_speaker(None)
                     ai_end_res = TM.ai_end(self.session_id)
                     await self._mark_any_activity()
                     await self._broadcast_events(ai_end_res.events)
 
-                    # 6.7 (Legacy) ai_end non apre più la finestra, ma lasciamo il check per sicurezza
+                    # 6.8 (Legacy) ai_end non apre più la finestra, ma lasciamo il check per sicurezza
                     for ev in ai_end_res.events:
                         if ev.type == "RESERVATION_WINDOW_STARTED":
                             asyncio.create_task(
@@ -1281,6 +1285,10 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             logger.error("[TTS_MESSAGE][ERROR] session=%s error=%s", self.session_id, e, exc_info=True)
 
         finally:
+            # Wait for audio playout to finish
+            hub.mark_ai_stream_end()
+            await hub.wait_ai_playout()
+
             # End AI turn
             hub.set_speaker(None)
             ai_end_res = TurnManager.ai_end(self.session_id)
@@ -1352,6 +1360,10 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             logger.error("[INTRO_MESSAGE][ERROR] session=%s error=%s", session_id, e, exc_info=True)
 
         finally:
+            # Wait for audio playout to finish
+            hub.mark_ai_stream_end()
+            await hub.wait_ai_playout()
+
             hub.set_speaker(None)
 
             # 4. Transition to IDLE

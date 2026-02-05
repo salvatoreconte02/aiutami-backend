@@ -1,6 +1,6 @@
 # Documentazione Tecnica — Logica di Moderazione delle Sessioni Vocali
 
-*Versione aggiornata: 2026-02-04 (aggiunto messaggio introduttivo)*
+*Versione aggiornata: 2026-02-05 (aggiunto AI playout drain)*
 
 ## 1. Obiettivo della moderazione
 
@@ -736,3 +736,40 @@ Il messaggio include i nomi dei partecipanti e le istruzioni per:
 ### 9.5 Redis Keys
 
 - `session:intro_pending:{session_id}` - Flag booleano che indica intro pendente (TTL 300s)
+
+---
+
+## 10. AI Playout Drain
+
+### 10.1 Problema
+
+Quando l'AI parla, la sintesi TTS (`synthesize_stream()`) produce chunk audio che vengono accodati nei buffer dei `ForwardingAudioTrack` di ciascun peer WebRTC. La sintesi termina prima che tutti i buffer siano stati riprodotti (tipicamente ~1s di ritardo). Senza drain, `AI_ENDED` veniva emesso al termine della sintesi, non al termine del playout reale.
+
+### 10.2 Soluzione
+
+Dopo il completamento della sintesi TTS, il backend attende che i buffer audio WebRTC si svuotino prima di emettere `AI_ENDED`:
+
+```
+synthesize_stream() ritorna
+   ↓
+hub.mark_ai_stream_end()     → segnala ai track: non arrivano più chunk
+   ↓
+await hub.wait_ai_playout()  → attende che i buffer si svuotino (max 10s)
+   ↓
+hub.set_speaker(None)        → ora è davvero finito
+AI_ENDED emesso
+```
+
+### 10.3 Punti di applicazione
+
+Il drain è applicato in tutti e tre i punti che emettono `AI_ENDED`:
+
+1. **`_handle_end_speak()`** — Intervento LLM (normal mode e forced_summary)
+2. **`_execute_tts_message()`** — Messaggi time-based (NO PUSH, inattività, timer, pronti alla conclusione)
+3. **`_execute_intro_message()`** — Messaggio introduttivo
+
+### 10.4 Gestione edge cases
+
+- **Nessun peer connesso**: `wait_ai_playout()` ritorna subito
+- **Peer disconnesso durante playout**: il track è chiuso, il timeout scatta e si procede
+- **Timeout safety**: max 10 secondi di attesa, poi procede comunque

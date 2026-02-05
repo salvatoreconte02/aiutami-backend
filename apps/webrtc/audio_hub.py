@@ -1,6 +1,7 @@
 # apps/webrtc/audio_hub.py
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Dict, Optional, Union
@@ -102,6 +103,21 @@ class SessionAudioHub:
             if uid == from_user_id:
                 continue  # no echo
             peer.outbound_track.enqueue(pcm=pcm, samples=samples, sample_rate=sample_rate)
+
+    def mark_ai_stream_end(self) -> None:
+        """Signal end-of-stream on all peer tracks."""
+        for uid, peer in self.peers.items():
+            peer.outbound_track.mark_end_of_stream()
+
+    async def wait_ai_playout(self, timeout: float = 10.0) -> None:
+        """Wait for all peers to finish playing AI audio."""
+        if not self.peers:
+            return
+        await asyncio.gather(
+            *(peer.outbound_track.wait_until_drained(timeout=timeout)
+              for peer in self.peers.values()),
+            return_exceptions=True,
+        )
 
 
 # Registry globale (MVP)

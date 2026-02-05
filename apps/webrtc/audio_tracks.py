@@ -67,6 +67,10 @@ class ForwardingAudioTrack(AudioStreamTrack):
         # PTS tracking
         self._pts: int = 0
 
+        # End-of-stream drain support
+        self._eos = False
+        self._drained_event = asyncio.Event()
+
     def close(self) -> None:
         self._closed = True
         try:
@@ -79,7 +83,29 @@ class ForwardingAudioTrack(AudioStreamTrack):
         except Exception:
             pass
 
+    def mark_end_of_stream(self) -> None:
+        """Signal that no more audio chunks will arrive."""
+        self._eos = True
+
+    async def wait_until_drained(self, timeout: float = 10.0) -> None:
+        """Wait for buffer to empty after end-of-stream."""
+        if not self._eos:
+            return
+        try:
+            await asyncio.wait_for(self._drained_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[AudioTrack] drain timeout user=%s session=%s",
+                self.user_id, self.session_id,
+            )
+
+    def _reset_eos(self) -> None:
+        """Reset EOS state when new audio arrives."""
+        self._eos = False
+        self._drained_event.clear()
+
     def enqueue(self, pcm: bytes, samples: int, sample_rate: int) -> None:
+        self._reset_eos()
         if self._closed:
             return
         if not pcm:
@@ -141,6 +167,10 @@ class ForwardingAudioTrack(AudioStreamTrack):
                 "[AudioTrack] Buffer underrun: had=%d needed=%d missing=%d user=%s",
                 had, self._bytes_per_frame, missing, self.user_id,
             )
+
+        # 5) signal drain if EOS and buffer exhausted
+        if self._eos and self._queue.empty() and len(self._bytebuf) < self._bytes_per_frame:
+            self._drained_event.set()
 
         frame = av.AudioFrame(format="s16", layout="mono", samples=self._samples_per_frame)
         frame.sample_rate = self._out_sample_rate
