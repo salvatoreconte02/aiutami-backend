@@ -53,20 +53,20 @@ class TestAudioHubAI(unittest.TestCase):
         self.assertEqual(hub.current_speaker_user_id, AI_MODERATOR_ID)
 
     def test_inject_ai_audio_when_ai_speaking(self):
-        """inject_ai_audio should enqueue when AI is speaker."""
+        """inject_ai_audio should enqueue on all peer outbound tracks when AI is speaker."""
         hub = SessionAudioHub("test-session")
 
-        with patch("apps.webrtc.audio_hub.ForwardingAudioTrack") as MockTrack:
-            mock_track = MagicMock()
-            MockTrack.return_value = mock_track
+        # inject_ai_audio forwards to peer outbound_tracks, not the AI track
+        mock_peer_track = MagicMock()
+        hub.register_peer(123, mock_peer_track)
 
-            hub.init_ai_track()
-            hub.set_speaker(AI_MODERATOR_ID)
+        hub.init_ai_track()
+        hub.set_speaker(AI_MODERATOR_ID)
 
-            pcm_chunk = b"\x00" * 1920
-            hub.inject_ai_audio(pcm_chunk, 960, 48000)
+        pcm_chunk = b"\x00" * 1920
+        hub.inject_ai_audio(pcm_chunk, 960, 48000)
 
-            mock_track.enqueue.assert_called_once_with(pcm_chunk, 960, 48000)
+        mock_peer_track.enqueue.assert_called_once_with(pcm=pcm_chunk, samples=960, sample_rate=48000)
 
     def test_inject_ai_audio_ignored_when_not_speaking(self):
         """inject_ai_audio should be ignored when AI is not speaker."""

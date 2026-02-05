@@ -1,18 +1,18 @@
 """Tests for session transcript management."""
-import pytest
 import json
+import unittest
 from unittest.mock import patch, MagicMock
 from django.core.cache import cache
+from django.test import TestCase
 
 
-class TestSessionTranscript:
+class TestSessionTranscript(TestCase):
     """Test transcript append functionality."""
 
-    @pytest.fixture(autouse=True)
-    def clear_cache(self):
-        """Clear cache before each test."""
+    def setUp(self):
         cache.clear()
-        yield
+
+    def tearDown(self):
         cache.clear()
 
     def test_append_human_entry(self):
@@ -32,9 +32,9 @@ class TestSessionTranscript:
 
         key = f"session:{session_id}:transcript"
         items = cache.get(key)
-        assert items is not None
-        assert len(items) == 1
-        assert json.loads(items[0])["type"] == "human"
+        self.assertIsNotNone(items)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(json.loads(items[0])["type"], "human")
 
     def test_append_ai_entry(self):
         """Test appending AI turn to transcript."""
@@ -52,10 +52,10 @@ class TestSessionTranscript:
 
         key = f"session:{session_id}:transcript"
         items = cache.get(key)
-        assert items is not None
+        self.assertIsNotNone(items)
         parsed = json.loads(items[0])
-        assert parsed["type"] == "ai"
-        assert parsed["trigger"] == "llm_decision"
+        self.assertEqual(parsed["type"], "ai")
+        self.assertEqual(parsed["trigger"], "llm_decision")
 
     def test_append_multiple_entries(self):
         """Test appending multiple entries maintains order."""
@@ -70,7 +70,7 @@ class TestSessionTranscript:
         key = f"session:{session_id}:transcript"
         items = cache.get(key)
 
-        assert len(items) == 3
-        assert json.loads(items[0])["text"] == "First"
-        assert json.loads(items[1])["text"] == "Second"
-        assert json.loads(items[2])["text"] == "Third"
+        self.assertEqual(len(items), 3)
+        self.assertEqual(json.loads(items[0])["text"], "First")
+        self.assertEqual(json.loads(items[1])["text"], "Second")
+        self.assertEqual(json.loads(items[2])["text"], "Third")
