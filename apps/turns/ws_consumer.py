@@ -355,6 +355,16 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         # Broadcast degli eventi generati dalla chiusura
         await self._broadcast_events(result.events)
 
+        # Invio diretto al chiamante: i broadcast via channel_layer vengono
+        # accodati e consegnati solo al termine di questo handler, quindi il
+        # client del parlante li riceverebbe in ritardo.  Il send diretto
+        # garantisce che il chiamante veda subito la transizione di stato.
+        for ev in result.events:
+            await self.send_json({
+                "type": f"turns.{ev.type.lower()}",
+                "payload": ev.payload or {},
+            })
+
         # NOTA: La finestra di prenotazione NON viene più aperta qui.
         # Verrà aperta DOPO la moderazione (in ai_end se l'AI parla,
         # oppure manualmente alla fine di questo metodo se l'AI non parla).
@@ -460,6 +470,12 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 if ai_start_res.success:
                     await self._mark_any_activity()
                     await self._broadcast_events(ai_start_res.events)
+                    # Invio diretto al chiamante (stesso motivo di sopra)
+                    for ev in ai_start_res.events:
+                        await self.send_json({
+                            "type": f"turns.{ev.type.lower()}",
+                            "payload": ev.payload or {},
+                        })
 
                     # 6.2 Set AI as speaker in audio hub
                     hub = get_hub(self.session_id)
@@ -498,6 +514,12 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     ai_end_res = TM.ai_end(self.session_id)
                     await self._mark_any_activity()
                     await self._broadcast_events(ai_end_res.events)
+                    # Invio diretto al chiamante (stesso motivo di sopra)
+                    for ev in ai_end_res.events:
+                        await self.send_json({
+                            "type": f"turns.{ev.type.lower()}",
+                            "payload": ev.payload or {},
+                        })
 
                     # 6.8 (Legacy) ai_end non apre più la finestra, ma lasciamo il check per sicurezza
                     for ev in ai_end_res.events:
@@ -1246,6 +1268,12 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         await self._mark_any_activity()
         await self._broadcast_events(ai_start_res.events)
+        # Invio diretto al chiamante (broadcast accodato durante handler lungo)
+        for ev in ai_start_res.events:
+            await self.send_json({
+                "type": f"turns.{ev.type.lower()}",
+                "payload": ev.payload or {},
+            })
 
         # Set AI as speaker in audio hub
         hub = get_hub(self.session_id)
@@ -1294,6 +1322,12 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             ai_end_res = TurnManager.ai_end(self.session_id)
             await self._mark_any_activity()
             await self._broadcast_events(ai_end_res.events)
+            # Invio diretto al chiamante (broadcast accodato durante handler lungo)
+            for ev in ai_end_res.events:
+                await self.send_json({
+                    "type": f"turns.{ev.type.lower()}",
+                    "payload": ev.payload or {},
+                })
 
             # (Legacy) ai_end non apre più la finestra, ma lasciamo il check per sicurezza
             for ev in ai_end_res.events:
