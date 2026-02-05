@@ -1,0 +1,82 @@
+% === REQUIREMENTS ===
+\chapter{Requirements}
+
+This chapter describes the project requirements following the UNG model, which structures the analysis around Users (stakeholders), their Needs, and the system Goals that address those needs, all within a specific Context and subject to Constraints. The accompanying UNG diagram visualizes the relationships between these elements.
+
+\section{Target Groups and Stakeholders}
+
+The system addresses three levels of stakeholders based on their proximity to the platform and their role in the interaction.
+
+\textbf{Primary users} are the direct participants in moderated discussions. This group includes students and researchers engaging in academic debates or group projects, colleagues collaborating in professional meetings, and participants in educational or entertainment activities.
+
+\textbf{Secondary users} are those who oversee or facilitate discussions without being the main speakers. This category includes teachers and trainers who monitor student participation, team leaders and managers who guide collaborative sessions, and facilitators who use the system as a support tool for group dynamics.
+
+\textbf{Tertiary users} are individuals or organizations that do not interact directly with the platform but are affected by its adoption. These include educational institutions and companies that deploy the system to improve internal collaboration.
+
+\textbf{MVP Focus:} For the purpose of this project, the implementation targets a specific entertainment scenario---the Murder Mystery game---where participants must collaborate vocally to solve a case. This context was chosen because it naturally exhibits the challenges the system aims to address: multiple voices competing to speak, risk of dominant participants, and the need for structured turn-taking to reach a shared conclusion.
+
+\section{Stakeholder Needs}
+
+The needs addressed by AIutami emerge from the typical dynamics of group vocal conversations, where communication imbalances, interruptions, and lack of inclusion often occur.
+
+\textbf{Feeling heard and included} --- Participants need equitable speaking opportunities without some voices monopolizing the conversation.
+
+\textbf{Communicating clearly and fluidly} --- Groups need to reduce interruptions, overlaps, and confusion that disrupt the natural flow of discussion.
+
+\textbf{Maintaining focus and productivity} --- Discussions often drift off-topic; participants need support to stay on track and reach shared conclusions.
+
+\textbf{Participating with confidence} --- Some participants feel hesitant to speak, especially in groups with dominant personalities. They need an environment that encourages balanced contribution.
+
+\textbf{Observing and improving group communication} --- Secondary users such as facilitators and teachers need tools to monitor participation patterns and guide the conversation effectively.
+
+\textbf{Ensuring transparency} --- Users need to understand when the AI is listening and how their contributions are being processed.
+
+\section{Context}
+
+The context describes where and how the system is used, articulated across four dimensions.
+
+\textbf{Organizational context} --- AIutami supports structured collaborative phases such as group study sessions, team meetings, brainstorming activities, and educational workshops. The system acts as a vocal facilitator during these interactions.
+
+\textbf{Physical context} --- The platform is a web-based application accessible through standard browsers. Users need a microphone or headset for audio input, a stable internet connection (approximately 10 Mbps), and low network latency (under 200ms) to ensure real-time responsiveness.
+
+\textbf{Temporal context} --- The system operates primarily in real-time mode, monitoring and intervening vocally during active discussions. At the end of each session, a summary report is generated to capture key outcomes.
+
+\textbf{Social context} --- AIutami is designed for small groups of 2 to 8 participants. These groups may have equal roles (peers collaborating) or differentiated roles (teacher-students, team leader-colleagues). The shared objective is typically collaborative decision-making, learning, or structured discussion.
+
+\textbf{MVP Scope:} The current implementation focuses on the Murder Mystery entertainment scenario with 3 participants collaborating to solve a case through structured vocal interaction.
+
+\section{Goals}
+
+The goals represent the functional objectives that the system must achieve to address user needs. While needs describe what users require, goals describe what the system does to satisfy those requirements.
+
+\textbf{Manage turn-taking fluidly} --- The system regulates speaking turns through a request-based mechanism, ensuring only one participant speaks at a time and preventing overlaps. Visual feedback indicates the current speaker and turn status.
+
+\textbf{Identify participants through the turn system} --- Rather than using voice recognition to identify speakers, the system tracks who is speaking based on who holds the current turn. This approach associates each transcribed contribution with the correct participant.
+
+\textbf{Provide real-time vocal feedback} --- The AI moderator intervenes with synthesized voice messages when discussions become unbalanced, stuck, or unfocused. These interventions prompt quieter participants, redirect off-topic exchanges, or help the group move forward.
+
+\textbf{Summarize key points} --- The system generates vocal summaries during and at the end of sessions, highlighting main discussion points and outcomes. A final report preserves these summaries for future reference.
+
+\textbf{Monitor participation levels} --- The system tracks speaking time and turn distribution across participants, enabling balanced contribution and providing data for secondary users to assess group dynamics.
+
+\section{Constraints}
+
+Several factors constrain the system's design and performance.
+
+\textbf{Potential latency in the processing chain} --- The system relies on a sequential pipeline: speech recognition (ASR), language model processing (LLM), and voice synthesis (TTS). Each step introduces potential delays, particularly if the LLM response is slow. While current performance is acceptable, network conditions or service load could affect real-time responsiveness.
+
+\textbf{Speech recognition accuracy} --- The ASR service may produce transcription errors, particularly with background noise, accents, or unclear speech. While occasional errors are acceptable, they can affect the quality of summaries and the AI's understanding of the discussion.
+
+\textbf{LLM behavioral limitations} --- The language model powering the AI moderator has limited customization. Content moderation policies and inherent model behaviors may occasionally produce responses that are not perfectly suited to the moderation context, requiring careful prompt engineering.
+
+\textbf{Cloud-based audio processing} --- Audio data is transmitted to external cloud services (Azure Speech) for transcription. While these services follow industry security standards, users should be aware that their voice data is processed externally. The system does not store raw audio or full transcriptions---only session summaries are retained for the final report.
+
+\section{UNG Diagram}
+
+% TODO: Insert UNG diagram image
+% \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=0.8\textwidth]{ung-diagram.png}
+%     \caption{UNG Diagram showing the relationships between stakeholders, needs, goals, context, and constraints.}
+%     \label{fig:ung}
+% \end{figure}

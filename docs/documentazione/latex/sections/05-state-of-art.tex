@@ -1,0 +1,32 @@
+% === STATE OF THE ART ===
+\chapter{State of the Art}
+
+This chapter analyzes related academic works, existing commercial products, and identifies open research directions relevant to the AIutami project.
+
+\section{Related Works}
+
+\textbf{LLMs in Multi-User Contexts} --- Research on LLM-based conversational systems has historically focused on dyadic interactions. The Multi-User Chat Assistant (MUCA) framework from Microsoft Research represents one of the first systematic attempts to address multi-user contexts. MUCA introduces the 3W model that formalizes three fundamental dimensions for group chatbots: What (response content), When (timing or strategic silence), and Who (addressing an individual, subgroup, or entire group). The framework identifies recurring challenges in group conversations: stuck discussions, multi-thread management, reactivity control, participation equity, and conflict resolution. Its modular architecture combines topic generation, dialog analysis, and strategy arbitration. Results show improvements in intervention timing and perceived quality compared to single-prompt approaches, though the framework operates exclusively in the text domain.
+
+\textbf{AI-Based Moderation and Facilitation} --- Group discussion moderation has traditionally relied on human facilitators or rigid rule-based systems. The thesis ``Multiuser Conversational Agents Based on Large Language Models'' (Dubini, 2023-2024) represents pioneering work exploring LLM-based moderation. The study analyzes a GPT-3.5 moderator using the Hidden Profile experimental paradigm---a collaborative decision-making task where participants possess partial, unique information, requiring effective discussion to reach the correct solution. Results show that the AI moderator influences conversation structure and participation patterns, though it does not significantly improve decision accuracy. The work identifies key limitations: task-agnostic moderators may suggest unrealistic actions, participant motivation affects outcomes, and standard evaluation metrics are lacking. The thesis concludes that LLM moderation is promising but requires greater task contextualization. A subsequent study, ``Large Language Models as Facilitators in Multi-user Conversations,'' extends these findings using a GPT-4o facilitator with minimal prompt engineering. Participants with the facilitator achieve higher individual accuracy. The analysis identifies emergent functions: conversational regulation, task-specific guidance, bias reduction, and time management. However, occasional hallucinations and premature time pressure remain problematic.
+
+\textbf{LLM Limitations in Multi-Turn Conversations} --- The paper ``LLMs Get Lost in Multi-Turn Conversation'' addresses a critical limitation relevant to moderation systems. The study demonstrates that LLM performance degrades as conversational turns increase, even without semantic ambiguity. This loss of conversational state tracking manifests through forgotten constraints, contradictions with past statements, and locally correct but globally incoherent responses. Neither larger context windows nor bigger models resolve the issue. The authors attribute this to structural factors: LLMs lack explicit dialogue state representation and treat context as unstructured text. The implication is clear: robust conversational systems require structured memory and explicit state tracking beyond pure prompting approaches.
+
+\section{Existing Products}
+
+Commercial video conferencing platforms such as Zoom, Microsoft Teams, and Google Meet provide real-time audio communication but lack intelligent moderation. Turn-taking is manual, participation balance is not monitored, and no AI-driven facilitation exists.
+
+Transcription services like Otter.ai focus on documentation rather than active intervention. Conversation intelligence platforms such as Gong operate retrospectively on recorded calls rather than in real-time.
+
+No commercial product currently combines real-time voice conferencing with AI-based moderation for group discussions.
+
+\section{Gap Analysis}
+
+The literature review reveals open directions in LLM-based conversational systems.
+
+\textbf{Modality} --- Existing research focuses on text-based conversations, while commercial products handle voice without intelligent moderation. The intersection---real-time voice moderation---remains largely unexplored.
+
+\textbf{Context Awareness} --- Research indicates that task-agnostic moderators produce suboptimal interventions. Approaches balancing LLM flexibility with domain awareness represent an open area.
+
+\textbf{Architectural Robustness} --- Studies show that prompt-only systems struggle with state coherence in extended conversations. Integrating structured memory with conversational AI is an active research direction.
+
+AIutami positions itself within these open spaces, exploring an architecture that combines voice-based interaction, contextual moderation, and explicit state management.

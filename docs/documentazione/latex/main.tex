@@ -1,0 +1,112 @@
+\documentclass[12pt,a4paper]{report}
+
+% === PACKAGES ===
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage[style=ieee,backend=biber]{biblatex}
+
+% === CONFIGURATION ===
+\geometry{margin=2.5cm}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+    citecolor=blue
+}
+
+% Graphics path
+\graphicspath{{images/}}
+
+% Bibliography file
+\addbibresource{references.bib}
+
+% Header/Footer style
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\leftmark}
+\fancyhead[R]{AIutami}
+\fancyfoot[C]{\thepage}
+
+% Code listing style
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{orange}
+}
+
+% === DOCUMENT INFO ===
+\title{\Huge\textbf{AIutami}}
+\author{
+    Salvatore Pio Conte \\
+    Simone Cosenza \\
+    Sara Imparato
+}
+\date{\today}
+
+% === DOCUMENT ===
+\begin{document}
+
+% Cover and Abstract
+\input{sections/00-cover}
+
+% Table of Contents
+\tableofcontents
+\newpage
+
+% The Team
+\input{sections/01-team}
+
+% Members' Contribution
+\input{sections/02-contributions}
+
+% Executive Summary
+\input{sections/03-executive}
+
+% Requirements
+\input{sections/04-requirements}
+
+% State of the Art
+\input{sections/05-state-of-art}
+
+% Solution - UX Design
+\input{sections/06-ux-design}
+
+% Solution - Implementation
+\input{sections/07-implementation}
+
+% Empirical Evaluation
+\input{sections/08-evaluation}
+
+% Value Proposition
+\input{sections/09-value}
+
+% Discussion and Future Work
+\input{sections/10-discussion}
+
+% Bibliography
+\input{sections/11-bibliography}
+
+% Annexes
+\input{sections/12-annexes}
+
+\end{document}
