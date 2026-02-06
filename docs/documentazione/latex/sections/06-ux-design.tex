@@ -17,13 +17,12 @@ This section describes the two main workflows that define the user experience in
 
 \subsection{Pre-Session Flow}
 
-% TODO: Replace with actual diagram image
-% \begin{figure}[H]
-%     \centering
-%     \includegraphics[width=0.9\textwidth]{workflow-pre-session.png}
-%     \caption{Pre-Session Workflow}
-%     \label{fig:workflow-pre}
-% \end{figure}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{workflow-pre-session.png}
+    \caption{Pre-Session Workflow}
+    \label{fig:workflow-pre}
+\end{figure}
 
 The pre-session workflow covers all steps from account creation to the start of a moderated discussion.
 
@@ -39,24 +38,20 @@ The pre-session workflow covers all steps from account creation to the start of 
 
 \subsection{In-Session Flow}
 
-% TODO: Replace with actual diagram image
-% \begin{figure}[H]
-%     \centering
-%     \includegraphics[width=0.9\textwidth]{workflow-in-session.png}
-%     \caption{In-Session Workflow}
-%     \label{fig:workflow-in}
-% \end{figure}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{workflow-in-session.png}
+    \caption{In-Session Workflow}
+    \label{fig:workflow-in}
+\end{figure}
 
 The in-session workflow describes the interaction dynamics from the start of the discussion to session closure.
 
 \begin{enumerate}
     \item \textbf{AI Introduction} --- The moderator welcomes participants, explains the interaction rules, and opens the discussion.
-    \item \textbf{Turn-Taking Cycle} --- Participants take turns speaking via push-to-talk. While one user speaks, others can reserve the next turn. The reserved user receives an 8-second priority window after the current speaker finishes.
-    \item \textbf{Moderation Triggers} --- Throughout the discussion, the AI moderator monitors participation and intervenes when needed: prompting inactive users, addressing collective silence, or redirecting the conversation.
-    \item \textbf{Ready to Conclude} --- In the Murder Mystery context, participants press ``Ready to Conclude'' when they believe they have identified the culprit. The moderator announces each declaration to the group.
-    \item \textbf{Conclusion Phase} --- Triggered either when all participants declare readiness or when the 30-minute timer expires. The moderator delivers a vocal summary of the discussion.
-    \item \textbf{Voting} --- Each participant votes for the suspect they believe is guilty. Results are revealed once all votes are cast.
-    \item \textbf{Session Closure} --- The host closes the session. The system generates a final report.
+    \item \textbf{Discussion Phase} --- Participants engage in conversation through a turn-taking system: one speaks via push-to-talk while others can reserve the next turn with an 8-second priority window. Throughout the discussion, the AI moderator monitors participation and intervenes when needed---delivering periodic summaries, prompting inactive users, or addressing collective silence.
+    \item \textbf{Conclusion Phase} --- Triggered when all participants declare readiness or when the 30-minute timer expires. The moderator delivers a vocal summary of the discussion. In the Murder Mystery context, this is followed by a voting phase where participants select the suspect they believe is guilty.
+    \item \textbf{Session Closure} --- The host closes the session manually, or the system closes it automatically after 15 seconds. A final report is generated.
     \item \textbf{Session History} --- The session appears in each participant's history, where the report can be viewed and downloaded as PDF.
 \end{enumerate}
 
