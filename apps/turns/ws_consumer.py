@@ -1159,7 +1159,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 if trig_result.should_transition_to_conclusion and not message_was_queued:
                     # Set the reason for conclusion before transitioning
                     await self._set_conclusion_reason("timer_expired")
-                    transitioned = await database_sync_to_async(self._transition_session_to_conclusion)()
+                    transitioned = await self._transition_session_to_conclusion()
                     if transitioned:
                         logger.info("[TRIGGER_LOOP][TRANSITION] session=%s -> CONCLUSION", session_id)
                         # Broadcast del cambio di stato sessione con payload completo

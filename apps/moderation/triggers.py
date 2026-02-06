@@ -412,6 +412,9 @@ def _collect_time_based_static_messages(
                 use_tts=True,
             ))
             state.timer_30_notified = True
+
+        # Segnala il cambio di fase (sempre, anche se già notificato)
+        if elapsed >= TIMER_30_THRESHOLD:
             should_transition_to_conclusion = True
 
     # 3) UTENTE INATTIVO - Due livelli di notifica
