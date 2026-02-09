@@ -67,9 +67,23 @@ He fills in the registration form with his first name, last name, email address,
 
 Luca is redirected to the login page, where he enters his credentials to access the platform for the first time. Once authenticated, he reaches the home page, from which he can create a new voice session, join a session via an invitation link, or browse the history of completed sessions.
 
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{scenarios/scenario1_signin.jpg}
+    \caption{Sign up interface for new user registration.}
+    \label{fig:scenario1}
+\end{figure}
+
 \subsection{Scenario 2: A Registered User Logs In}
 
 Marco, an existing user of AIutami, wants to access his account. From the homepage he selects ``Log in'' and enters his email and password. The system verifies his credentials and, once authenticated, redirects him to the home page. From here he can view active sessions, create a new one, join an existing session through an invitation link shared by another participant, or browse the history of past sessions.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{scenarios/scenario2_login.jpg}
+    \caption{Login interface for existing users.}
+    \label{fig:scenario2}
+\end{figure}
 
 \subsection{Scenario 3: Creating a New Session}
 
@@ -79,11 +93,25 @@ Here he chooses one of the available discussion contexts---Murder Mystery, Acade
 
 From the lobby, Luca generates an invitation link and shares it with the other participants he wants to invite. The lobby displays in real time the list of participants who have joined. Luca waits until the required number of participants has connected before starting the discussion.
 
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{scenarios/scenario3_createnewsession_.jpg}
+    \caption{Session creation interface with context selection and title input.}
+    \label{fig:scenario3}
+\end{figure}
+
 \subsection{Scenario 4: Joining a Session}
 
 Giovanni, who is already logged in to AIutami, wants to join a session created by his friend Luca. From the home page, he selects ``Join with a link'' and is redirected to the join page, where he finds a text field to paste the invitation link received from Luca. After pasting it, he confirms by clicking ``Join session.''
 
 The system validates the link and checks that the session is still in the lobby phase and has not reached its maximum number of participants. If successful, Giovanni is redirected to the lobby, where he can see the list of participants already connected and wait for the host to start the discussion.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{scenarios/scenario4_joinsession.jpg}
+    \caption{Join session interface where users paste the invitation link.}
+    \label{fig:scenario4}
+\end{figure}
 
 \subsection{Scenario 5: Starting a Session}
 
@@ -92,6 +120,13 @@ Marco, the host of a Murder Mystery session on AIutami, is in the lobby together
 When the counter reaches the required number, Marco selects the ``Start session'' button, visible only to him as host. The session enters its active phase and all participants are redirected to the discussion interface.
 
 The AI moderator takes the floor to introduce the session: it welcomes the participants, explains the interaction rules, and opens the discussion.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{scenarios/scenario5_startsession.jpg}
+    \caption{Lobby interface showing participants and the start session button for the host.}
+    \label{fig:scenario5}
+\end{figure}
 
 \subsection{Scenario 6: Speaking During a Session}
 
@@ -105,6 +140,13 @@ Giovanni, a participant in the same session, wants to speak while Marco is talki
 
 The system registers his request. When Marco ends his turn, Giovanni receives an 8-second priority window during which only his push-to-talk button is active. Giovanni presses it within this interval and begins speaking. After he finishes and ends his turn, the floor becomes available to all participants again.
 
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{scenarios/scenario7_reservation.jpg}
+    \caption{Discussion interface showing a turn reservation request.}
+    \label{fig:scenario7}
+\end{figure}
+
 \subsection{Scenario 8: Inactive User}
 
 Giovanni is in a session together with Luca and Marco. The discussion is about a project update and proceeds at a steady pace: Luca and Marco alternate speaking turns while Giovanni listens in silence without ever pressing the push-to-talk button.
@@ -112,6 +154,13 @@ Giovanni is in a session together with Luca and Marco. The discussion is about a
 After several minutes of inactivity, a private text notification appears on Giovanni's screen, inviting him to participate in the conversation. Giovanni reads the message but chooses not to speak and lets the others continue.
 
 After further minutes of inactivity, the AI moderator intervenes vocally, addressing Giovanni by name and encouraging him to share his thoughts with the group. Giovanni decides to accept the invitation, presses the push-to-talk button, and contributes his perspective to the discussion.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{scenarios/scenario8_inactiveuser.jpg}
+    \caption{Private notification displayed to an inactive user, prompting participation.}
+    \label{fig:scenario8}
+\end{figure}
 
 \subsection{Scenario 9: Ready to Conclude (Murder Mystery)}
 
@@ -121,11 +170,25 @@ The system registers her action and the AI moderator announces to the group that
 
 Eventually, Matteo also presses the button, and the moderator announces his declaration. When Silvia, the last remaining participant, presses ``Ready to conclude'' as well, the moderator announces that all participants are ready and the session transitions to the conclusion phase. The AI moderator delivers a vocal summary of the discussion, recapping the main points and clues that emerged.
 
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{scenarios/scenario9_readytoconclude.jpg}
+    \caption{Discussion interface with the ``Ready to conclude'' button.}
+    \label{fig:scenario9}
+\end{figure}
+
 \subsection{Scenario 10: Voting (Murder Mystery)}
 
 After the AI moderator has delivered the discussion summary, the session enters the voting phase. Each participant sees a voting interface presenting the list of suspects. Chiara, Matteo, and Silvia must each select the character they believe is the culprit.
 
 Chiara casts her vote first. The system registers her choice and notifies the group that she has voted, without revealing her selection. Matteo and Silvia follow. Once all three participants have voted, the system reveals the results: each participant's choice, the correct answer, and whether the group successfully identified the culprit.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{scenarios/scenario10_voting.jpg}
+    \caption{Voting interface showing the list of suspects for selection.}
+    \label{fig:scenario10}
+\end{figure}
 
 \subsection{Scenario 11: Time Running Out}
 
@@ -140,6 +203,13 @@ When the 30-minute mark is reached, the AI moderator intervenes vocally to annou
 After all participants have cast their votes in the Murder Mystery session, Marco, as host, selects the ``Close session'' button. The system generates a final report containing the session details, voting results, and an analysis of the discussion. Marco is redirected to the session history.
 
 Later, Sara, one of the participants, wants to share the session outcome with her professor. From the home page, she selects ``Session history'' and locates the completed session. On the detail page she can view the session creator, participants, duration, voting results, and the summary generated by the AI moderator. She downloads the report as PDF and sends it to her professor.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{scenarios/scenario12_report.jpg}
+    \caption{Session report showing voting results and discussion summary.}
+    \label{fig:scenario12}
+\end{figure}
 
 \section{Conversational Interaction}
 

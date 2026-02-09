@@ -7,30 +7,16 @@ AIutami is deployed on a single Azure Virtual Machine hosting all services throu
 
 In addition to local services, the system communicates with three external Azure services over HTTPS: Azure Speech-to-Text for speech transcription, Azure OpenAI for moderation decisions, and Azure Speech TTS for moderator voice synthesis.
 
-% TODO: Replace with actual diagram image
-% \begin{figure}[H]
-%     \centering
-%     \includegraphics[width=0.9\textwidth]{images/architecture-deployment.png}
-%     \caption{Deployment architecture. Clients connect to the Azure VM via HTTP/WebSocket (port 8000) and WebRTC (UDP 10000--10050). The web container communicates with PostgreSQL, Redis, and three external Azure services.}
-%     \label{fig:arch-deployment}
-% \end{figure}
 
 
 \section{Software Architecture}
 
 \subsection{Functional Architecture}
 
-The system is decomposed into six functional modules, each responsible for a distinct concern. \textbf{Session Management} controls the session lifecycle through four states (Lobby, Active, Conclusion, Closed), manages participants, invitations, and voting. \textbf{Turn Management} coordinates speaking turns through a state machine with four states (Idle, Human Speaking, AI Speaking, AI Introducing), enforces that only one participant speaks at a time, and manages a priority reservation window for the next speaker. \textbf{Audio Transport} handles WebRTC peer connections and server-side audio forwarding; the server receives audio from the current speaker and forwards it to all other participants without mixing, excluding the speaker from their own stream to prevent echo. \textbf{Speech Recognition} performs real-time speech-to-text transcription of the current speaker's audio using Azure Speech-to-Text; transcription is gated by the turn state and only runs when the user is the active speaker. \textbf{AI Moderation} evaluates whether the AI moderator should intervene after each human turn, using a trigger system and LLM calls to decide the content and timing of interventions. \textbf{Text-to-Speech} converts AI moderator text responses into audio using Azure Speech TTS, which is then injected into the audio stream via the Audio Transport module.
+The system is decomposed into six functional modules, each responsible for a distinct concern. \textbf{Session Management} controls the session lifecycle through four states (Lobby, Active, Conclusion, Closed), manages participants, invitations, and voting. \textbf{Turn Management} coordinates speaking turns through a state machine with four states (Idle, Human Speaking, AI Speaking, AI Introducing), enforces that only one participant speaks at a time---following the principles of conversational turn-taking~\cite{Sacks1974TurnTaking}---and manages a priority reservation window for the next speaker. \textbf{Audio Transport} handles WebRTC peer connections and server-side audio forwarding; the server receives audio from the current speaker and forwards it to all other participants without mixing, excluding the speaker from their own stream to prevent echo. \textbf{Speech Recognition} performs real-time speech-to-text transcription of the current speaker's audio using Azure Speech-to-Text; transcription is gated by the turn state and only runs when the user is the active speaker. \textbf{AI Moderation} evaluates whether the AI moderator should intervene after each human turn, using a trigger system and LLM calls to decide the content and timing of interventions. \textbf{Text-to-Speech} converts AI moderator text responses into audio using Azure Speech TTS, which is then injected into the audio stream via the Audio Transport module.
 
 The modules interact in a pipeline: Turn Management acts as the central coordinator. When a speaker's turn ends, it triggers Speech Recognition to finalize the transcript, passes it to AI Moderation for evaluation, and if the AI decides to intervene, Text-to-Speech generates the audio delivered through Audio Transport.
 
-% TODO: Replace with actual diagram image
-% \begin{figure}[H]
-%     \centering
-%     \includegraphics[width=0.9\textwidth]{images/architecture-functional.png}
-%     \caption{Functional architecture. Turn Management coordinates all other modules. Audio Transport feeds Speech Recognition; AI Moderation produces output via Text-to-Speech back through Audio Transport. External Azure services are connected to Speech Recognition, AI Moderation, and Text-to-Speech.}
-%     \label{fig:arch-functional}
-% \end{figure}
 
 
 \subsection{Implementation Architecture}
@@ -54,20 +40,19 @@ The AI moderation system evaluates whether the moderator should intervene after 
 
 The pipeline follows a fixed sequence. First, the \texttt{ModerationOrchestrator} loads the current moderation state from Redis, which includes a running summary of the discussion, the number of turns per participant, and timestamps of previous AI interventions. Second, it evaluates the trigger engine to determine if any rule-based condition requires a hard action (such as a forced summary) or if any static messages need to be delivered. Third, it calls the LLM via \texttt{ModerationService} to analyze the last speaker's transcript against the discussion summary. The LLM returns a structured JSON response containing an updated summary, a boolean indicating whether the AI should speak, a proposed message, a reason classification, and an intervention score. Fourth, the backend applies its own filtering rules on top of the LLM's proposal---checking cooldown timers, score thresholds, and session phase---before producing a final decision. This decision contains the list of static messages to deliver, whether the AI should speak, the AI message content, and whether the session should transition to the conclusion phase.
 
-% TODO: Replace with actual diagram image
-% \begin{figure}[H]
-%     \centering
-%     \includegraphics[width=0.85\textwidth]{images/moderation-pipeline.png}
-%     \caption{Moderation pipeline sequence. After each human turn, the system loads state from Redis, evaluates triggers, calls the LLM, applies backend filters, and produces a final moderation decision.}
-%     \label{fig:moderation-pipeline}
-% \end{figure}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{images/moderation-pipeline.png}
+    \caption{Moderation pipeline sequence. After each human turn, the system loads state from Redis, evaluates triggers, calls the LLM, applies backend filters, and produces a final moderation decision.}
+    \label{fig:moderation-pipeline}
+\end{figure}
 
 
 \subsection{Trigger System}
 
 The moderation system uses a trigger engine that evaluates rule-based conditions independently from the LLM. Triggers are divided into three categories based on how they are activated.
 
-\textbf{Turn-based triggers} are evaluated at the end of each human speaking turn. The primary trigger in this category is the periodic summary: after every four human turns, the system forces a summary intervention where the AI recaps the discussion so far and optionally corrects participation imbalances such as monopolization or exclusion of quiet participants.
+\textbf{Turn-based triggers} are evaluated at the end of each human speaking turn. The primary trigger in this category is the periodic summary: after every six human turns, the system forces a summary intervention where the AI recaps the discussion so far and optionally corrects participation imbalances such as monopolization or exclusion of quiet participants.
 
 \textbf{Time-based triggers} are evaluated by a background loop that runs every five seconds, independently from speaking turns. These include: a silence trigger that fires when no activity is detected for a configurable period, prompting participants to resume the discussion; an inactive user trigger with two escalation levels---a private text notification after five minutes of individual silence, followed by a public voice solicitation after ten minutes, with a maximum of two voice solicitations per user to avoid being intrusive; and session duration milestones at twenty-five and thirty minutes. The twenty-five minute mark delivers a text-only notification to the frontend, which activates a visual countdown timer. The thirty-minute mark triggers a voice announcement and automatically transitions the session to the conclusion phase. Importantly, time-based triggers are suppressed while someone is speaking---they are re-evaluated at the next cycle when the session is idle.
 
@@ -104,13 +89,13 @@ Finally, a \textbf{pending message queue} handles situations where the AI needs 
 
 \subsection{Session Lifecycle}
 
-% TODO: Replace with actual diagram image
-% \begin{figure}[H]
-%     \centering
-%     \includegraphics[width=0.9\textwidth]{images/dataflow-session-lifecycle.png}
-%     \caption{Session lifecycle. A session progresses through four states in a fixed sequence. It begins in Lobby, where participants join via invitation tokens. The host starts the session when all participants are present, transitioning to Active. During the Active phase, participants take turns speaking and the AI moderation pipeline evaluates each turn. The session transitions to Conclusion either when the thirty-minute timer expires or when all participants indicate readiness. In this phase, the AI delivers a closing summary and participants cast their votes. Once all votes are collected, the session moves to Closed and a final report is generated.}
-%     \label{fig:dataflow-lifecycle}
-% \end{figure}
+A session progresses through four states in a fixed sequence: Lobby, Active, Conclusion, and Closed.
+
+The transition from Lobby to Active occurs when the host explicitly starts the session via REST endpoint. The system verifies that the required number of participants has joined---three for Murder Mystery---then initializes the moderation timers and sets the turn state to AI Introducing, blocking all participant interactions until the moderator's welcome message is delivered.
+
+The Active phase ends either when the thirty-minute timer expires or when all participants have declared readiness to conclude. In both cases, the system delivers a voice announcement via TTS and transitions to the Conclusion phase, where participants cast their votes.
+
+Once all votes are collected, the session moves to Closed. The system generates a final report through an LLM call---including session duration, turns per participant, AI intervention rate, and voting results---saves it alongside the moderator's accumulated summary, and cleans up all associated Redis keys.
 
 
 \subsection{Speaking Turn Flow}
@@ -123,21 +108,14 @@ While the participant speaks, audio frames arrive through the WebRTC connection.
 
 When the participant ends their turn, the moderation pipeline takes over. The consumer first waits briefly (up to 1.2 seconds) for the ASR cache to stabilize---polling until two consecutive reads return the same result---then collects the final transcript. If the ASR cache is empty, it falls back to the transcript sent by the frontend. The moderation lock is set, blocking new turn requests. The orchestrator evaluates triggers and calls the LLM. Static messages are delivered first (text-only or with TTS). If the LLM decides the AI should speak, a full AI turn is executed: the turn state transitions to AI Speaking, the TTS service synthesizes the message into audio chunks streamed to all participants through the audio hub, and the turn returns to Idle. Finally, if a participant had reserved the floor during the previous turn, an eight-second priority window opens for them.
 
-% TODO: Replace with actual diagram image
-% \begin{figure}[H]
-%     \centering
-%     \includegraphics[width=0.85\textwidth]{images/dataflow-speaking-turn.png}
-%     \caption{Speaking turn flow. A participant requests to speak, audio is forwarded and transcribed in parallel, and the moderation pipeline evaluates the turn before opening the floor to the next speaker.}
-%     \label{fig:dataflow-turn}
-% \end{figure}
 
 
 \subsection{Audio Flow}
 
-% TODO: Replace with actual diagram image
-% \begin{figure}[H]
-%     \centering
-%     \includegraphics[width=0.9\textwidth]{images/dataflow-audio.png}
-%     \caption{Audio flow. All audio flows through the server rather than directly between participants. The current speaker's audio is received via WebRTC, resampled to 48\,kHz mono 16-bit PCM, and processed along two paths: it is forwarded by the audio hub to every other participant's outbound track (the speaker is excluded to prevent echo), and simultaneously fed to the ASR stream for real-time transcription. When the AI moderator speaks, its synthesized voice follows the reverse path: Azure TTS generates PCM audio that is injected into a virtual track in the audio hub and delivered to all participants.}
-%     \label{fig:dataflow-audio}
-% \end{figure}
+All audio flows through the server rather than directly between participants, enabling ASR gating and AI audio injection.
+
+When a participant speaks, their audio arrives via WebRTC and is normalized to a common format: 48\,kHz, mono, 16-bit PCM. The server buffers incoming frames and generates fixed 20-millisecond chunks for consistent timing. If the buffer lacks sufficient data, silence is padded; if accumulation exceeds one second, older samples are discarded to reduce latency.
+
+The \texttt{SessionAudioHub} forwards each chunk to all other participants' outbound tracks without mixing or processing. The current speaker is automatically excluded from receiving their own audio, preventing echo without requiring client-side cancellation.
+
+When the AI moderator speaks, Azure TTS synthesizes the message in the same 48\,kHz format. The server injects these chunks directly into all participants' outbound tracks with slight pacing between chunks to prevent buffer underflow. Since the AI is not a registered peer, no exclusion filter is applied.

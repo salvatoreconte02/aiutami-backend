@@ -2,30 +2,39 @@
 \chapter{Value Proposition}
 
 \section{Value for Users}
-% TODO: What value does your solution provide?
 
-\section{Uniqueness (Onliness Statement)}
-% TODO: What makes your solution unique?
-% "Our product is the only [category] that [key benefit]..."
+AIutami provides value by addressing a fundamental problem in group discussions: unequal participation. In typical conversations, a few vocal individuals tend to dominate while others remain silent---not because they lack ideas, but because they struggle to find space to speak. This imbalance leads to missed insights, disengaged participants, and decisions that reflect only a subset of the group's collective knowledge.
+
+AIutami solves this through structured turn-taking managed by an AI moderator. The system monitors who has spoken and for how long, gently prompting quieter members to contribute while preventing any single participant from monopolizing the conversation. Periodic summaries keep everyone aligned on what has been discussed, and participation tracking makes imbalances transparent to the group.
+
+The result is a more democratic conversation where all voices are heard. Users no longer need to compete for attention or worry about being interrupted. The AI handles the social friction of turn-taking, freeing participants to focus on the content of the discussion rather than the mechanics of who speaks next.
+
 
 \section{Why It's a Good Solution}
-% TODO: Justify your design choices
 
-\section{Competitive Analysis}
-% TODO: Compare with competitors
+AIutami's design choices directly address the limitations identified in current research and existing products.
 
-\begin{table}[H]
-    \centering
-    \begin{tabular}{|l|c|c|c|c|}
-        \hline
-        \textbf{Feature} & \textbf{AIutami} & \textbf{Competitor 1} & \textbf{Competitor 2} \\
-        \hline
-        Feature A & \checkmark & \checkmark & -- \\
-        \hline
-        Feature B & \checkmark & -- & \checkmark \\
-        \hline
-        % Add more rows
-    \end{tabular}
-    \caption{Competitive Comparison}
-    \label{tab:competitors}
-\end{table}
+\textbf{Voice-first approach.} While most LLM-based moderation research focuses on text chat, real group discussions happen through voice. AIutami bridges this gap by integrating speech-to-text transcription with AI moderation, enabling intelligent facilitation in the natural medium of spoken conversation.
+
+\textbf{Proactive intervention.} Unlike transcription tools that passively record, AIutami's moderator actively participates. It can prompt quiet members, redirect off-topic discussions, and summarize progress---intervening when helpful rather than merely observing.
+
+\textbf{Structured state management.} Research shows that LLMs struggle with long, multi-turn conversations, losing track of context and constraints over time. AIutami addresses this through explicit turn tracking and conversation state stored in Redis, ensuring the moderator maintains coherent awareness of who has spoken, what has been discussed, and where the conversation stands.
+
+\textbf{Task-aware moderation.} Studies indicate that generic, task-agnostic moderators produce suboptimal interventions. AIutami allows session-specific context and goals, enabling the AI to provide relevant guidance rather than generic facilitation.
+
+\textbf{Balanced automation.} The system automates the mechanics of turn-taking without replacing human agency. Participants remain in control of the content; the AI only manages the structure. This balance preserves natural discussion dynamics while eliminating the friction of manual coordination.
+
+These choices result in a system that is technically grounded in current research while addressing practical gaps in existing tools.
+
+
+\section{Competitive Landscape}
+
+Existing solutions address fragments of the group discussion problem, but none combines real-time voice with active AI moderation.
+
+Video conferencing platforms like Zoom and Microsoft Teams provide the communication infrastructure and have recently integrated AI assistants for meeting summaries and Q\&A. However, turn-taking remains entirely manual---participants must self-regulate who speaks and when, often resulting in interruptions and unbalanced participation.
+
+Transcription services such as Otter.ai offer real-time speech-to-text and live summaries, but operate as passive observers. They document what is said without influencing how the conversation unfolds.
+
+Conversation intelligence platforms like Gong provide sophisticated analytics and even real-time coaching, but target sales contexts rather than collaborative group discussions.
+
+AIutami occupies a distinct position: it is the only platform designed specifically for structured group discussions with an AI moderator that actively manages turn-taking, monitors participation balance, and intervenes when the conversation needs guidance. Rather than analyzing discussions after they end or documenting them passively, AIutami shapes conversational dynamics as they happen---helping groups reach clear, shared outcomes.

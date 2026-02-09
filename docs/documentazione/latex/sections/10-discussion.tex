@@ -2,22 +2,33 @@
 \chapter{Discussion and Future Work}
 
 \section{Critical Reflection}
-% TODO: Reflect on the project
-% - What worked well?
-% - What could be improved?
-% - Lessons learned
+
+Developing AIutami revealed both the potential and the complexity of real-time AI-moderated voice discussions.
+
+Two technical areas proved particularly demanding. The audio pipeline required significant iteration: WebRTC signaling between browser and server introduced unexpected edge cases, and the audio encoding initially produced distorted, robotic output. The root cause was a mismatch in sample rate and format conversion---the server expected a specific frequency that did not match the browser's capture settings. Resolving this required careful debugging of the entire audio chain, from browser MediaRecorder through the server-side processing to the forwarding mechanism.
+
+The second challenge was calibrating the AI moderator's intervention behavior. An overly active moderator disrupts natural conversation flow; an overly passive one fails to provide value. Finding the right balance required iterative refinement of trigger thresholds, cooldown timers, and LLM prompt engineering. The final solution combined rule-based triggers for predictable situations---periodic summaries, silence detection, session time limits---with LLM judgment for nuanced cases like participation imbalance or off-topic drift.
+
+Several architectural decisions proved effective. Separating ephemeral state in Redis from persistent data in PostgreSQL enabled low-latency turn management without sacrificing durability. The service-oriented design kept business logic testable independently from WebSocket consumers. The trigger system's separation from LLM calls allowed deterministic behavior for time-sensitive situations while preserving AI flexibility for subjective moderation decisions.
+
+These experiences reinforced that real-time voice applications demand tight integration between components often developed separately. The moderation system cannot be designed in isolation from the audio pipeline---intervention timing depends on accurate turn state, which depends on reliable audio processing. Building these systems incrementally with continuous testing proved essential.
+
 
 \section{Limitations}
-% TODO: Known limitations of the current implementation
+
+The current implementation presents several constraints tied to its architectural choices and development scope.
+
+The system runs on a single server that handles all WebRTC connections, audio forwarding, ASR streams, and LLM calls. This architecture suits small-group discussions but would require horizontal scaling or infrastructure redesign to support multiple concurrent sessions or larger participant counts.
+
+The AI moderator is currently tailored to the Murder Mystery activity. Prompts, trigger conditions, and intervention strategies are designed for this specific collaborative scenario. Applying the system to different discussion formats would require adapting these components.
+
+The platform depends on Azure cloud services for speech recognition, language model inference, and text-to-speech synthesis. While fallback responses handle temporary service unavailability, extended outages would degrade the moderation experience. Response latency is also inherently tied to LLM processing time, which varies based on model load and prompt complexity.
+
 
 \section{Future Developments}
-% TODO: Potential future enhancements
-% - Short-term improvements
-% - Long-term vision
 
-% Optional: Business Perspectives
-% \section{Business Perspectives}
-% TODO: If applicable
-% - Market opportunity
-% - Business model
-% - Monetization strategy
+Two main directions guide the evolution of AIutami.
+
+The first is generalizing the platform beyond the Murder Mystery scenario. The current implementation demonstrates that AI moderation works effectively in structured collaborative tasks, but the same principles apply to study groups, team retrospectives, workshops, and other discussion formats. This generalization requires abstracting the prompt templates and trigger conditions into configurable profiles, allowing facilitators to define session goals, discussion phases, and intervention strategies suited to their context. A session creation interface could offer preset templates while enabling custom configurations.
+
+The second direction involves making the AI moderator more adaptive. Currently, the moderator follows static rules and prompt-based heuristics. Future versions could incorporate learning from session outcomes---adjusting intervention thresholds based on what proved effective, recognizing recurring discussion patterns, and adapting to group dynamics over time. Feedback mechanisms allowing participants to rate AI interventions would provide training signal for such improvements. The goal is a moderator that becomes more effective as it accumulates experience across sessions.

@@ -18,6 +18,7 @@
 \usepackage{caption}
 \usepackage{subcaption}
 \usepackage{rotating}
+\usepackage{chngcntr}
 \usepackage[style=ieee,backend=biber]{biblatex}
 
 % === CONFIGURATION ===
@@ -25,6 +26,10 @@
 
 % Remove "Chapter" word from chapter titles
 \titleformat{\chapter}[block]{\normalfont\huge\bfseries}{\thechapter.}{1em}{}
+
+% Continuous numbering for figures and tables (1, 2, 3 instead of 4.1, 5.1)
+\counterwithout{figure}{chapter}
+\counterwithout{table}{chapter}
 \hypersetup{
     colorlinks=true,
     linkcolor=blue,
