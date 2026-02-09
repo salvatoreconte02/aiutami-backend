@@ -1658,6 +1658,16 @@ class ForcedSummarySystemPromptTests(TestCase):
         self.assertIn("updated_summary", prompt)
         self.assertIn("message_to_say", prompt)
 
+    def test_forced_summary_system_prompt_forbids_greetings(self):
+        """FORCED_SUMMARY prompt should explicitly forbid greetings and introductions."""
+        prompt = ModerationService._build_forced_summary_system_prompt()
+        # Check that the prompt mentions not to use greetings
+        self.assertIn("NON usare mai", prompt)
+        self.assertIn("Ciao", prompt)
+        self.assertIn("GIÀ PRESENTATO", prompt)
+        # Check for suggested alternatives
+        self.assertIn("Finora è emerso", prompt)
+
 
 class ForcedSummaryFallbackTests(TestCase):
     def test_fallback_forced_summary_returns_expected_structure(self):

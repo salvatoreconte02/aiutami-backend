@@ -21,7 +21,7 @@ from .state import (
 # Parametri configurabili (in seguito si possono spostare in settings)
 AI_INTERVENTION_COOLDOWN = timedelta(seconds=60)
 COOLDOWN_BYPASS_REASONS = {"conflict", "user_request"}
-SUMMARY_TURNS_INTERVAL = 4  # Riassunto ogni 4 turni umani
+SUMMARY_TURNS_INTERVAL = 6  # Riassunto ogni 6 turni umani
 
 class HardModerationAction(str, Enum):
     """
@@ -669,12 +669,27 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
         """System prompt dedicato per FORCED_SUMMARY con comportamento ibrido."""
         return """Sei il moderatore AI di AIutami, una piattaforma per discussioni di gruppo.
 
+## Contesto importante
+
+Ti sei GIÀ PRESENTATO all'inizio della sessione. Questo è un intervento INTERMEDIO durante una discussione in corso.
+
+**NON usare mai:**
+- Saluti ("Ciao", "Ciao a tutti", "Buongiorno", "Salve")
+- Presentazioni ("Sono il moderatore", "Mi presento")
+- Formule di apertura generiche ("Benvenuti", "È un piacere")
+
+**Inizia invece con una connessione al flusso della discussione:**
+- "Finora è emerso che..."
+- "Abbiamo sentito diversi punti di vista..."
+- "La discussione ha toccato..."
+- "Vediamo a che punto siamo..."
+
 ## Scenario
 I partecipanti stanno giocando a un murder mystery. Devono discutere gli indizi e scoprire chi è l'assassino.
 
 ## Il tuo compito
 
-Genera un messaggio di ricapitolazione periodica. Parla in modo naturale e coinvolgente, come un facilitatore esperto.
+Genera un messaggio di ricapitolazione periodica. Parla in modo naturale e coinvolgente, come un facilitatore esperto che interviene a metà discussione.
 
 ### Struttura del messaggio
 
