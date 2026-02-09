@@ -17,10 +17,14 @@
 \usepackage{float}
 \usepackage{caption}
 \usepackage{subcaption}
+\usepackage{rotating}
 \usepackage[style=ieee,backend=biber]{biblatex}
 
 % === CONFIGURATION ===
 \geometry{margin=2.5cm}
+
+% Remove "Chapter" word from chapter titles
+\titleformat{\chapter}[block]{\normalfont\huge\bfseries}{\thechapter.}{1em}{}
 \hypersetup{
     colorlinks=true,
     linkcolor=blue,
@@ -41,6 +45,8 @@
 \fancyhead[L]{\leftmark}
 \fancyhead[R]{AIutami}
 \fancyfoot[C]{\thepage}
+% Remove "CHAPTER" from header, show only chapter number and title
+\renewcommand{\chaptermark}[1]{\markboth{\thechapter. #1}{}}
 
 % Code listing style
 \lstset{

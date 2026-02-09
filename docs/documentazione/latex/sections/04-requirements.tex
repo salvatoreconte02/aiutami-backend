@@ -9,11 +9,11 @@ The system addresses three levels of stakeholders based on their proximity to th
 
 \textbf{Primary users} are the direct participants in moderated discussions. This group includes students and researchers engaging in academic debates or group projects, colleagues collaborating in professional meetings, and participants in educational or entertainment activities.
 
-\textbf{Secondary users} are those who oversee or facilitate discussions without being the main speakers. This category includes teachers and trainers who monitor student participation, team leaders and managers who guide collaborative sessions, and facilitators who use the system as a support tool for group dynamics.
+\textbf{Secondary users} are those who oversee discussions without being the main speakers. This category includes teachers and trainers who monitor student participation, team leaders and managers who guide collaborative sessions, and facilitators who use the system as a support tool for group dynamics.
 
 \textbf{Tertiary users} are individuals or organizations that do not interact directly with the platform but are affected by its adoption. These include educational institutions and companies that deploy the system to improve internal collaboration.
 
-\textbf{MVP Focus:} For the purpose of this project, the implementation targets a specific entertainment scenario---the Murder Mystery game---where participants must collaborate vocally to solve a case. This context was chosen because it naturally exhibits the challenges the system aims to address: multiple voices competing to speak, risk of dominant participants, and the need for structured turn-taking to reach a shared conclusion.
+\textbf{MVP Focus:} For the purpose of this project, the implementation targets the Murder Mystery experimental paradigm~\cite{Stasser1992HiddenProfiles}, where participants must collaborate vocally to solve a case. This context was chosen because it naturally exhibits the challenges the system aims to address: multiple voices competing to speak, risk of dominant participants, and the need for structured turn-taking to reach a shared conclusion.
 
 \section{Stakeholder Needs}
 
@@ -43,7 +43,7 @@ The context describes where and how the system is used, articulated across four 
 
 \textbf{Social context} --- AIutami is designed for small groups of 2 to 8 participants. These groups may have equal roles (peers collaborating) or differentiated roles (teacher-students, team leader-colleagues). The shared objective is typically collaborative decision-making, learning, or structured discussion.
 
-\textbf{MVP Scope:} The current implementation focuses on the Murder Mystery entertainment scenario with 3 participants collaborating to solve a case through structured vocal interaction.
+\textbf{MVP Scope:} The current implementation focuses on the Murder Mystery experimental scenario with 3 participants collaborating to solve a case through structured vocal interaction.
 
 \section{Goals}
 
@@ -67,16 +67,15 @@ Several factors constrain the system's design and performance.
 
 \textbf{Speech recognition accuracy} --- The ASR service may produce transcription errors, particularly with background noise, accents, or unclear speech. While occasional errors are acceptable, they can affect the quality of summaries and the AI's understanding of the discussion.
 
-\textbf{LLM behavioral limitations} --- The language model powering the AI moderator has limited customization. Content moderation policies and inherent model behaviors may occasionally produce responses that are not perfectly suited to the moderation context, requiring careful prompt engineering.
+\textbf{LLM behavioral limitations} --- The language model powering the AI moderator has limited customization. Content moderation policies and inherent model behaviors may occasionally produce responses that are not perfectly suited to the moderation context.
 
 \textbf{Cloud-based audio processing} --- Audio data is transmitted to external cloud services (Azure Speech) for transcription. While these services follow industry security standards, users should be aware that their voice data is processed externally. The system does not store raw audio or full transcriptions---only session summaries are retained for the final report.
 
 \section{UNG Diagram}
 
-% TODO: Insert UNG diagram image
-% \begin{figure}[H]
-%     \centering
-%     \includegraphics[width=0.8\textwidth]{ung-diagram.png}
-%     \caption{UNG Diagram showing the relationships between stakeholders, needs, goals, context, and constraints.}
-%     \label{fig:ung}
-% \end{figure}
+\begin{figure}[H]
+    \centering
+    \includegraphics[angle=90,width=\textwidth,height=0.85\textheight,keepaspectratio]{ung-diagram.png}
+    \caption{UNG Diagram showing the relationships between stakeholders, needs, goals, context, and constraints.}
+    \label{fig:ung}
+\end{figure}
