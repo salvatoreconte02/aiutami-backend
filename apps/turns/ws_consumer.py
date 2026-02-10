@@ -27,9 +27,9 @@ from apps.moderation.intro import (
 
 logger = logging.getLogger(__name__)
 
-# Transcript storage constants
+# Costanti per storage transcript
 TRANSCRIPT_KEY_PREFIX = "session"
-TRANSCRIPT_TTL = 60 * 60 * 24  # 24 hours
+TRANSCRIPT_TTL = 60 * 60 * 24  # 24 ore
 
 
 def _append_to_session_transcript(session_id: str, entry: dict) -> None:
@@ -56,11 +56,9 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
     e notifica tutti gli utenti nella sessione tramite broadcast.
     """
 
-    # -------------------------------------------------------------------------
-    # Background trigger task management (class-level, shared across instances)
-    # -------------------------------------------------------------------------
+    # Gestione background task per trigger temporali (class-level, condiviso tra istanze)
     _trigger_tasks: ClassVar[Dict[str, asyncio.Task]] = {}
-    _trigger_tasks_lock: ClassVar[asyncio.Lock] = None  # Lazy init
+    _trigger_tasks_lock: ClassVar[asyncio.Lock] = None  # Inizializzazione lazy
 
     @classmethod
     def _get_trigger_lock(cls) -> asyncio.Lock:
@@ -69,9 +67,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             cls._trigger_tasks_lock = asyncio.Lock()
         return cls._trigger_tasks_lock
 
-    # -------------------------------------------------------------------------
     # Parametri attesa cache ASR (evita race: stop turno -> Azure finalizza dopo)
-    # -------------------------------------------------------------------------
     ASR_CACHE_WAIT_MAX_S = 1.2
     ASR_CACHE_WAIT_STEP_S = 0.15
     ASR_CACHE_STABLE_READS = 2  # letture consecutive uguali per considerare "stabile"
@@ -112,14 +108,9 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
         # Ferma il background task per i trigger temporali
-        # Nota: in un'implementazione più sofisticata, si potrebbe contare
-        # i client connessi e fermare solo quando l'ultimo si disconnette
+        
         if hasattr(self, "session_id"):
             await self._maybe_stop_trigger_task()
-
-    # -------------------------------------------------------------------------
-    # Dispatcher principale: riceve JSON dal frontend
-    # -------------------------------------------------------------------------
 
     async def receive_json(self, content, **kwargs):
         """
@@ -177,10 +168,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 "type": message_type,
             }
         )
-
-    # -------------------------------------------------------------------------
-    # HANDLER DELLE AZIONI
-    # -------------------------------------------------------------------------
 
     async def _handle_get_state(self, content):
         """
@@ -260,10 +247,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 "payload": result.to_state_dict(),
             }
         )
-
-    # -------------------------------------------------------------------------
-    # ASR cache helper (attesa breve per final Azure)
-    # -------------------------------------------------------------------------
 
     async def _collect_asr_transcript_with_wait(self, cache_key: str) -> str:
         """
@@ -385,7 +368,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             except Exception:
                 session_phase = "ACTIVE"
 
-            # --- TESTO TURNO: cache final ASR con attesa breve, poi fallback a transcript frontend ---
+            # Testo turno: cache final ASR con attesa breve, poi fallback a transcript frontend
             last_turn_text = await self._collect_asr_transcript_with_wait(cache_key)
 
             if not last_turn_text:
@@ -395,7 +378,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             # Nome parlante (display_name se presente, altrimenti username)
             speaker_name = getattr(user, "display_name", None) or user.get_username()
 
-            # Append human turn to session transcript
+            # Aggiunge il turno umano al transcript della sessione
             if last_turn_text:
                 _append_to_session_transcript(self.session_id, {
                     "type": "human",
@@ -422,7 +405,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 decision.should_transition_to_conclusion,
             )
 
-            # --- DEBUG: invio diretto del messaggio del moderatore LLM al chiamante ---
+            # Invio anticipato del messaggio LLM al chiamante (per debug frontend)
             if decision.ai_should_speak and decision.ai_message:
                 await self.send_json(
                     {
@@ -430,7 +413,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                         "payload": {"text": decision.ai_message},
                     }
                 )
-            # ---------------------------------------------------------------------------
 
             # 5) Esecuzione dei messaggi statici (senza LLM) come veri turni AI
             for msg in decision.static_messages_to_speak:
@@ -457,7 +439,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
             # 6) Eventuale intervento AI proposto dall'LLM con TTS
             if decision.ai_should_speak and decision.ai_message:
-                # 6.1 Start AI turn
+                # 6.1 Avvia turno AI
                 ai_start_res = TM.ai_start(self.session_id)
                 if not ai_start_res.success:
                     logger.warning(
@@ -474,19 +456,19 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                             "payload": ev.payload or {},
                         })
 
-                    # 6.2 Set AI as speaker in audio hub
+                    # 6.2 Imposta AI come speaker nell'audio hub
                     hub = get_hub(self.session_id)
                     hub.init_ai_track()
                     hub.set_speaker(AI_MODERATOR_ID)
 
-                    # 6.3 TTS streaming with injection to hub
+                    # 6.3 TTS streaming con injection nell'hub
                     tts = TTSService()
                     tts_result = await tts.synthesize_stream(
                         text=decision.ai_message,
                         on_audio_chunk=lambda pcm, samples, sr: self._inject_ai_audio(hub, pcm, samples, sr)
                     )
 
-                    # 6.4 Fallback if TTS fails
+                    # 6.4 Fallback se TTS fallisce
                     if not tts_result.success:
                         logger.warning(f"TTS failed: {tts_result.error}, fallback to text")
                         await self.send_json({
@@ -494,7 +476,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                             "payload": {"text": decision.ai_message}
                         })
 
-                    # 6.5 Append to session transcript
+                    # 6.5 Aggiunge al transcript della sessione
                     _append_to_session_transcript(self.session_id, {
                         "type": "ai",
                         "text": decision.ai_message,
@@ -502,11 +484,11 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                         "timestamp": datetime.utcnow().isoformat()
                     })
 
-                    # 6.6 Wait for audio playout to finish
+                    # 6.6 Attende fine riproduzione audio
                     hub.mark_ai_stream_end()
                     await hub.wait_ai_playout()
 
-                    # 6.7 End AI turn
+                    # 6.7 Fine turno AI
                     hub.set_speaker(None)
                     ai_end_res = TM.ai_end(self.session_id)
                     await self._mark_any_activity()
@@ -530,7 +512,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
             # 7) Gestione transizione a CONCLUSION (timer 30 min scaduto)
             if decision.should_transition_to_conclusion:
-                # Set the reason for conclusion before transitioning
+                # Imposta il motivo della conclusione prima della transizione
                 await self._set_conclusion_reason("timer_expired")
                 transitioned = await self._transition_session_to_conclusion()
                 if transitioned:
@@ -545,7 +527,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                             "payload": payload,
                         },
                     )
-                    # Execute FORCED_CONCLUSION immediately
+                    # Esegue FORCED_CONCLUSION immediatamente
                     await self._execute_forced_conclusion()
 
             # 8) Flush messaggi TTS pendenti (accodati durante la moderazione)
@@ -570,7 +552,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             reservation_event = TM.start_reservation_window(self.session_id)
             if reservation_event is not None:
                 await self._broadcast_events([reservation_event])
-                # Schedula il timer per l'expiration
+                # Schedula il timer per la scadenza
                 asyncio.create_task(
                     self._schedule_reservation_expiration(
                         session_id=self.session_id,
@@ -785,10 +767,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             }
         )
 
-    # -------------------------------------------------------------------------
-    # UTILITIES
-    # -------------------------------------------------------------------------
-
     async def _broadcast_events(self, events):
         if not events:
             return
@@ -814,7 +792,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         """
         await asyncio.sleep(PRIORITY_WINDOW_SECONDS)
 
-        # Verifica e expira (sync method wrapped)
+        # Verifica e fa scadere (metodo sync wrappato)
         event = await database_sync_to_async(
             TurnManager.expire_reservation_if_pending
         )(session_id, user_id)
@@ -836,10 +814,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 "payload": event["payload"],
             }
         )
-
-    # -------------------------------------------------------------------------
-    # CHECKS UTILI (sync → async)
-    # -------------------------------------------------------------------------
 
     @database_sync_to_async
     def _is_session_member(self, session_id, user_id: int) -> bool:
@@ -889,10 +863,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         return True
 
-    # -------------------------------------------------------------------------
-    # WRAPPER SYNC → ASYNC per i timer di moderazione e l'orchestratore
-    # -------------------------------------------------------------------------
-
     @database_sync_to_async
     def _mark_any_activity(self) -> None:
         mark_any_activity(self.session_id)
@@ -902,7 +872,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         mark_user_spoke(self.session_id, user_id)
 
     async def _inject_ai_audio(self, hub, pcm: bytes, samples: int, sample_rate: int):
-        """Wrapper async per inject_ai_audio."""
+        """Wrapper asincrono per inject_ai_audio."""
         hub.inject_ai_audio(pcm, samples, sample_rate)
 
     @database_sync_to_async
@@ -955,7 +925,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         from apps.moderation.state import load_moderation_state, save_moderation_state
         from apps.moderation.service import ModerationService
 
-        # Load moderation state
+        # Carica stato moderazione
         state = await database_sync_to_async(load_moderation_state)(self.session_id)
 
         if state.forced_conclusion_done:
@@ -964,27 +934,27 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         logger.info("[FORCED_CONCLUSION][START] session=%s", self.session_id)
 
-        # Determine conclusion reason
+        # Determina il motivo della conclusione
         conclusion_reason = state.conclusion_reason or "timer_expired"
 
-        # Get session duration
+        # Ottiene durata sessione
         try:
             duration_minutes = await self._get_session_duration_minutes()
         except Exception:
             duration_minutes = 30
 
-        # Call LLM with forced_conclusion mode
+        # Chiama LLM in modalità forced_conclusion
         result = await database_sync_to_async(ModerationService.call_llm_for_conclusion)(
             summary_in=state.summary,
             conclusion_reason=conclusion_reason,
             session_duration_minutes=duration_minutes,
         )
 
-        # Execute TTS message
+        # Esegue messaggio TTS
         if result.get("message_to_say"):
             await self._execute_tts_message(result["message_to_say"])
 
-        # Mark as done
+        # Segna come completato
         state.forced_conclusion_done = True
         state.summary = result.get("updated_summary", state.summary)
         await database_sync_to_async(save_moderation_state)(self.session_id, state)
@@ -1004,7 +974,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 return int(delta.total_seconds() / 60)
         except Session.DoesNotExist:
             pass
-        return 30  # Default
+        return 30  # Valore predefinito
 
     @database_sync_to_async
     def _set_conclusion_reason(self, reason: str) -> None:
@@ -1039,10 +1009,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         # Il serializer gestirà user=None restituendo me=null
         context = {"request": FakeRequest(user)}
         return SessionDetailSerializer(session, context=context).data
-
-    # -------------------------------------------------------------------------
-    # Background trigger task lifecycle
-    # -------------------------------------------------------------------------
 
     async def _maybe_start_trigger_task(self) -> None:
         """
@@ -1109,7 +1075,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
                 logger.debug("[TRIGGER_LOOP][TICK] session=%s", session_id)
 
-                # CHECK INTRO PENDING (before everything else)
+                # Controlla intro pendente (prima di tutto il resto)
                 if has_intro_pending(session_id):
                     state = TurnManager.get_state_only(session_id)
                     if state and state.state == "AI_INTRODUCING":
@@ -1152,7 +1118,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 # NON transizionare se il messaggio TTS è stato accodato - la transizione
                 # avverrà quando il messaggio viene eseguito in _flush_pending_tts_messages
                 if trig_result.should_transition_to_conclusion and not message_was_queued:
-                    # Set the reason for conclusion before transitioning
+                    # Imposta il motivo della conclusione prima della transizione
                     await self._set_conclusion_reason("timer_expired")
                     transitioned = await self._transition_session_to_conclusion()
                     if transitioned:
@@ -1168,7 +1134,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                                 "payload": payload,
                             },
                         )
-                        # Execute FORCED_CONCLUSION immediately
+                        # Esegue FORCED_CONCLUSION immediatamente
                         await self._execute_forced_conclusion()
 
                 # Svuota coda messaggi pendenti se IDLE
@@ -1270,7 +1236,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 "payload": ev.payload or {},
             })
 
-        # Set AI as speaker in audio hub
+        # Imposta AI come speaker nell'audio hub
         hub = get_hub(self.session_id)
         hub.init_ai_track()
         hub.set_speaker(AI_MODERATOR_ID)
@@ -1295,7 +1261,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     },
                 )
 
-            # Append to transcript
+            # Aggiunge al transcript
             _append_to_session_transcript(self.session_id, {
                 "type": "ai",
                 "text": text,
@@ -1307,11 +1273,11 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             logger.error("[TTS_MESSAGE][ERROR] session=%s error=%s", self.session_id, e, exc_info=True)
 
         finally:
-            # Wait for audio playout to finish
+            # Attende fine riproduzione audio
             hub.mark_ai_stream_end()
             await hub.wait_ai_playout()
 
-            # End AI turn
+            # Fine turno AI
             hub.set_speaker(None)
             ai_end_res = TurnManager.ai_end(self.session_id)
             await self._mark_any_activity()
@@ -1337,21 +1303,21 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
     async def _execute_intro_message(self, session_id: str) -> None:
         """
-        Execute the AI moderator introduction message.
+        Esegue il messaggio di introduzione del moderatore AI.
 
-        Called when a session starts with intro pending.
+        Chiamato quando una sessione inizia con intro pendente.
         """
         from apps.turns.services import TurnManager
 
         logger.info("[INTRO_MESSAGE][START] session=%s", session_id)
 
-        # 1. Brief delay for clients to settle
+        # 1. Breve attesa per stabilizzare i client
         await asyncio.sleep(2.5)
 
-        # 2. Generate message with participant names
+        # 2. Genera messaggio con nomi partecipanti
         intro_text = await database_sync_to_async(generate_intro_message)(session_id)
 
-        # 3. Execute TTS (state is already AI_INTRODUCING, no need to change to AI_SPEAKING)
+        # 3. Esegue TTS (stato già AI_INTRODUCING, non serve cambiare a AI_SPEAKING)
         hub = get_hub(session_id)
         hub.init_ai_track()
         hub.set_speaker(AI_MODERATOR_ID)
@@ -1366,7 +1332,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
             if not tts_result.success:
                 logger.warning("[INTRO_MESSAGE][TTS_FAILED] session=%s error=%s", session_id, tts_result.error)
-                # Fallback to text message
+                # Fallback a messaggio testuale
                 await self.channel_layer.group_send(
                     self.group_name,
                     {
@@ -1376,7 +1342,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     },
                 )
 
-            # Append to transcript
+            # Aggiunge al transcript
             _append_to_session_transcript(session_id, {
                 "type": "ai",
                 "text": intro_text,
@@ -1388,19 +1354,19 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             logger.error("[INTRO_MESSAGE][ERROR] session=%s error=%s", session_id, e, exc_info=True)
 
         finally:
-            # Wait for audio playout to finish
+            # Attende fine riproduzione audio
             hub.mark_ai_stream_end()
             await hub.wait_ai_playout()
 
             hub.set_speaker(None)
 
-            # 4. Transition to IDLE
+            # 4. Transizione a IDLE
             TurnManager.end_introducing(session_id)
 
-            # 5. Reset NO_PUSH timer (activity just happened)
+            # 5. Reset timer NO_PUSH (c'è stata attività)
             await self._mark_any_activity()
 
-            # 6. Broadcast AI_ENDED event
+            # 6. Broadcast evento AI_ENDED
             await self.channel_layer.group_send(
                 self.group_name,
                 {
@@ -1410,7 +1376,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 },
             )
 
-            # 7. Broadcast state change to IDLE
+            # 7. Broadcast cambio stato a IDLE
             state = TurnManager.get_state_only(session_id)
             if state:
                 await self.channel_layer.group_send(
@@ -1422,7 +1388,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     },
                 )
 
-            # 8. Remove pending flag
+            # 8. Rimuove flag pendente
             clear_intro_pending(session_id)
 
             logger.info("[INTRO_MESSAGE][END] session=%s", session_id)
@@ -1462,5 +1428,5 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                             "payload": payload,
                         },
                     )
-                    # Execute FORCED_CONCLUSION to generate final summary
+                    # Esegue FORCED_CONCLUSION per generare il riepilogo finale
                     await self._execute_forced_conclusion()
