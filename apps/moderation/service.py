@@ -693,19 +693,19 @@ Genera un messaggio di ricapitolazione periodica. Parla in modo naturale e coinv
 
 ### Struttura del messaggio
 
-1. **[Solo se necessario] Correzione gentile** - Se rilevi un problema (monopolizzazione, esclusione, off-topic, conflitto), inizia con un invito delicato a riequilibrare
+1. **[Solo se necessario] Correzione gentile** - Se rilevi un problema nell'ultimo turno, inizia con un invito delicato a riequilibrare
 2. **Ricapitolazione fluida** - Riassumi gli indizi emersi in modo discorsivo, menzionando chi ha sollevato cosa e su quale sospettato
 3. **Apertura sul contenuto** - Concludi invitando ad approfondire un aspetto non ancora esplorato
 
 ## Criteri per la correzione
 
-Includi una correzione solo se:
-- **Monopolizzazione**: un partecipante ha parlato molto più degli altri (guarda il campo `participants.turns`)
-- **Esclusione**: qualcuno non ha mai parlato o ha pochissimi turni
-- **Off-topic**: discussione lontana dal caso del murder mystery
-- **Conflitto**: toni aggressivi nel contenuto dell'ultimo turno
+Includi una correzione SOLO se rilevi un problema nell'ultimo turno (`last_turn.text`):
+- **Off-topic**: L'ultimo turno è fuori tema rispetto al caso?
+- **Conflitto**: L'ultimo turno contiene toni aggressivi?
 
-Se non rilevi problemi, vai diretto alla ricapitolazione senza correzione.
+⚠️ NON usare il summary per valutare questi problemi. Il summary è storico e potresti correggere problemi già affrontati in turni precedenti.
+
+Se l'ultimo turno non presenta problemi, vai diretto alla ricapitolazione senza correzione.
 
 ## Tono e stile
 - Caldo e naturale, come un facilitatore esperto
@@ -719,7 +719,7 @@ Rispondi SOLO con un JSON valido:
 {
     "updated_summary": "Riassunto aggiornato includendo l'ultimo turno",
     "message_to_say": "Il messaggio vocale completo",
-    "correction_reason": "monopolization | exclusion | off_topic | conflict | null"
+    "correction_reason": "off_topic | conflict | null"
 }
 
 IMPORTANTE: `correction_reason` indica il tipo di problema rilevato. Se non c'è problema, usa null."""
@@ -755,11 +755,29 @@ NON intervenire per:
 
 ## Come valutare
 
-Analizza:
-1. Il campo `participants.turns` - chi ha parlato quanto?
-2. Il `last_turn` - c'è qualcosa che richiede intervento?
-3. Il `summary` - la discussione sta procedendo verso l'obiettivo?
+### Problemi PUNTUALI → guarda SOLO `last_turn`
+Per decidere se intervenire su questi problemi, valuta ESCLUSIVAMENTE l'ultimo turno:
+- **Off-topic**: L'ultimo turno è fuori tema rispetto al caso?
+- **Conflitto**: L'ultimo turno contiene toni aggressivi, insulti o attacchi personali?
+- **Richiesta diretta**: L'ultimo turno contiene una richiesta esplicita al moderatore?
 
+⚠️ NON usare il `summary` per valutare questi problemi. Il summary è storico e potresti intervenire su problemi già affrontati in turni precedenti.
+
+### Problemi CUMULATIVI → guarda `participants.turns`
+Per questi problemi, valuta i contatori numerici dei turni:
+- **Monopolizzazione**: Un partecipante ha molti più turni degli altri?
+- **Esclusione**: Un partecipante ha zero o pochissimi turni?
+
+⚠️ Valuta questi problemi SOLO se `session.total_turns` >= 6.
+Nei primi turni della discussione è normale che la partecipazione sia sbilanciata.
+Se total_turns < 6, ignora monopolizzazione ed esclusione.
+
+### A cosa serve il `summary`
+Usa il summary SOLO per:
+- Capire il contesto generale della discussione
+- Generare l'`updated_summary` includendo i nuovi punti emersi dall'ultimo turno
+
+### Punteggio
 Assegna un `intervention_score` da 0 a 1:
 - 0.0-0.3: Tutto ok, nessun problema
 - 0.4-0.6: Situazione da monitorare ma non critica
