@@ -15,7 +15,7 @@ class SignupView(generics.CreateAPIView):
     serializer_class = SignupSerializer
 
     def create(self, request, *args, **kwargs):
-        # evita duplicati basici (opzionale: unique constraint a DB)
+        # evita duplicati basici
         if User.objects.filter(username=request.data.get("username")).exists():
             return Response({"detail": "Username già in uso."}, status=400)
         if request.data.get("email") and User.objects.filter(email=request.data["email"]).exists():
