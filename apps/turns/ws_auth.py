@@ -1,5 +1,3 @@
-# apps/turns/ws_auth.py
-
 from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
@@ -16,7 +14,7 @@ class JwtAuthMiddleware:
         self.inner = inner
 
     async def __call__(self, scope, receive, send):
-        # Import qui, NON a livello di modulo
+        
         from django.contrib.auth.models import AnonymousUser
         from rest_framework_simplejwt.tokens import UntypedToken
         from rest_framework_simplejwt.exceptions import InvalidToken, TokenError

@@ -8,22 +8,14 @@ from django.core.cache import cache
 from django.utils import timezone
 
 
-# -------------------------------------------------------------------
-#  Costanti di dominio (stati turno)
-# -------------------------------------------------------------------
-
 TURN_STATE_IDLE = "IDLE"
 TURN_STATE_HUMAN_SPEAKING = "HUMAN_SPEAKING"
 TURN_STATE_AI_SPEAKING = "AI_SPEAKING"
 TURN_STATE_AI_INTRODUCING = "AI_INTRODUCING"
 
-# Durata (concettuale) della finestra di priorità, in secondi
+# Durata  della finestra di priorità, in secondi
 PRIORITY_WINDOW_SECONDS = 8
 
-
-# -------------------------------------------------------------------
-#  Modelli interni (non legati a Django REST o WebSocket)
-# -------------------------------------------------------------------
 
 @dataclass
 class TurnState:
@@ -106,10 +98,6 @@ class TurnResult:
         return data
 
 
-# -------------------------------------------------------------------
-#  TurnManager
-# -------------------------------------------------------------------
-
 class TurnManager:
     """
     Servizio applicativo responsabile della gestione dei turni.
@@ -117,10 +105,6 @@ class TurnManager:
     Gli strati superiori (WebSocket consumer, eventuali viste REST) chiamano
     questi metodi passando session_id e user, e ricevono un TurnResult.
     """
-
-    # ----------------------------
-    #  Metodi pubblici principali
-    # ----------------------------
 
     @classmethod
     def get_state(cls, session_id: str, user) -> TurnResult:
@@ -462,10 +446,6 @@ class TurnManager:
         cls._save_state(session_id, state)
         return TurnResult(success=True, state=state, events=events)
 
-    # ----------------------------
-    #  Metodi di supporto interni
-    # ----------------------------
-
     @classmethod
     def _load_state(cls, session_id: str) -> TurnState:
         """
@@ -548,10 +528,6 @@ class TurnManager:
             },
         )
 
-    # -------------------------------------------------------------------
-    #  API per la fase di moderazione
-    # -------------------------------------------------------------------
-
     @classmethod
     def set_moderation_in_progress(cls, session_id: str, value: bool) -> TurnState:
         """
@@ -571,10 +547,8 @@ class TurnManager:
     @classmethod
     def set_introducing(cls, session_id: str) -> TurnState:
         """
-        Set turn state to AI_INTRODUCING for session intro.
-
-        Called when session transitions from LOBBY to ACTIVE to block
-        all user interactions while the AI moderator speaks the introduction.
+        Imposta lo stato turno a AI_INTRODUCING per l'introduzione sessione.
+        Blocca tutte le interazioni mentre il moderatore AI parla.
         """
         state = cls._load_state(session_id)
         state.state = TURN_STATE_AI_INTRODUCING
@@ -584,11 +558,7 @@ class TurnManager:
 
     @classmethod
     def end_introducing(cls, session_id: str) -> TurnState:
-        """
-        End the intro phase and transition to IDLE.
-
-        Called after the AI moderator finishes speaking the introduction.
-        """
+        """Termina la fase intro e passa a IDLE."""
         state = cls._load_state(session_id)
         state.state = TURN_STATE_IDLE
         state.version += 1

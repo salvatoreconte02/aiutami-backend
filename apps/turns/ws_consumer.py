@@ -14,7 +14,6 @@ from django.core.cache import cache
 
 from apps.turns.services import TurnManager, PRIORITY_WINDOW_SECONDS
 
-# 🔹 import moderazione: timer NO PUSH / tempo sessione / inattivo
 from apps.moderation.timers_state import mark_any_activity, mark_user_spoke
 from apps.moderation.orchestrator import ModerationOrchestrator
 from apps.moderation.triggers import evaluate_time_based_triggers
@@ -244,11 +243,9 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             return
 
         from apps.turns.services import TurnManager
-        from channels.db import database_sync_to_async
 
         result = await database_sync_to_async(TurnManager.request_speak)(self.session_id, user)
 
-        # 🔹 Se il turno umano è effettivamente partito, si aggiorna lo stato dei timer.
         if result.success:
             await self._mark_any_activity()
             await self._mark_user_spoke(user.id)
@@ -654,7 +651,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         result = TurnManager.ai_start(self.session_id)
 
-        # 🔹 Inizio intervento AI: anche questo resetta il timer NO PUSH.
         if result.success:
             await self._mark_any_activity()
 
@@ -696,7 +692,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         result = TurnManager.ai_end(self.session_id)
 
-        # 🔹 Fine intervento AI: anche questo è attività.
         if result.success:
             await self._mark_any_activity()
 
@@ -1119,7 +1114,7 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     state = TurnManager.get_state_only(session_id)
                     if state and state.state == "AI_INTRODUCING":
                         await self._execute_intro_message(session_id)
-                        continue  # Skip rest of loop iteration
+                        continue
 
                 try:
                     session_phase = await self._get_session_state(session_id)
@@ -1281,7 +1276,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         hub.set_speaker(AI_MODERATOR_ID)
 
         try:
-            # TTS streaming
             logger.info("[TTS_MESSAGE][TTS_START] session=%s", self.session_id)
             tts = TTSService()
             tts_result = await tts.synthesize_stream(
