@@ -1,11 +1,7 @@
-# apps/sessions/ws_consumer.py
-
 from __future__ import annotations
 
-from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
-from channels.layers import get_channel_layer
 
 
 class SessionsConsumer(AsyncJsonWebsocketConsumer):
@@ -58,15 +54,9 @@ class SessionsConsumer(AsyncJsonWebsocketConsumer):
         if hasattr(self, "group_name"):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
-    # -------------------------------------------------------------------------
-    # Ricezione messaggi dal client (in pratica: WS read-only)
-    # -------------------------------------------------------------------------
-
+    # Ricezione messaggi dal client (WS read-only)
     async def receive_json(self, content, **kwargs):
-        """
-        Per ora il canale è *solo notifiche server→client*.
-        Se il client invia qualcosa, si risponde con un errore standard.
-        """
+        
         await self.send_json(
             {
                 "type": "sessions.error",
@@ -78,10 +68,7 @@ class SessionsConsumer(AsyncJsonWebsocketConsumer):
             }
         )
 
-    # -------------------------------------------------------------------------
     # Handler chiamato da group_send
-    # -------------------------------------------------------------------------
-
     async def sessions_event(self, event):
         """
         Handler usato da Channels quando qualcuno fa:
@@ -95,10 +82,7 @@ class SessionsConsumer(AsyncJsonWebsocketConsumer):
             }
         )
 
-    # -------------------------------------------------------------------------
     # Helper: controlli DB (sync → async)
-    # -------------------------------------------------------------------------
-
     @database_sync_to_async
     def _is_session_member(self, session_id: str, user_id: int) -> bool:
         """
@@ -111,52 +95,3 @@ class SessionsConsumer(AsyncJsonWebsocketConsumer):
             participants__user_id=user_id,
         ).exists()
 
-    @database_sync_to_async
-    def _get_session_state(self, session_id: str) -> str:
-        """
-        PER ADESSO NON USATA, NEL CHILLING :)
-        
-        Eventuale utility futura per leggere lo stato (ACTIVE, LOBBY, ecc.).
-        Non usata subito, ma utile se si vorrà filtrare per stato.
-        """
-        from apps.sessions.models import Session
-
-        return Session.objects.values_list("state", flat=True).get(id=session_id)
-
-
-# -------------------------------------------------------------------------
-# Funzione di broadcast da usare nelle view HTTP
-# -------------------------------------------------------------------------
-
-def broadcast_session_event(session_id: str, event_type: str, payload: dict | None = None) -> None:
-    """
-    Funzione di utilità da richiamare dalle view (o da altri servizi)
-    per inviare eventi a tutti i client collegati alla sessione.
-
-    Esempi:
-        broadcast_session_event(
-            session_id,
-            "STATE_CHANGED",
-            {"state": "ACTIVE"}
-        )
-
-        broadcast_session_event(
-            session_id,
-            "CLOSED",
-            {"state": "CLOSED"}
-        )
-    """
-    channel_layer = get_channel_layer()
-    if channel_layer is None:
-        # In teoria non dovrebbe succedere in ambiente corretto,
-        # ma meglio essere difensivi.
-        return
-
-    async_to_sync(channel_layer.group_send)(
-        f"sessions_{session_id}",
-        {
-            "type": "sessions.event",   # instrada verso SessionsConsumer.sessions_event
-            "event_type": event_type,
-            "payload": payload or {},
-        },
-    )

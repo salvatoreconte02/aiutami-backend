@@ -1,5 +1,5 @@
 from __future__ import annotations
-from rest_framework.permissions import BasePermission, SAFE_METHODS
+from rest_framework.permissions import BasePermission
 
 from .models import Session, SessionParticipant
 
@@ -7,7 +7,7 @@ from .models import Session, SessionParticipant
 class IsSessionMember(BasePermission):
     """
     Consente l’accesso solo ai membri della sessione (HOST o PARTICIPANT).
-    Da usare su detail/participants.
+    
     """
 
     def has_object_permission(self, request, view, obj: Session) -> bool:

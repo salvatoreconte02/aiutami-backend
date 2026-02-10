@@ -1,6 +1,4 @@
-"""
-Session services - business logic for session management.
-"""
+
 import logging
 from django.core.cache import cache
 from django.db import transaction
@@ -32,21 +30,21 @@ def close_session(session_id: str) -> Session:
     Returns:
         Session aggiornata
     """
-    # Lock row to prevent race condition with parallel close requests
+    # Lock riga per evitare race condition con richieste parallele
     with transaction.atomic():
         session = Session.objects.select_for_update().get(id=session_id)
 
-        # Early return if already closed
+        # Se già chiusa, esci subito
         if session.state == SessionState.CLOSED:
             logger.info(f"Session {session_id} already closed, skipping")
             return session
 
-        # Mark as CLOSED immediately to block other requests
+        # Segna come CLOSED subito per bloccare altre richieste
         session.state = SessionState.CLOSED
         session.ended_at = timezone.now()
         session.save(update_fields=["state", "ended_at"])
 
-    # From here, session is locked as CLOSED - safe to do expensive operations
+    # Da qui la sessione è CLOSED - sicuro fare operazioni costose
     mod_state = None
 
     # 1. Recupera summary da ModerationState (se disponibile)
@@ -58,7 +56,7 @@ def close_session(session_id: str) -> Session:
     except Exception as e:
         logger.warning(f"Could not load moderation state for session {session_id}: {e}")
 
-    # 2. Generate report text via LLM
+    # 2. Genera report text via LLM
     try:
         report_data = _collect_report_data(session, mod_state)
         from apps.reports.llm_service import ReportLLMService
@@ -73,7 +71,7 @@ def close_session(session_id: str) -> Session:
         update_fields.append("final_summary")
     session.save(update_fields=update_fields)
 
-    # 4. Cleanup Redis keys
+    # 4. Pulizia chiavi Redis
     _cleanup_session_redis_keys(session_id)
 
     logger.info(f"Session {session_id} closed and cleaned up")
@@ -84,21 +82,18 @@ def _collect_report_data(session, mod_state=None) -> dict:
     """
     Raccoglie i dati per la generazione del report.
     """
-    # Calculate duration
     duration_minutes = 0
     if session.started_at and session.ended_at:
         duration_minutes = int((session.ended_at - session.started_at).total_seconds() / 60)
     elif session.started_at:
         duration_minutes = int((timezone.now() - session.started_at).total_seconds() / 60)
 
-    # Get participant turns from moderation state
     turns_per_participant = {}
     if mod_state and hasattr(mod_state, 'turns_per_participant'):
         turns_per_participant = mod_state.turns_per_participant
 
     total_human_turns = sum(turns_per_participant.values()) if turns_per_participant else 1
 
-    # AI interventions
     ai_interventions = 0
     if mod_state and hasattr(mod_state, 'ai_interventions_count'):
         ai_interventions = mod_state.ai_interventions_count
@@ -106,7 +101,6 @@ def _collect_report_data(session, mod_state=None) -> dict:
     total_turns = total_human_turns + ai_interventions
     ai_percentage = int((ai_interventions / total_turns) * 100) if total_turns > 0 else 0
 
-    # Participants with turn stats
     participants_data = []
     for name, turns in turns_per_participant.items():
         percentage = int((turns / total_human_turns) * 100) if total_human_turns > 0 else 0
@@ -116,7 +110,6 @@ def _collect_report_data(session, mod_state=None) -> dict:
             "percentage": percentage,
         })
 
-    # Votes
     votes = SessionVote.objects.filter(session=session).select_related("participant__user")
     votes_data = []
     correct_count = 0

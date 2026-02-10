@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Optional
 
 from django.shortcuts import get_object_or_404
-from django.db.models import Q
 from django.conf import settings
 from django.utils import timezone
 
@@ -28,7 +27,6 @@ from .serializers import (
 )
 from .permissions import IsSessionMember
 
-# 🔹 import per i timer di moderazione
 from apps.moderation.timers_state import mark_session_started
 from apps.moderation.triggers import generate_ready_to_conclude_message
 from apps.moderation.pending_messages import enqueue_message
@@ -36,10 +34,7 @@ from apps.turns.services import TurnManager
 from apps.moderation.intro import set_intro_pending
 
 
-# -------------------------------------------------------------------
-#  Helper per broadcast WebSocket delle sessioni
-# -------------------------------------------------------------------
-
+# Helper per broadcast WebSocket delle sessioni
 def _broadcast_session_event(session_id: str, event_type: str, payload: dict) -> None:
     """
     Invia un evento di sessione in broadcast al gruppo WebSocket
@@ -64,10 +59,7 @@ def _broadcast_session_event(session_id: str, event_type: str, payload: dict) ->
     )
 
 
-# ---------------------------
-#  Sessions: create & detail
-# ---------------------------
-
+# Sessions: create & detail
 class SessionCreateView(generics.CreateAPIView):
     """
     POST /api/sessions/
@@ -87,15 +79,11 @@ class SessionDetailView(generics.RetrieveAPIView):
     lookup_url_kwarg = "session_id"
 
     def get_queryset(self):
-        # Limita il retrieve alle sessioni di cui l’utente è membro
         user = self.request.user
         return Session.objects.filter(participants__user=user).distinct()
 
 
-# ---------------------------
-#  Sessions: transitions
-# ---------------------------
-
+# Sessions: transitions
 class SessionStartView(APIView):
     """
     POST /api/sessions/{session_id}/start/
@@ -113,23 +101,15 @@ class SessionStartView(APIView):
         serializer.is_valid(raise_exception=True)
         session = serializer.save()
 
-        # Initialize turn state to AI_INTRODUCING (blocks all interactions)
         TurnManager.set_introducing(session_id=str(session.id))
-
-        # Mark intro as pending (will be executed by trigger loop)
         set_intro_pending(session_id=str(session.id))
-
-        # 🔹 La sessione è appena entrata in ACTIVE:
-        #    si inizializzano i timer di moderazione (NO PUSH, TIMER 25'/30').
         mark_session_started(session_id=session.id)
 
-        # Payload completo della sessione dopo la transizione
         detail_data = SessionDetailSerializer(
             session,
             context={"request": request},
         ).data
 
-        # Broadcast WS: la sessione ha cambiato stato (es. LOBBY -> ACTIVE)
         _broadcast_session_event(
             session_id=str(session.id),
             event_type="STATE_CHANGED",
@@ -153,29 +133,24 @@ class SessionReadyToConcludeView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsSessionMember]
 
     def post(self, request, session_id: str):
-        # Recupera la sessione e verifica che l'utente sia membro
         session = get_object_or_404(Session, pk=session_id)
         self.check_object_permissions(request, session)
 
-        # Lettura del flag "ready" dal body; default True se non specificato
         ready = request.data.get("ready", True)
         ready = bool(ready)
 
-        # Impedisci deselezione
         if not ready:
             return Response(
                 {"error": "Non è possibile annullare la dichiarazione di essere pronti."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Recupera il partecipante
         participant = get_object_or_404(
             SessionParticipant,
             session=session,
             user=request.user,
         )
 
-        # Se già pronto, ignora (idempotente)
         if participant.ready_to_conclude:
             detail_data = SessionDetailSerializer(
                 session,
@@ -183,19 +158,14 @@ class SessionReadyToConcludeView(APIView):
             ).data
             return Response(detail_data, status=status.HTTP_200_OK)
 
-        # Aggiorna il flag
         participant.ready_to_conclude = True
         participant.save(update_fields=["ready_to_conclude"])
 
-        # Ricalcolo dei conteggi "pronti / totali"
         qs = SessionParticipant.objects.filter(session=session)
         total_count = qs.count()
         ready_count = qs.filter(ready_to_conclude=True).count()
 
-        # Genera e accoda messaggio (incluso caso 3/3 - la transizione avviene dopo TTS)
-        # Il messaggio viene sempre accodato e eseguito da _flush_pending_tts_messages
-        # nel trigger_loop (ogni 5s) o a fine turno. Questo evita errori "No handler"
-        # causati dal group_send a consumer che non supportano trigger.ready_to_conclude.
+        # Messaggio accodato per evitare errori "No handler" su consumer WS
         if session.state == SessionState.ACTIVE:
             user_name = getattr(request.user, "display_name", None) or request.user.get_username()
             result = generate_ready_to_conclude_message(user_name, ready_count, total_count)
@@ -208,16 +178,12 @@ class SessionReadyToConcludeView(APIView):
                 trigger_conclusion=result.trigger_conclusion,
             )
 
-        # NOTA: La transizione a CONCLUSION avviene DOPO il TTS nel ws_consumer,
-        # non più qui, per uniformare il comportamento con il timer 30min.
-
-        # Serializza lo stato aggiornato della sessione
+        # Transizione a CONCLUSION avviene dopo TTS nel ws_consumer
         detail_data = SessionDetailSerializer(
             session,
             context={"request": request},
         ).data
 
-        # Broadcast WS: la sessione (o il conteggio "pronti") è cambiato
         _broadcast_session_event(
             session_id=str(session.id),
             event_type="STATE_CHANGED",
@@ -227,10 +193,7 @@ class SessionReadyToConcludeView(APIView):
         return Response(detail_data, status=status.HTTP_200_OK)
 
 
-# ---------------------------
-#  Invitations
-# ---------------------------
-
+# Invitations
 class InvitationCreateView(APIView):
     """
     POST /api/sessions/{session_id}/invitations/
@@ -259,18 +222,9 @@ class JoinByTokenView(generics.CreateAPIView):
     serializer_class = JoinByTokenSerializer
 
     def perform_create(self, serializer):
-        """
-        Dopo aver aggiunto il partecipante alla sessione,
-        invia in broadcast lo stato aggiornato della sessione
-        a tutti i client WebSocket collegati a /ws/sessions/<session_id>/.
-        """
-        # Salvataggio effettivo (crea SessionParticipant o equivalente)
+        """Aggiunge partecipante e notifica via WebSocket."""
         instance = serializer.save()
-
-        # La sessione è stata valorizzata nel serializer (es. in validate)
         session = serializer._session
-
-        # Stato aggiornato (partecipants_count, ecc.)
         session.refresh_from_db()
 
         detail_data = SessionDetailSerializer(
@@ -278,7 +232,6 @@ class JoinByTokenView(generics.CreateAPIView):
             context={"request": self.request},
         ).data
 
-        # Broadcast WS: stato sessione aggiornato (nuovo partecipante in lobby)
         _broadcast_session_event(
             session_id=str(session.id),
             event_type="STATE_CHANGED",
@@ -288,10 +241,7 @@ class JoinByTokenView(generics.CreateAPIView):
         return instance
 
 
-# ---------------------------
-#  Participants (read-only)
-# ---------------------------
-
+# Participants (read-only)
 class ParticipantsListView(generics.ListAPIView):
     """
     GET /api/sessions/{session_id}/participants/
@@ -304,7 +254,6 @@ class ParticipantsListView(generics.ListAPIView):
 
     def get_queryset(self):
         session = get_object_or_404(Session, pk=self.kwargs[self.lookup_url_kwarg])
-        # object-level permission
         self.check_object_permissions(self.request, session)
         return (
             SessionParticipant.objects
@@ -314,10 +263,7 @@ class ParticipantsListView(generics.ListAPIView):
         )
 
 
-# ---------------------------
-#  My sessions (read-only)
-# ---------------------------
-
+# My sessions (read-only)
 class MySessionsListView(generics.ListAPIView):
     """
     GET /api/sessions/mine/?state=...
@@ -351,13 +297,11 @@ class SessionDebugForceCloseView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, id):
-        # Se non siamo in DEBUG, non esporre l'endpoint
         if not settings.DEBUG:
             return Response({"detail": "Not found."}, status=404)
 
         session = get_object_or_404(Session, id=id)
 
-        # Solo l'host può chiudere la propria sessione (anche in debug)
         if session.host_id != request.user.id:
             return Response(
                 {
@@ -366,7 +310,6 @@ class SessionDebugForceCloseView(APIView):
                 status=403,
             )
 
-        # Aggiornamento stato -> CLOSED (con cleanup Redis e salvataggio summary)
         session = close_session(str(session.id))
 
         detail_data = SessionDetailSerializer(
@@ -374,7 +317,6 @@ class SessionDebugForceCloseView(APIView):
             context={"request": request},
         ).data
 
-        # Broadcast WS: la sessione è stata chiusa forzatamente (debug)
         _broadcast_session_event(
             session_id=str(session.id),
             event_type="STATE_CHANGED",
@@ -394,14 +336,12 @@ class SessionVoteView(APIView):
     def post(self, request, session_id: str):
         session = get_object_or_404(Session, pk=session_id)
 
-        # Check session state
         if session.state != SessionState.CONCLUSION:
             return Response(
                 {"detail": "La sessione non è in fase di votazione."},
                 status=status.HTTP_409_CONFLICT,
             )
 
-        # Check user is participant
         try:
             participant = SessionParticipant.objects.get(
                 session=session, user=request.user
@@ -412,7 +352,6 @@ class SessionVoteView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Validate suspect
         suspect = request.data.get("suspect")
         if suspect not in MURDER_MYSTERY_SUSPECTS:
             return Response(
@@ -420,34 +359,28 @@ class SessionVoteView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Check if already voted
         if SessionVote.objects.filter(session=session, participant=participant).exists():
             return Response(
                 {"detail": "Hai già votato."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Create vote
         SessionVote.objects.create(
             session=session,
             participant=participant,
             suspect_chosen=suspect,
         )
 
-        # Count votes
         total_participants = SessionParticipant.objects.filter(session=session).count()
         votes_cast = SessionVote.objects.filter(session=session).count()
 
-        # Broadcast VOTE_CAST event
         _broadcast_session_event(
             session_id=str(session.id),
             event_type="VOTE_CAST",
             payload={"user_id": request.user.id},
         )
 
-        # Check if all voted
         if votes_cast == total_participants:
-            # Build results payload
             votes = SessionVote.objects.filter(session=session).select_related(
                 "participant__user"
             )
@@ -467,7 +400,6 @@ class SessionVoteView(APIView):
 
             success_rate = int((correct_count / total_participants) * 100)
 
-            # Broadcast ALL_VOTED with results
             _broadcast_session_event(
                 session_id=str(session.id),
                 event_type="ALL_VOTED",
@@ -503,7 +435,6 @@ class SessionVoteStatusView(APIView):
         total_participants = SessionParticipant.objects.filter(session=session).count()
         votes_cast = SessionVote.objects.filter(session=session).count()
 
-        # Check if current user has voted
         try:
             participant = SessionParticipant.objects.get(
                 session=session, user=request.user
@@ -532,21 +463,18 @@ class SessionCloseView(APIView):
     def post(self, request, session_id: str):
         session = get_object_or_404(Session, pk=session_id)
 
-        # Only host can close
         if session.host_id != request.user.id:
             return Response(
                 {"detail": "Solo l'host può chiudere la sessione."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Check session state
         if session.state != SessionState.CONCLUSION:
             return Response(
                 {"detail": "La sessione non è in fase di conclusione."},
                 status=status.HTTP_409_CONFLICT,
             )
 
-        # Check all voted
         total_participants = SessionParticipant.objects.filter(session=session).count()
         votes_cast = SessionVote.objects.filter(session=session).count()
 
@@ -556,10 +484,8 @@ class SessionCloseView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        # Close session (generates report_text via LLM and sets CLOSED)
         session = close_session(str(session.id))
 
-        # Broadcast SESSION_CLOSED
         detail_data = SessionDetailSerializer(
             session,
             context={"request": request},

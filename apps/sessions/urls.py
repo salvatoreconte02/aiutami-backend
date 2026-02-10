@@ -23,7 +23,7 @@ urlpatterns = [
     path("<uuid:session_id>/", SessionDetailView.as_view(), name="session_detail"),   # GET /<id>/
     path("<uuid:session_id>/start/", SessionStartView.as_view(), name="session_start"),  # POST /<id>/start/
 
-    # NUOVO ENDPOINT: pronto alla conclusione
+    #  pronto alla conclusione
     path(
         "<uuid:session_id>/ready_to_conclude/",
         SessionReadyToConcludeView.as_view(),

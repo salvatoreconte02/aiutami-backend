@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
@@ -21,19 +20,15 @@ from .models import (
 )
 
 
-# -------------------------------------------------
-# Helper per costruire l'URL di invito (?invite=...)
-# -------------------------------------------------
 def _build_invite_url(request, token: str) -> str:
+    """Costruisce URL di invito con token."""
     if not token:
         return ""
     base = request.build_absolute_uri("/")[:-1] if request else ""
     return f"{base}?invite={token}" if base else f"?invite={token}"
 
 
-# -------------------------
-#  Session: create & detail
-# -------------------------
+
 
 class SessionCreateSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(read_only=True)
@@ -64,8 +59,7 @@ class SessionCreateSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         user = self.context["request"].user
 
-        # --- Nuova regola globale ---
-        # L’utente non può creare una sessione se è già membro
+        # L'utente non può creare una sessione se è già membro
         # di una sessione non-chiusa (LOBBY / ACTIVE / CONCLUSION).
         active_states = {SessionState.LOBBY, SessionState.ACTIVE, SessionState.CONCLUSION}
 
@@ -81,7 +75,6 @@ class SessionCreateSerializer(serializers.ModelSerializer):
                 "Non puoi creare una nuova sessione mentre partecipi ad una sessione già attiva."
             )
 
-        # --- Logica originale ---
         context = attrs.get("context")
 
         # Caso Murder Mystery: forzare 3/3 anche se non passati
@@ -114,11 +107,9 @@ class SessionCreateSerializer(serializers.ModelSerializer):
                 )
             raise
         session.save()
-        # Host come participant
         SessionParticipant.objects.create(
             session=session, user=user, role=ParticipantRole.HOST
         )
-        # Evento di creazione
         SessionEvent.objects.create(
             session=session,
             type=SessionEventType.CREATED,
@@ -191,11 +182,9 @@ class SessionDetailSerializer(serializers.ModelSerializer):
         return _build_invite_url(request, inv.token) if inv else ""
 
     def get_report_available(self, obj: Session) -> bool:
-        """Report is available when session is CLOSED."""
         return obj.state == SessionState.CLOSED
 
     def get_votes_summary(self, obj: Session) -> Optional[Dict[str, Any]]:
-        """Returns vote results summary when session is CLOSED."""
         if obj.state != SessionState.CLOSED:
             return None
 
@@ -225,10 +214,7 @@ class SessionDetailSerializer(serializers.ModelSerializer):
         }
 
 
-# -------------------------
-#  Session transitions
-# -------------------------
-
+# Session transitions
 class SessionStartSerializer(serializers.Serializer):
     """LOBBY -> ACTIVE"""
 
@@ -259,10 +245,7 @@ class SessionStartSerializer(serializers.Serializer):
         return session
 
 
-# -------------------------
-#  Invitation: create link
-# -------------------------
-
+# Invitation: create link
 class InvitationCreateSerializer(serializers.Serializer):
     """Genera un token invito riutilizzabile."""
 
@@ -290,10 +273,7 @@ class InvitationCreateSerializer(serializers.Serializer):
         return {"token": inv.token, "url": url}
 
 
-# -------------------------
-#  Join via token
-# -------------------------
-
+# Join via token
 class JoinByTokenSerializer(serializers.Serializer):
     token = serializers.CharField()
 
@@ -367,10 +347,7 @@ class JoinByTokenSerializer(serializers.Serializer):
         }
 
 
-# -------------------------
-#  Read-only lists
-# -------------------------
-
+# Read-only lists
 class ParticipantItemSerializer(serializers.ModelSerializer):
     user = serializers.SerializerMethodField()
 
@@ -380,7 +357,6 @@ class ParticipantItemSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_user(self, obj: SessionParticipant) -> Dict[str, Any]:
-        # Ritorna informazioni pubbliche sul partecipante.
         u = obj.user
         return {
             "id": u.id,
