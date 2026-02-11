@@ -27,13 +27,8 @@ INSTALLED_APPS = [
      "apps.accounts",
      "apps.sessions.apps.SessionsConfig",   #label unica per session ->confltto con quella d django
      "apps.turns.apps.TurnsConfig",
-    # "apps.moderation",
-    # "apps.realtime",
      "apps.asr.apps.AsrConfig",
      "apps.reports",
-    # "apps.notifications",
-    # "apps.audit",
-    # "apps.exports",
 ]
 
 # Middleware
