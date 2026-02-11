@@ -15,6 +15,6 @@ urlpatterns = [
     # Sessions
     path("api/sessions/", include("apps.sessions.urls")),
 
-    # Reports (mounted under sessions path for /api/sessions/{id}/report/)
+    # Reports (montato sotto il path sessions per /api/sessions/{id}/report/)
     path("api/sessions/", include("apps.reports.urls")),
 ]

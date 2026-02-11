@@ -17,7 +17,7 @@ from channels.routing import ProtocolTypeRouter, URLRouter
 from apps.turns.routing import websocket_urlpatterns as turns_ws_urlpatterns
 from apps.sessions.routing import websocket_urlpatterns as sessions_ws_urlpatterns
 
-# 🔹 NUOVO: aggiungiamo il routing WebRTC
+# Routing WebRTC
 from apps.webrtc.routing import websocket_urlpatterns as webrtc_ws_urlpatterns
 
 from apps.turns.ws_auth import JwtAuthMiddlewareStack
@@ -25,7 +25,7 @@ from apps.turns.ws_auth import JwtAuthMiddlewareStack
 
 django_asgi_app = get_asgi_application()
 
-# 🔹 Routing WebSocket combinato: turns + sessions + webrtc
+# Routing WebSocket combinato: turns + sessions + webrtc
 websocket_urlpatterns = (
     turns_ws_urlpatterns
     + sessions_ws_urlpatterns
