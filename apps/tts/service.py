@@ -28,7 +28,7 @@ except ImportError:
     speechsdk = None
 
 
-# Output format: 48kHz mono 16-bit PCM (matches audio hub)
+# Formato output: 48kHz mono 16-bit PCM (compatibile con audio hub)
 OUTPUT_SAMPLE_RATE = 48000
 BYTES_PER_SAMPLE = 2
 CHANNELS = 1
@@ -111,7 +111,7 @@ class TTSService:
 
             # Invia audio in chunk con pacing per rispettare il timing reale
             if audio_data:
-                chunk_size = OUTPUT_SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS // 50  # 20ms chunks
+                chunk_size = OUTPUT_SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS // 50  # chunk da 20ms
                 chunk_duration_sec = chunk_size / (OUTPUT_SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS)
 
                 for i in range(0, len(audio_data), chunk_size):

@@ -43,7 +43,7 @@ class ReportPDFService:
             bottomMargin=2*cm,
         )
 
-        # Styles
+        # Stili
         styles = getSampleStyleSheet()
         title_style = ParagraphStyle(
             'CustomTitle',
@@ -84,14 +84,14 @@ class ReportPDFService:
             spaceBefore=30,
         )
 
-        # Build content
+        # Costruisci contenuto
         story = []
 
-        # Title
+        # Titolo
         story.append(Paragraph("REPORT SESSIONE MURDER MYSTERY", title_style))
         story.append(Paragraph(f'"{session.title}"', subtitle_style))
 
-        # Date and duration
+        # Data e durata
         date_str = session.created_at.strftime("%d/%m/%Y")
         duration = 0
         if session.started_at and session.ended_at:
@@ -99,7 +99,7 @@ class ReportPDFService:
         story.append(Paragraph(f"Data: {date_str} - Durata: {duration} minuti", body_style))
         story.append(Spacer(1, 12))
 
-        # Results section
+        # Sezione risultati
         votes = SessionVote.objects.filter(session=session).select_related("participant__user")
         total = votes.count()
         correct = sum(1 for v in votes if v.suspect_chosen == MURDER_MYSTERY_GUILTY)
@@ -111,7 +111,7 @@ class ReportPDFService:
         story.append(Paragraph(f"Percentuale di successo: {success_rate}%", body_style))
         story.append(Spacer(1, 12))
 
-        # Votes table
+        # Tabella voti
         story.append(Paragraph("VOTI", section_style))
         vote_data = [["Partecipante", "Scelta", "Risultato"]]
         for vote in votes:
@@ -136,18 +136,18 @@ class ReportPDFService:
         story.append(vote_table)
         story.append(Spacer(1, 12))
 
-        # Report text (LLM generated)
+        # Testo report (generato da LLM)
         if session.report_text:
             story.append(Paragraph("ANALISI DELLA SESSIONE", section_style))
-            # Split by paragraphs and add each
+            # Dividi per paragrafi e aggiungi
             for para in session.report_text.split('\n\n'):
                 if para.strip():
-                    # Escape HTML entities
+                    # Escape entità HTML
                     safe_para = para.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                     story.append(Paragraph(safe_para, body_style))
                     story.append(Spacer(1, 6))
 
-        # Summary if available
+        # Riassunto se disponibile
         if session.final_summary and not session.report_text:
             story.append(Paragraph("RIASSUNTO DELLA DISCUSSIONE", section_style))
             safe_summary = session.final_summary.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
@@ -157,7 +157,7 @@ class ReportPDFService:
         # Footer
         story.append(Paragraph("Generato da AIutami", footer_style))
 
-        # Build PDF
+        # Genera PDF
         doc.build(story)
 
         pdf_bytes = buffer.getvalue()

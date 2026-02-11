@@ -1,5 +1,5 @@
 """
-Report views - download endpoints.
+Report views - endpoint download.
 """
 
 from django.shortcuts import get_object_or_404
@@ -23,7 +23,7 @@ class SessionReportDownloadView(APIView):
     def get(self, request, session_id: str):
         session = get_object_or_404(Session, pk=session_id)
 
-        # Check user is participant
+        # Verifica che utente sia partecipante
         if not SessionParticipant.objects.filter(
             session=session, user=request.user
         ).exists():
@@ -32,17 +32,17 @@ class SessionReportDownloadView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Check session is CLOSED
+        # Verifica che sessione sia CLOSED
         if session.state != SessionState.CLOSED:
             return Response(
                 {"detail": "Il report è disponibile solo per sessioni concluse."},
                 status=status.HTTP_409_CONFLICT,
             )
 
-        # Generate PDF
+        # Genera PDF
         pdf_bytes = ReportPDFService.generate_pdf(session)
 
-        # Return as download
+        # Ritorna come download
         response = HttpResponse(pdf_bytes, content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="report-{session.id}.pdf"'
         return response
