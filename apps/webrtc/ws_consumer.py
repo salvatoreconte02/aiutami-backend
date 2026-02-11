@@ -1,4 +1,3 @@
-# apps/webrtc/ws_consumer.py
 from __future__ import annotations
 
 import asyncio
@@ -123,9 +122,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             except Exception:
                 pass
 
-    # ------------------------------------------------------------------ #
     # TURN EVENTS
-    # ------------------------------------------------------------------ #
 
     async def turns_event(self, event):
         """
@@ -210,9 +207,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             finally:
                 self._asr_started = False
 
-    # ------------------------------------------------------------------ #
     # OFFER / ANSWER
-    # ------------------------------------------------------------------ #
 
     async def _handle_offer(self, content: dict):
         sdp = content.get("sdp")
@@ -367,9 +362,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
         )
         logger.info("[WebRTC] Answer sent user=%s session=%s", self.user.id, self.session_id)
 
-    # ------------------------------------------------------------------ #
     # ICE (browser -> server)
-    # ------------------------------------------------------------------ #
 
     async def _handle_ice_candidate(self, content: dict):
         if self.pc is None:
@@ -422,9 +415,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             )
             await self.send_json({"type": "webrtc.error", "payload": {"reason": "ADD_ICE_FAILED"}})
 
-    # ------------------------------------------------------------------ #
     # CLEANUP
-    # ------------------------------------------------------------------ #
 
     async def _cleanup(self, reason: str):
         try:
@@ -473,9 +464,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
                 pass
             self.pc = None
 
-    # ------------------------------------------------------------------ #
     # UTILITIES
-    # ------------------------------------------------------------------ #
 
     @database_sync_to_async
     def _is_session_member(self, session_id, user_id: int) -> bool:

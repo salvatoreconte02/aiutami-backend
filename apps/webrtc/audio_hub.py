@@ -1,4 +1,3 @@
-# apps/webrtc/audio_hub.py
 from __future__ import annotations
 
 import asyncio
@@ -10,7 +9,7 @@ from .audio_tracks import ForwardingAudioTrack
 
 logger = logging.getLogger(__name__)
 
-# Reserved ID for AI Moderator virtual peer
+# ID riservato per il peer virtuale del moderatore AI
 AI_MODERATOR_ID = "__AI_MODERATOR__"
 
 
@@ -31,7 +30,7 @@ class SessionAudioHub:
     def __init__(self, session_id: str) -> None:
         self.session_id = session_id
         self.peers: Dict[int, PeerAudioState] = {}
-        self.current_speaker_user_id: Optional[Union[int, str]] = None  # int for humans, str for AI
+        self.current_speaker_user_id: Optional[Union[int, str]] = None  # int per umani, str per AI
         self._ai_track: Optional[ForwardingAudioTrack] = None
 
     def register_peer(self, user_id: int, outbound_track: ForwardingAudioTrack) -> None:
@@ -52,7 +51,7 @@ class SessionAudioHub:
 
     def set_speaker(self, user_id: Optional[Union[int, str]]) -> None:
         if self.current_speaker_user_id == user_id:
-            return  # idempotent - no change
+            return  # idempotente, nessun cambio
         self.current_speaker_user_id = user_id
         logger.info("[AudioHub] set speaker=%s session=%s", user_id, self.session_id)
 
@@ -60,7 +59,7 @@ class SessionAudioHub:
         """Crea il track virtuale per il moderatore AI."""
         if self._ai_track is None:
             self._ai_track = ForwardingAudioTrack(
-                user_id=0,  # Virtual user
+                user_id=0,  # utente virtuale
                 session_id=self.session_id
             )
             logger.info("[AudioHub] AI track initialized session=%s", self.session_id)
@@ -101,7 +100,7 @@ class SessionAudioHub:
 
         for uid, peer in self.peers.items():
             if uid == from_user_id:
-                continue  # no echo
+                continue  # evita echo
             peer.outbound_track.enqueue(pcm=pcm, samples=samples, sample_rate=sample_rate)
 
     def mark_ai_stream_end(self) -> None:

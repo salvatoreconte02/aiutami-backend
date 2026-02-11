@@ -1,4 +1,3 @@
-# apps/webrtc/audio_tracks.py
 from __future__ import annotations
 
 import asyncio
@@ -64,10 +63,10 @@ class ForwardingAudioTrack(AudioStreamTrack):
         # Buffer per riframare chunk variabili in frame fissi
         self._bytebuf = bytearray()
 
-        # PTS tracking
+        # tracking PTS
         self._pts: int = 0
 
-        # End-of-stream drain support
+        # supporto drain fine-stream
         self._eos = False
         self._drained_event = asyncio.Event()
 
@@ -168,7 +167,7 @@ class ForwardingAudioTrack(AudioStreamTrack):
                 had, self._bytes_per_frame, missing, self.user_id,
             )
 
-        # 5) signal drain if EOS and buffer exhausted
+        # 5) segnala drain se EOS e buffer esaurito
         if self._eos and self._queue.empty() and len(self._bytebuf) < self._bytes_per_frame:
             self._drained_event.set()
 

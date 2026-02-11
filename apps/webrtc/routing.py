@@ -1,5 +1,3 @@
-# apps/webrtc/routing.py
-
 from django.urls import path
 from .ws_consumer import WebRTCConsumer
 
