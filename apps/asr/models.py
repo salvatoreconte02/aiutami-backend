@@ -1,30 +1,26 @@
-# apps/asr/models.py
-
 from django.conf import settings
 from django.db import models
 
 
 class ASRTranscript(models.Model):
-    # ID della sessione così come la usi nel worker (stringa UUID)
+    # UUID della sessione (stringa)
     session_id = models.CharField(max_length=64, db_index=True)
 
-    # Utente Django collegato alla trascrizione
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="asr_transcripts",
     )
 
-    # Testo trascritto (tipicamente "final" da Azure)
+    # testo riconosciuto da Azure Speech
     text = models.TextField()
 
-    # Flag per eventuali trascrizioni non definitive (per ora sempre True)
+    # per ora sempre True, predisposto per trascrizioni parziali
     is_final = models.BooleanField(default=True)
 
-    # Eventuale metadato grezzo (JSON) se vuoi salvare info aggiuntive in futuro
+    # metadati extra (JSON)
     raw_metadata = models.JSONField(blank=True, null=True)
 
-    # Timestamp creazione
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

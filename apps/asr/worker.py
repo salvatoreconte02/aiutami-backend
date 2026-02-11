@@ -41,9 +41,7 @@ class ASRStreamWorker:
     GAIN = 1.0
     SOFTCLIP_LEVEL = 0.98
 
-    # ------------------------------
     # Transcript cache (final chunks)
-    # ------------------------------
     TRANSCRIPT_TTL_S = 60 * 30  # 30 minuti
     TRANSCRIPT_MAX_SEGMENTS = 200
     TRANSCRIPT_MAX_CHARS = 12000
@@ -88,9 +86,7 @@ class ASRStreamWorker:
         # lock per append transcript (callback Azure arriva da thread)
         self._transcript_lock = threading.Lock()
 
-    # ------------------------------------------------------------------ #
     # Transcript cache helpers
-    # ------------------------------------------------------------------ #
 
     def _transcript_cache_key(self) -> str:
         return f"asr:final_segments:{self.session_id}:{self.user_id}"
@@ -163,9 +159,7 @@ class ASRStreamWorker:
         except Exception:
             logger.exception("[ASR][CACHE] failed append_final session=%s user=%s", self.session_id, self.user_id)
 
-    # ------------------------------------------------------------------ #
     # Lifecycle
-    # ------------------------------------------------------------------ #
 
     def _init_azure_client(self) -> None:
         key = getattr(settings, "AZURE_SPEECH_KEY", None)
@@ -336,9 +330,7 @@ class ASRStreamWorker:
         self.started = False
         self._azure_client = None
 
-    # ------------------------------------------------------------------ #
     # Audio helpers
-    # ------------------------------------------------------------------ #
 
     @staticmethod
     def _guess_channels(frame_layout) -> Optional[int]:
@@ -440,9 +432,7 @@ class ASRStreamWorker:
         y = np.tanh(x / limit) * limit
         return np.clip(y, -32768.0, 32767.0).astype(np.int16)
 
-    # ------------------------------------------------------------------ #
     # Ingestione frame
-    # ------------------------------------------------------------------ #
 
     def ingest_frame(self, frame) -> None:
         try:

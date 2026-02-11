@@ -171,12 +171,12 @@ class AzureStreamingClient:
                 error_code = getattr(details, "error_code", None) if details is not None else getattr(evt, "error_code", None)
                 error_details = getattr(details, "error_details", None) if details is not None else getattr(evt, "error_details", None)
 
-                # EndOfStream è normale quando chiudi il PushAudioInputStream
+                # EndOfStream 
                 if reason == speechsdk.CancellationReason.EndOfStream:
                     logger.info("[AZURE-ASR][canceled] EndOfStream (chiusura normale stream)")
                     return
 
-                # Alcune versioni possono mettere dettagli vuoti: trattali come warning se non c'è error_code
+                # Alcune versioni possono mettere dettagli vuoti: tratta come warning se non c'è error_code
                 if not error_code and (error_details is None or str(error_details).strip() == ""):
                     logger.warning(
                         "[AZURE-ASR][canceled] reason=%s (senza dettagli)",

@@ -30,9 +30,7 @@ class ASRStreamManager:
     def _transcript_cache_key(self, session_id, user_id) -> str:
         return f"asr:final_segments:{str(session_id)}:{int(user_id)}"
 
-    # ------------------------------------------------------------------ #
     # API pubblica usata dal WebRTCConsumer
-    # ------------------------------------------------------------------ #
 
     def start_stream(self, session_id, user_id) -> None:
         key = self._key(session_id, user_id)
