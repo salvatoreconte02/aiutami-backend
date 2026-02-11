@@ -1,10 +1,10 @@
-# apps/moderation/state.py
+
 
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from django.core.cache import cache  # o il client Redis già configurato
+from django.core.cache import cache  
 
 
 REDIS_KEY_TEMPLATE = "moderation:{session_id}"
@@ -86,5 +86,5 @@ def save_moderation_state(session_id: int | str, state: ModerationState) -> None
             "forced_conclusion_done": state.forced_conclusion_done,
             "turns_per_participant": state.turns_per_participant,
         },
-        timeout=None,  # eventualmente si può impostare una TTL
+        timeout=None,  
     )

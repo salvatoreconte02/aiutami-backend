@@ -1,5 +1,5 @@
 """
-Intro message module for AI moderator introduction at session start.
+Modulo per il messaggio introduttivo del moderatore AI a inizio sessione.
 """
 from django.core.cache import cache
 
@@ -15,9 +15,9 @@ INTRO_MESSAGE_TEMPLATE = (
 
 def format_participant_names(names: list[str]) -> str:
     """
-    Format participant names for intro message.
-    For 3 names: "Marco, Giulia e Luca"
-    For other counts: comma-separated fallback
+    Formatta i nomi dei partecipanti per il messaggio intro.
+    Per 3 nomi: "Marco, Giulia e Luca"
+    Per altri casi: separati da virgola
     """
     if len(names) == 3:
         return f"{names[0]}, {names[1]} e {names[2]}"
@@ -25,29 +25,29 @@ def format_participant_names(names: list[str]) -> str:
 
 
 def set_intro_pending(session_id: str) -> None:
-    """Mark that a session has a pending intro message."""
+    """Segna che una sessione ha un messaggio intro pendente."""
     cache.set(f"session:intro_pending:{session_id}", True, timeout=300)
 
 
 def clear_intro_pending(session_id: str) -> None:
-    """Remove the pending intro flag."""
+    """Rimuove il flag intro pendente."""
     cache.delete(f"session:intro_pending:{session_id}")
 
 
 def has_intro_pending(session_id: str) -> bool:
-    """Check if a session has a pending intro message."""
+    """Verifica se una sessione ha un messaggio intro pendente."""
     return cache.get(f"session:intro_pending:{session_id}") is True
 
 
 def generate_intro_message(session_id: str) -> str:
     """
-    Generate the intro message with participant names.
+    Genera il messaggio intro con i nomi dei partecipanti.
 
     Args:
-        session_id: The session ID (UUID string)
+        session_id: ID della sessione (stringa UUID)
 
     Returns:
-        The formatted intro message with participant names
+        Il messaggio intro formattato con i nomi dei partecipanti
     """
     from apps.sessions.models import SessionParticipant
 

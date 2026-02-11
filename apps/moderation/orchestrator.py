@@ -1,5 +1,3 @@
-# apps/moderation/orchestrator.py
-
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -83,7 +81,7 @@ class ModerationOrchestrator:
                 trigger_result=trigger_result,
             )
         else:
-            # Normal path: chiama handle_human_turn_ended
+            # Path normale: chiama handle_human_turn_ended
             moderation_result: ModerationResult = ModerationService.handle_human_turn_ended(
                 session_id=session_id,
                 user_id=user_id,
@@ -120,16 +118,16 @@ class ModerationOrchestrator:
         4. Reset human_turns_since_last_summary a 0
         5. Salva stato
         """
-        # Increment turn counter for the speaker
+        # Incrementa contatore turni per lo speaker
         if speaker_name:
             moderation_state.turns_per_participant[speaker_name] = (
                 moderation_state.turns_per_participant.get(speaker_name, 0) + 1
             )
 
-        # Calculate total turns
+        # Calcola turni totali
         total_turns = sum(moderation_state.turns_per_participant.values())
 
-        # Call dedicated LLM
+        # Chiama LLM dedicato
         llm_result = ModerationService.call_llm_for_summary(
             summary_in=moderation_state.summary,
             last_turn_text=last_turn_text,
@@ -138,16 +136,16 @@ class ModerationOrchestrator:
             total_turns=total_turns,
         )
 
-        # Update state
+        # Aggiorna stato
         moderation_state.summary = llm_result["updated_summary"]
-        moderation_state.human_turns_since_last_summary = 0  # Reset counter
+        moderation_state.human_turns_since_last_summary = 0  # Reset contatore
 
-        # Save state
+        # Salva stato
         save_moderation_state(session_id, moderation_state)
 
         return FullModerationDecision(
             static_messages_to_speak=trigger_result.static_messages_to_speak,
-            ai_should_speak=True,  # FORCED_SUMMARY always speaks
+            ai_should_speak=True,  # FORCED_SUMMARY parla sempre
             ai_message=llm_result["message_to_say"],
             hard_action=HardModerationAction.FORCED_SUMMARY,
             should_transition_to_conclusion=trigger_result.should_transition_to_conclusion,

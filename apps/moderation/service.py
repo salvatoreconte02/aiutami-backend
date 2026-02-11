@@ -1,5 +1,3 @@
-# apps/moderation/service.py
-
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -74,7 +72,7 @@ class ModerationService:
         """
         state = load_moderation_state(session_id)
 
-        # Increment turn counter for the speaker
+        # Incrementa contatore turni per lo speaker
         if speaker_name:
             state.turns_per_participant[speaker_name] = (
                 state.turns_per_participant.get(speaker_name, 0) + 1
@@ -133,10 +131,6 @@ class ModerationService:
             ai_message=ai_message,
             updated_state=state,
         )
-
-    # -------------------------------------------------------------------------
-    # Metodi interni
-    # -------------------------------------------------------------------------
 
     @classmethod
     def _decide_llm_mode(
@@ -221,7 +215,6 @@ class ModerationService:
             "language": "it",
         }
 
-        # Log della request LLM
         logger.info(
             "[MODERATION][LLM][REQUEST] mode=%s speaker=%s phase=%s transcript=%r",
             mode,
@@ -286,7 +279,6 @@ class ModerationService:
         except (TypeError, ValueError):
             intervention_score = 0.0
 
-        # Log della risposta LLM
         logger.info(
             "[MODERATION][LLM][RESPONSE] mode=%s should_speak=%s reason=%s score=%.2f message=%r",
             mode,
@@ -408,7 +400,7 @@ class ModerationService:
         cls,
         *,
         summary_in: str,
-        conclusion_reason: str,  # "timer_expired" or "all_participants_ready"
+        conclusion_reason: str,  # "timer_expired" o "all_participants_ready"
         session_duration_minutes: int = 30,
     ) -> dict:
         """
@@ -455,7 +447,7 @@ class ModerationService:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": json.dumps(llm_input, ensure_ascii=False)},
                 ],
-                temperature=0.5,  # Slightly higher for warmer tone
+                temperature=0.5,  # Leggermente più alta per tono più caldo
                 max_tokens=512,
             )
 
@@ -546,10 +538,6 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
             "updated_summary": summary,
             "message_to_say": message,
         }
-
-    # -------------------------------------------------------------------------
-    # FORCED_SUMMARY dedicated LLM call
-    # -------------------------------------------------------------------------
 
     @classmethod
     def call_llm_for_summary(

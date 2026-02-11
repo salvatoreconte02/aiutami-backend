@@ -14,7 +14,7 @@ from django.core.cache import cache
 
 # Chiave Redis: moderation:pending_messages:{session_id}
 PENDING_MESSAGES_KEY_PREFIX = "moderation:pending_messages"
-PENDING_MESSAGES_TTL = 60 * 60  # 1 hour
+PENDING_MESSAGES_TTL = 60 * 60  # 1 ora
 
 
 @dataclass
@@ -63,7 +63,7 @@ def enqueue_message(
         except (json.JSONDecodeError, KeyError):
             continue
 
-    # Evita duplicati: se esiste già un messaggio con lo stesso testo, skip
+    # Evita duplicati: se esiste già un messaggio con lo stesso testo, salta
     for raw in existing:
         try:
             data = json.loads(raw)

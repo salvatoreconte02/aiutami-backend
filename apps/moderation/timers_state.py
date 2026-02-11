@@ -54,10 +54,6 @@ class ModerationTimersState:
         """
         return cls()
 
-    # ------------------------------------------------------------------
-    # Serializzazione / deserializzazione
-    # ------------------------------------------------------------------
-
     def to_dict(self) -> dict:
         """
         Serializza lo stato in un dict JSON-compatibile (datetime -> isoformat).
@@ -70,17 +66,14 @@ class ModerationTimersState:
         data["session_started_at"] = _dt_to_str(self.session_started_at)
         data["last_any_activity_at"] = _dt_to_str(self.last_any_activity_at)
 
-        # last_user_speak_at: dict[str, datetime] -> dict[str, str]
         data["last_user_speak_at"] = {
             user_id: _dt_to_str(dt) for user_id, dt in self.last_user_speak_at.items()
         }
 
-        # last_voice_solicit_at: dict[str, datetime] -> dict[str, str]
         data["last_voice_solicit_at"] = {
             user_id: _dt_to_str(dt) for user_id, dt in self.last_voice_solicit_at.items()
         }
 
-        # last_text_solicit_at: dict[str, datetime] -> dict[str, str]
         data["last_text_solicit_at"] = {
             user_id: _dt_to_str(dt) for user_id, dt in self.last_text_solicit_at.items()
         }
@@ -138,11 +131,6 @@ class ModerationTimersState:
         )
 
 
-# ----------------------------------------------------------------------
-# Funzioni di accesso (load/save) su Redis / cache
-# ----------------------------------------------------------------------
-
-
 def _make_timers_key(session_id: int | str) -> str:
     return TIMERS_STATE_KEY_TEMPLATE.format(session_id=session_id)
 
@@ -186,10 +174,6 @@ def save_timers_state(session_id: int | str, state: ModerationTimersState) -> No
     cache.set(key, json.dumps(data, ensure_ascii=False))
 
 
-# ----------------------------------------------------------------------
-# Costanti soglia per i trigger a tempo
-# ----------------------------------------------------------------------
-
 NO_PUSH_THRESHOLD = timedelta(seconds=20)      # silenzio 20s
 TIMER_25_THRESHOLD = timedelta(minutes=25)     # avviso 5 minuti rimanenti
 TIMER_30_THRESHOLD = timedelta(minutes=30)     # fine discussione
@@ -203,10 +187,6 @@ INACTIVE_TEXT_THRESHOLD = timedelta(minutes=5)
 # Limite solleciti vocali per utente
 MAX_VOICE_SOLICITS_PER_USER = 2
 
-
-# ----------------------------------------------------------------------
-# Funzioni di aggiornamento dei timer (da chiamare da turns/sessions)
-# ----------------------------------------------------------------------
 
 def mark_session_started(session_id: int | str, when: Optional[datetime] = None) -> None:
     """

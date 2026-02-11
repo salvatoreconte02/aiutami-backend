@@ -9,7 +9,6 @@ from .state import ModerationState
 from .service import HardModerationAction, SUMMARY_TURNS_INTERVAL
 
 
-# Message variants for NO_PUSH trigger
 NO_PUSH_MESSAGES = [
     "Se qualcuno vuole intervenire, può parlare ora o condividere una breve considerazione.",
     "C'è un momento di silenzio. Se qualcuno ha un pensiero da condividere, questo è un buon momento.",
@@ -17,7 +16,6 @@ NO_PUSH_MESSAGES = [
     "La discussione è in pausa. Chi vuole intervenire può farlo ora.",
 ]
 
-# Message variants for READY_TO_CONCLUDE trigger
 READY_TO_CONCLUDE_MESSAGES = [
     "{nome} è pronto a concludere. Se hai capito con certezza di chi si tratta, premi anche tu 'pronto alla conclusione' per terminare la sessione.",
     "{nome} ha indicato di essere pronto alla conclusione. Quando anche tu avrai raggiunto una certezza, premi il pulsante per concludere.",
@@ -37,7 +35,7 @@ READY_TO_CONCLUDE_ALL_READY_MESSAGES = [
     "Siete tutti pronti. Possiamo avviarci alla fase di conclusione.",
 ]
 
-# Message variants for INACTIVE_USER trigger (Level 2: voice, 10 min)
+# Varianti messaggio per trigger INACTIVE_USER (Livello 2: voce, 10 min)
 INACTIVE_VOICE_MESSAGES = [
     "{nome}, se vuoi condividere un'idea, questo è un buon momento per intervenire.",
     "{nome}, non ti abbiamo ancora sentito. Se hai qualcosa da aggiungere, puoi parlare ora.",
@@ -45,8 +43,8 @@ INACTIVE_VOICE_MESSAGES = [
     "{nome}, se hai un pensiero sulla discussione, sentiti libero di intervenire.",
 ]
 
-# Message for INACTIVE_USER Level 1: private text notification (5 min)
-INACTIVE_TEXT_MESSAGE = "Non intervieni da un po'. Se vuoi condividere qualcosa, questo è un buon momento."
+# Messaggio per INACTIVE_USER Livello 1: notifica testuale privata (5 min)
+INACTIVE_TEXT_MESSAGE ="Non intervieni da un po'. Se vuoi condividere qualcosa, questo è un buon momento."
 
 
 @dataclass
@@ -87,7 +85,7 @@ def generate_ready_to_conclude_message(
     # Caso "tutti pronti": ready_count == total_count
     if ready_count == total_count:
         template = random.choice(READY_TO_CONCLUDE_ALL_READY_MESSAGES)
-        text = template  # Nessun placeholder {nome}
+        text = template
         trigger_conclusion = True
     # Caso "manca solo uno": ready_count == total_count - 1
     elif ready_count == total_count - 1:
@@ -160,8 +158,8 @@ def evaluate_triggers_on_human_turn_end(
     if _should_force_summary(moderation_state):
         hard_action = HardModerationAction.FORCED_SUMMARY
 
-    # NOTE: FORCED_CONCLUSION trigger removed - now executed immediately at session
-    # transition via _execute_forced_conclusion() in ws_consumer.py
+    # NOTE: Trigger FORCED_CONCLUSION rimosso - ora eseguito immediatamente alla
+    # transizione di sessione via _execute_forced_conclusion() in ws_consumer.py
 
     # 2) Trigger meccanici legati allo stato corrente
     static_messages.extend(
@@ -235,10 +233,6 @@ def evaluate_time_based_triggers(
     )
 
 
-# ---------------------------------------------------------------------------
-# Funzioni di supporto
-# ---------------------------------------------------------------------------
-
 def _should_force_summary(state: ModerationState) -> bool:
     """
     Determina se scatta il trigger hard di riassunto intermedio.
@@ -246,33 +240,6 @@ def _should_force_summary(state: ModerationState) -> bool:
     si usa il contatore dei turni umani dall'ultimo riassunto.
     """
     return state.human_turns_since_last_summary + 1 >= SUMMARY_TURNS_INTERVAL
-
-
-def _should_force_conclusion(
-    *,
-    session_id: int | str,
-    session_phase: str,
-    moderation_state: ModerationState,
-) -> bool:
-    """
-    DEPRECATED: No longer used in post-turn evaluation.
-    FORCED_CONCLUSION is now triggered immediately at session transition
-    via _execute_forced_conclusion() in ws_consumer.py.
-
-    Kept for reference only.
-
-    Original logic:
-    - Fires when session is in CONCLUSION phase
-    - Only fires once (checks forced_conclusion_done flag)
-    """
-    if session_phase != "CONCLUSION":
-        return False
-
-    # Scatta solo se non è già stata fatta
-    if moderation_state.forced_conclusion_done:
-        return False
-
-    return True
 
 
 def _collect_static_messages_for_current_state(
@@ -428,7 +395,7 @@ def _collect_time_based_static_messages(
         for p in participants:
             user_id_str = str(p.user_id)
 
-            # Tempo di riferimento per Level 1 (testo):
+            # Tempo di riferimento per Livello 1 (testo):
             # ultimo text solicit > ultimo voice solicit > ultimo turno > inizio sessione
             last_text_solicit = state.last_text_solicit_at.get(user_id_str)
             last_voice_solicit = state.last_voice_solicit_at.get(user_id_str)
@@ -448,7 +415,7 @@ def _collect_time_based_static_messages(
 
             elapsed_text = now - reference_time_text
 
-            # Level 1: Avviso testuale privato (5 min, ma non oltre 10 min)
+            # Livello 1: Avviso testuale privato (5 min, ma non oltre 10 min)
             if INACTIVE_TEXT_THRESHOLD <= elapsed_text < INACTIVE_USER_THRESHOLD:
                 display_name = getattr(p.user, "display_name", None) or p.user.get_username()
                 messages.append(StaticMessage(
@@ -462,8 +429,8 @@ def _collect_time_based_static_messages(
                 # Un solo utente per ciclo
                 break
 
-            # Level 2: Sollecito vocale pubblico (10 min, max 2 per utente)
-            # Tempo di riferimento per Level 2 (voce):
+            # Livello 2: Sollecito vocale pubblico (10 min, max 2 per utente)
+            # Tempo di riferimento per Livello 2 (voce):
             # ultimo voice solicit > ultimo turno > inizio sessione
             if last_voice_solicit is not None:
                 reference_time_voice = last_voice_solicit
