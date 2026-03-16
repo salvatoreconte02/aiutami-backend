@@ -1,0 +1,92 @@
+% ==============================================================
+%  Turn-Taking in Spoken Dialogue  &  VAD / VAP
+%  To be \input inside \section{State of the Art}
+% ==============================================================
+
+\subsection{Turn-Taking in Spoken Dialogue}
+\label{sec:turntaking}
+
+Turn-taking---the mechanism by which interlocutors coordinate who speaks when---is one of the most fundamental structures of human conversation. Any spoken dialogue system that aspires to natural interaction must address this coordination problem, yet doing so computationally remains a significant challenge, particularly in multi-party settings.
+
+\subsubsection{Foundational Framework}
+
+The seminal work of Sacks, Schegloff, and Jefferson~\cite{sacks1974turntaking} established the analytical framework that still underpins most computational approaches to turn-taking. Their model identifies \emph{Transition Relevance Places} (TRPs)---points in an utterance at which a change of speaker becomes appropriate---and proposes three ordered rules governing speaker selection: (1)~the current speaker selects the next speaker, (2)~a non-current speaker self-selects, or (3)~the current speaker may continue. Empirical work by Heldner and Edlund~\cite{heldner2010pauses} later quantified the remarkable efficiency of this system, showing that inter-turn gaps in human conversation average approximately 200\,ms---a latency so short that it implies listeners begin planning their response well before the current speaker finishes.
+
+This observation has profound implications for dialogue system design: a spoken agent that waits for silence and then begins processing the input will inevitably feel unresponsive compared to a human interlocutor.
+
+\subsubsection{Computational Approaches}
+
+Four broad families of computational approaches to turn-taking can be distinguished, representing an evolution from simple heuristics to sophisticated predictive models.
+
+\paragraph{Rule-Based and Threshold-Based Methods.}
+The most common approach in commercial dialogue systems relies on fixed silence thresholds: once no speech energy is detected for a predetermined interval---typically between 500 and 700\,ms---the system assumes the user has finished speaking. This technique, known as \emph{endpointing}, is employed by most major voice assistants including Amazon Alexa and Apple Siri. While computationally simple and robust, threshold-based endpointing suffers from an inherent trade-off: short thresholds lead to premature cutoffs during within-turn pauses (e.g., hesitations, breathing, or mid-sentence planning), whereas long thresholds introduce perceptible latency that disrupts conversational flow.
+
+\paragraph{Prosody-Based Methods.}
+A more linguistically informed family of approaches exploits the prosodic cues that human speakers use to signal turn boundaries. Gravano and Hirschberg~\cite{gravano2011turncues} conducted a comprehensive analysis of turn-yielding cues in the Columbia Games Corpus, identifying six acoustic features---including falling pitch, final syllable lengthening, reduced intensity, and specific discourse markers---that co-occur with turn boundaries. The more such cues are present simultaneously, the higher the probability that the interlocutor will take the floor. In a related line of work, Ward and Tsukahara~\cite{ward2000backchannel} demonstrated that low pitch regions in the speaker's signal reliably predict opportunities for listener backchannels, providing a basis for systems that can produce appropriately timed feedback signals.
+
+\paragraph{Machine Learning Methods.}
+Raux and Eskenazi~\cite{raux2009endpointing} introduced the first machine-learning-based endpointing system, training a decision tree on a combination of prosodic, lexical, and dialogue-level features to classify pause points as either turn-internal or turn-final. Their system, deployed in the CMU Let's Go bus information system, significantly reduced both false endpoint detections and average response latency compared to a fixed-threshold baseline. Skantze~\cite{skantze2017turntaking} subsequently reframed turn-taking as a \emph{continuous prediction problem}: rather than making binary decisions at discrete moments, a system should continuously estimate the probability that the current speaker will yield the floor, that a backchannel is appropriate, or that the system should hold its turn. Using recurrent neural networks (LSTMs), this approach enabled more fluid and anticipatory behaviour. Meena et al.~\cite{meena2014turntaking} further explored data-driven approaches in a spoken dialogue context, demonstrating the effectiveness of combining prosodic and contextual features for turn-taking decisions. Ekstedt and Skantze~\cite{ekstedt2020turngpt} later proposed \emph{TurnGPT}, a Transformer-based model that predicts turn shifts from linguistic content alone, showing that a language model fine-tuned on dialogue data can learn implicit turn-yielding patterns even without access to acoustic features.
+
+\paragraph{LLM-Based Methods.}
+The most recent line of work leverages large language models directly for turn-taking decisions. Addlesee~\cite{addlesee2024ari} proposed using an LLM prompt to assess whether an incoming user utterance constitutes a complete conversational contribution, thereby deciding whether to respond or to wait for additional input. Houde et al.~\cite{houde2025koala} developed \emph{Koala}, a system in which the LLM assigns a self-score to its confidence that the user has finished speaking, enabling a soft and adjustable endpointing mechanism. These approaches benefit from the world knowledge and pragmatic competence encoded in large pre-trained models, though they introduce additional latency due to inference time and depend on the LLM's capacity to reason reliably about conversational structure.
+
+\subsubsection{Key Concepts}
+
+Table~\ref{tab:turntaking-concepts} summarises the core terminology used across the turn-taking literature.
+
+\begin{table}[ht]
+  \centering
+  \caption{Key turn-taking concepts and definitions.}
+  \label{tab:turntaking-concepts}
+  \begin{tabularx}{\textwidth}{@{} l X @{}}
+    \toprule
+    \textbf{Concept} & \textbf{Definition} \\
+    \midrule
+    Turn-yielding   & Behaviour indicating the current speaker intends to relinquish the floor (e.g., falling pitch, syntactic completion, gaze shift). \\
+    Turn-holding     & Signals that the current speaker wishes to retain the floor despite a pause (e.g., filled pauses, rising intonation, averted gaze). \\
+    Backchannel      & Short listener feedback (e.g., ``mhm'', ``yeah'') that signals attention without claiming the floor. \\
+    Barge-in         & A listener begins speaking while the current speaker is still talking, explicitly claiming the turn. \\
+    Floor            & The right or opportunity to speak at a given moment; in multi-party settings, multiple notions of floor may coexist. \\
+    Overlap          & Simultaneous speech by two or more participants, which may be collaborative (e.g., backchannels) or competitive (e.g., interruptions). \\
+    TRP              & \emph{Transition Relevance Place}: a point at which speaker change becomes appropriate, typically at syntactic or pragmatic boundaries. \\
+    Endpointing      & The computational task of detecting that a user has finished their turn, enabling the system to begin response generation. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsubsection{Multi-Party Turn-Taking}
+
+While the above approaches have been developed and evaluated primarily in dyadic (two-party) settings, multi-party conversations introduce qualitatively different challenges. The ``who's next?'' problem becomes substantially harder when more than two participants are present: the system must not only determine \emph{whether} a turn transition is occurring but also \emph{who} should speak next. In face-to-face interaction, gaze direction serves as the primary mechanism for addressee selection and next-speaker nomination, but this channel is often unavailable or unreliable in voice-only or remote settings. Additional complications include overlapping speech from multiple participants, the need for speaker diarisation to attribute utterances to individuals, and the emergence of complex social dynamics such as schisms (parallel sub-conversations within a group), dominance patterns, and unequal participation.
+
+Several turn allocation mechanisms have been explored in the literature. \emph{Explicit nomination} requires the current speaker to name the next participant verbally. \emph{Gaze-based allocation} exploits visual attention as an implicit selection signal; Johansson et al.~\cite{johansson2013gaze} demonstrated that a robot capable of interpreting and producing gaze cues could manage multi-party turn transitions more naturally. \emph{Self-selection races}, as described in the original model of Sacks et al.~\cite{sacks1974turntaking}, allow any participant to claim the floor at a TRP, with the first speaker to begin typically gaining precedence. Finally, \emph{moderator-mediated} allocation delegates turn management to a designated party---whether human or artificial---that grants or denies speaking rights according to some policy.
+
+From a computational modelling perspective, Bohus and Horvitz~\cite{bohus2009engagement,bohus2011multiparty} developed influential engagement models for multi-party interaction with embodied agents, addressing the problems of engagement recognition, maintenance, and directed-action selection in settings with multiple co-present users.
+
+% ==============================================================
+\subsection{Voice Activity Detection and Projection}
+\label{sec:vad-vap}
+
+Voice Activity Detection (VAD) and Voice Activity Projection (VAP) represent two ends of a temporal spectrum in the analysis of spoken interaction: the former determines whether speech is occurring \emph{now}, while the latter predicts whether speech will occur in the \emph{near future}. Together, they provide the low-level perceptual foundation upon which higher-level dialogue phenomena---such as turn-taking, backchannel production, and barge-in detection---can be built.
+
+\subsubsection{Voice Activity Detection}
+
+Voice Activity Detection (VAD) is the task of classifying, at each time step, whether speech is present in an audio signal.  Early systems relied on hand-crafted acoustic features and lightweight statistical models; the widely adopted WebRTC VAD exemplifies this generation, offering low-latency frame-level decisions at minimal computational cost, albeit with limited noise robustness.  Modern neural VAD systems---such as \emph{Silero VAD}, the \emph{pyannote-audio} pipeline, and Google's \emph{Personal VAD}---achieve substantially higher accuracy in adverse conditions while remaining efficient enough for real-time deployment.
+
+In spoken dialogue, VAD fulfils three primary roles: it \emph{gates} the ASR module so that only speech-containing segments are transcribed, it provides the foundational signal for \emph{endpointing} (detecting when a speaker has finished), and it enables \emph{barge-in detection} during system output.  Crucially, however, VAD determines only \emph{that} someone is speaking, not \emph{who} is speaking (which requires speaker diarisation) nor whether the detected speech constitutes a complete turn or merely a backchannel (which requires higher-level turn-taking prediction).
+
+\subsubsection{Voice Activity Projection}
+
+While VAD operates reactively on the present signal, Voice Activity Projection~(VAP), introduced by Ekstedt and Skantze~\cite{ekstedt2022vap}, takes a fundamentally predictive stance: given the audio observed so far, the model forecasts the \emph{future} voice activity of each participant over a horizon of 0.5 to 2 seconds. This predictive capability enables a dialogue system to anticipate turn transitions, backchannel opportunities, and overlap onsets before they occur, rather than merely detecting them after the fact.
+
+\paragraph{Architecture and Training.}
+The VAP model receives stereo audio (one channel per speaker in a dyadic conversation) and extracts frame-level features using a self-supervised speech representation model such as CPC or wav2vec~2.0. These features are processed by a Transformer encoder, which outputs a probability distribution over future voice activity states at each time step. The future is discretised into four temporal bins per speaker; with two speakers, this yields $2^{4 \times 2} = 256$ possible activity state combinations. The model is trained in a \emph{self-supervised} fashion: the actual future voice activity observed in the data serves directly as the training signal, eliminating the need for any manual annotation of turn-taking events.
+
+\paragraph{Emergent Capabilities.}
+A remarkable property of the VAP framework is that complex turn-taking behaviours emerge implicitly from the simple objective of predicting future voice activity. Without ever being explicitly trained on turn-taking labels, the model learns to recognise turn-yielding cues, identify appropriate moments for backchannels, and distinguish turn-holds from turn-final silences. This suggests that much of the information required for competent turn-taking behaviour is already encoded in the acoustic signal and can be recovered through prediction of a straightforward observable quantity. TurnGPT~\cite{ekstedt2020turngpt} had previously demonstrated an analogous phenomenon in the text modality: a language model trained on dialogue transcripts implicitly learned turn-shift patterns from linguistic content alone.
+
+\subsubsection{The Multi-Party Scalability Problem}
+
+The current VAP architecture is designed for dyadic interaction and assumes a stereo audio input with exactly two speaker channels. Extending it to multi-party settings poses a fundamental scalability challenge. With $N$ participants and four temporal bins per speaker, the number of possible future voice activity states grows exponentially as $2^{4N}$. For a conversation with just five participants, this already yields over one million states ($2^{20} = 1{,}048{,}576$), making a direct extension of the output representation infeasible.
+
+An alternative approach---processing all $\binom{N}{2} = \frac{N(N-1)}{2}$ pairwise speaker combinations independently---does not scale either, as it grows quadratically with the number of participants and fails to capture group-level dynamics that are not reducible to pairwise interactions. Malik, Atieh, and Skantze~\cite{malik2024vap} have explicitly identified the extension of VAP to multi-party conversation as an open research problem, exploring initial strategies such as dimensionality reduction of the output space, hierarchical prediction schemes, and attention-based architectures that can accommodate a variable number of input channels. This remains an active area of investigation with no established solution.
+

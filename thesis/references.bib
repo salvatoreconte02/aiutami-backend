@@ -1,0 +1,360 @@
+% =============================================================================
+% Speech-Based Chatbot Architectures
+% =============================================================================
+
+@article{ji2024wavechat,
+  title     = {{WavChat}: A Survey of Spoken Dialogue Models},
+  author    = {Ji, Shengpeng and others},
+  journal   = {arXiv preprint arXiv:2411.13577},
+  year      = {2024},
+  note      = {60-page survey covering cascaded, half-cascade, and end-to-end architectures}
+}
+
+@article{lin2025xtalk,
+  title     = {{X-Talk}: Optimized Cascaded Spoken Dialogue Systems for Real-Time Interaction},
+  author    = {Lin, Ziyang and others},
+  journal   = {arXiv preprint arXiv:2512.18706},
+  year      = {2025},
+  note      = {Demonstrates optimized cascaded pipelines remain competitive with end-to-end}
+}
+
+@inproceedings{li2025espnetsds,
+  title     = {{ESPnet-SDS}: Unified Toolkit for Spoken Dialogue Systems},
+  author    = {Li, Siddhant and others},
+  booktitle = {Proceedings of NAACL},
+  year      = {2025},
+  note      = {arXiv:2503.08533}
+}
+
+@inproceedings{tang2024salmonn,
+  title     = {{SALMONN}: Towards Generic Hearing Abilities for Large Language Models},
+  author    = {Tang, Changli and others},
+  booktitle = {Proceedings of ICLR},
+  year      = {2024},
+  note      = {Dual encoder (Whisper + BEATs) integrated with LLM}
+}
+
+@article{wang2024freezeomni,
+  title     = {{Freeze-Omni}: A Smart and Low Latency Speech-to-Speech Dialogue Model with Frozen {LLM}},
+  author    = {Wang, Xiangyu and others},
+  journal   = {arXiv preprint},
+  year      = {2024},
+  note      = {LLM weights frozen, trainable speech encoder/decoder, sub-1s latency}
+}
+
+@inproceedings{fang2024llamaomni,
+  title     = {{LLaMA-Omni}: Seamless Speech Interaction with Large Language Models},
+  author    = {Fang, Qingkai and others},
+  booktitle = {Proceedings of ICLR},
+  year      = {2025},
+  note      = {Speech encoder + Llama-3.1 + streaming speech decoder}
+}
+
+@article{defossez2024moshi,
+  title     = {Moshi: A Speech-Text Foundation Model for Real-Time Dialogue},
+  author    = {D{\'e}fossez, Alexandre and others},
+  journal   = {arXiv preprint arXiv:2410.00037},
+  year      = {2024},
+  note      = {First full-duplex real-time speech-to-speech model, 200ms latency}
+}
+
+@article{zhang2023speechgpt,
+  title     = {{SpeechGPT}: Empowering Large Language Models with Intrinsic Cross-Modal Conversational Abilities},
+  author    = {Zhang, Dong and others},
+  journal   = {arXiv preprint},
+  year      = {2023},
+  note      = {Chain-of-Modality: speech to text reasoning to speech}
+}
+
+@inproceedings{chen2025urobench,
+  title     = {{URO-Bench}: A Comprehensive Benchmark for End-to-End Spoken Dialogue Models},
+  author    = {Chen, Zhiyuan and others},
+  booktitle = {Proceedings of EMNLP},
+  year      = {2025},
+  note      = {Demonstrates reasoning degradation in speech-to-speech models}
+}
+
+% =============================================================================
+% Turn-Taking
+% =============================================================================
+
+@article{sacks1974turntaking,
+  title     = {A Simplest Systematics for the Organization of Turn-Taking for Conversation},
+  author    = {Sacks, Harvey and Schegloff, Emanuel A. and Jefferson, Gail},
+  journal   = {Language},
+  volume    = {50},
+  number    = {4},
+  pages     = {696--735},
+  year      = {1974},
+  publisher = {Linguistic Society of America}
+}
+
+@article{heldner2010pauses,
+  title     = {Pauses, Gaps and Overlaps in Conversations},
+  author    = {Heldner, Mattias and Edlund, Jens},
+  journal   = {Journal of Phonetics},
+  volume    = {38},
+  number    = {4},
+  pages     = {555--568},
+  year      = {2010},
+  note      = {Reports average inter-turn gaps of approximately 200ms}
+}
+
+@article{gravano2011turncues,
+  title     = {Turn-Taking Cues in Task-Oriented Dialogue},
+  author    = {Gravano, Agust{\'\i}n and Hirschberg, Julia},
+  journal   = {Computer Speech \& Language},
+  volume    = {25},
+  number    = {3},
+  pages     = {601--634},
+  year      = {2011}
+}
+
+@inproceedings{ward2000backchannel,
+  title     = {Prosodic Features which Cue Back-Channel Responses in {English} and {Japanese}},
+  author    = {Ward, Nigel and Tsukahara, Wataru},
+  booktitle = {Journal of Pragmatics},
+  volume    = {32},
+  number    = {8},
+  pages     = {1177--1207},
+  year      = {2000}
+}
+
+@inproceedings{raux2009endpointing,
+  title     = {A Finite-State Turn-Taking Model for Spoken Dialog Systems},
+  author    = {Raux, Antoine and Eskenazi, Maxine},
+  booktitle = {Proceedings of NAACL-HLT},
+  pages     = {629--637},
+  year      = {2009}
+}
+
+@article{skantze2017turntaking,
+  title     = {Towards a General, Continuous Model of Turn-Taking in Spoken Dialogue Using {LSTM} Recurrent Neural Networks},
+  author    = {Skantze, Gabriel},
+  journal   = {Proceedings of SigDial},
+  year      = {2017},
+  note      = {Frames turn-taking as continuous prediction rather than binary classification}
+}
+
+@inproceedings{ekstedt2020turngpt,
+  title     = {{TurnGPT}: A Transformer-Based Language Model for Predicting Turn-Taking in Spoken Dialog},
+  author    = {Ekstedt, Erik and Skantze, Gabriel},
+  booktitle = {Findings of EMNLP},
+  year      = {2020}
+}
+
+@inproceedings{meena2014turntaking,
+  title     = {Data-Driven Models for Timing Feedback Responses in a Map Task Dialogue System},
+  author    = {Meena, Raveesh and Skantze, Gabriel and Gustafson, Joakim},
+  booktitle = {Computer Speech \& Language},
+  volume    = {28},
+  number    = {4},
+  pages     = {903--922},
+  year      = {2014}
+}
+
+@inproceedings{bohus2009engagement,
+  title     = {Models for Multiparty Engagement in Open-World Dialog},
+  author    = {Bohus, Dan and Horvitz, Eric},
+  booktitle = {Proceedings of SigDial},
+  year      = {2009}
+}
+
+@inproceedings{bohus2011multiparty,
+  title     = {Multiparty Turn Taking in Situated Dialog: Study, Lessons, and Directions},
+  author    = {Bohus, Dan and Horvitz, Eric},
+  booktitle = {Proceedings of SigDial},
+  year      = {2011}
+}
+
+@inproceedings{johansson2013gaze,
+  title     = {Head Pose Patterns in Multiparty Human-Robot Team Interactions},
+  author    = {Johansson, Martin and Skantze, Gabriel and Gustafson, Joakim},
+  booktitle = {Proceedings of HRI Workshop on Gaze in HRI},
+  year      = {2013}
+}
+
+% =============================================================================
+% VAD / VAP
+% =============================================================================
+
+@article{ekstedt2022vap,
+  title     = {Voice Activity Projection: Self-Supervised Learning of Turn-Taking Events},
+  author    = {Ekstedt, Erik and Skantze, Gabriel},
+  journal   = {arXiv preprint arXiv:2205.09812},
+  year      = {2022},
+  note      = {Predicts future voice activity over 256 discrete states}
+}
+
+@article{malik2024vap,
+  title     = {Voice Activity Projection for Multi-Party Conversations},
+  author    = {Malik, Muhammad Umer and Atieh, Ranim and Skantze, Gabriel},
+  journal   = {KTH Stockholm},
+  year      = {2024},
+  note      = {Identifies extending VAP to multi-party as an open problem}
+}
+
+% =============================================================================
+% Multi-Party Conversational AI
+% =============================================================================
+
+@inproceedings{gu2022mpc,
+  title     = {Who Says What to Whom: A Survey of Multi-Party Conversations},
+  author    = {Gu, Jia-Chen and others},
+  booktitle = {Proceedings of IJCAI},
+  year      = {2022},
+  note      = {WHO/WHAT/WHOM taxonomy for text-based MPC}
+}
+
+@inproceedings{zheng2022polyadic,
+  title     = {Understanding the Role of Conversational Agents in Supporting Polyadic Interactions},
+  author    = {Zheng, Fengchun and others},
+  booktitle = {Proceedings of CHI},
+  year      = {2022},
+  note      = {Visible/Ignorable/Accountable design properties}
+}
+
+@inproceedings{houde2025koala,
+  title     = {Koala: Empirical Lessons Toward Memory-Safe, Multiple-Agent, and Human-Centric {LLM}-Based Brainstorming},
+  author    = {Houde, Stephanie and others},
+  booktitle = {Proceedings of IUI},
+  year      = {2025},
+  note      = {WHEN/WHAT/WHERE taxonomy; reactive vs. proactive agent control}
+}
+
+@inproceedings{addlesee2024ari,
+  title     = {Multi-Party Conversational Grounding in a Social Robot for People with Dementia},
+  author    = {Addlesee, Angus and others},
+  booktitle = {Proceedings of EACL (System Demonstrations)},
+  year      = {2024},
+  note      = {ARI robot, addressee detection (85.4\% with gaze), clarification requests}
+}
+
+@article{axelsson2025furhat,
+  title     = {Enabling Multi-Party Conversations between Humans and {LLM}-Powered Conversational Agents},
+  author    = {Axelsson, Andr{\'e}as and Skantze, Gabriel},
+  journal   = {arXiv preprint arXiv:2503.15496},
+  year      = {2025},
+  note      = {Furhat robot, 92.6\% addressee with gaze, 26.8\% audio-only}
+}
+
+@inproceedings{addlesee2020asr,
+  title     = {A Comprehensive Evaluation of Incremental Speech Recognition and Diarisation for Conversational {AI}},
+  author    = {Addlesee, Angus and Eshghi, Arash and Konstas, Ioannis},
+  booktitle = {Proceedings of COLING},
+  year      = {2020},
+  note      = {DER 49--67\% multi-party, 20\% WER degradation from overlap}
+}
+
+@article{adikari2022empathic,
+  title     = {Empathic Conversational Agent as a Co-Facilitator in Online Peer Support Communities},
+  author    = {Adikari, Achini and others},
+  journal   = {Future Generation Computer Systems},
+  volume    = {126},
+  pages     = {1--13},
+  year      = {2022},
+  note      = {Emotion detection with Plutchik's model, Markov chain transitions}
+}
+
+@incollection{wahlster2023virtual,
+  title     = {From {ELIZA} to {XIAOICE}: Challenges and Opportunities with Social Chatbots},
+  author    = {Wahlster, Wolfgang},
+  booktitle = {Philosophical Transactions of the Royal Society A},
+  year      = {2023},
+  note      = {Historical overview including VIRTUAL HUMAN quiz show system}
+}
+
+@incollection{traum2004issues,
+  title     = {Issues in Multiparty Dialogues},
+  author    = {Traum, David},
+  booktitle = {Advances in Agent Communication},
+  publisher = {Springer},
+  pages     = {201--211},
+  year      = {2004}
+}
+
+@article{mpcasurvey2025,
+  title     = {Multi-Party Conversational {AI}: A Survey},
+  author    = {{MPCA Survey Authors}},
+  journal   = {arXiv preprint arXiv:2505.18845},
+  year      = {2025},
+  note      = {Confirms limitations of current MPCA benchmarks}
+}
+
+@inproceedings{hu2025dialoglab,
+  title     = {{DialogLab}: A Tool for Designing and Testing Multi-Party Conversations with {AI} Agents},
+  author    = {Hu, Yiren and others},
+  booktitle = {Proceedings of UIST},
+  year      = {2025},
+  note      = {Authoring and simulation tool for group human-AI conversations}
+}
+
+@inproceedings{lee2024endofturn,
+  title     = {End-of-Turn Prediction in Multi-Party Conversations},
+  author    = {Lee, Jinhyeok and Deng, Zhaoqi},
+  booktitle = {Proceedings of ICMI},
+  year      = {2024},
+  note      = {Best Paper Runner-up; 3-party end-of-turn prediction requiring 8-camera motion capture}
+}
+
+@inproceedings{ishii2013gaze,
+  title     = {Predicting Who Will Be the Next Speaker and When Using Gaze Behavior in Multi-Party Meetings},
+  author    = {Ishii, Ryo and Nakano, Yukiko I. and Nishida, Toyoaki},
+  booktitle = {ACM Transactions on Interactive Intelligent Systems},
+  volume    = {3},
+  number    = {1},
+  year      = {2013}
+}
+
+% =============================================================================
+% Survival Tasks & Group Decision-Making (Empirical Evaluation)
+% =============================================================================
+
+@book{lafferty1974desert,
+  title     = {The Desert Survival Problem: A Group Decision Making Experience for Examining and Increasing Individual and Team Effectiveness},
+  author    = {Lafferty, J. Clayton and Eady, Paul M.},
+  publisher = {Human Synergistics},
+  year      = {1974},
+  note      = {Original survival ranking task: 15 objects, expert solution, synergy measurement}
+}
+
+@article{hall1970normative,
+  title     = {The Effects of a Normative Intervention on Group Decision-Making Performance},
+  author    = {Hall, Jay and Watson, W. H.},
+  journal   = {Human Relations},
+  volume    = {23},
+  number    = {4},
+  pages     = {299--317},
+  year      = {1970},
+  note      = {NASA Moon Survival; consensus instructions improve group decision quality}
+}
+
+@article{hamada2020wisdom,
+  title     = {Wisdom of Crowds and Collective Decision-Making in a Survival Situation with Complex Information Integration},
+  author    = {Hamada, Daisuke and Nakayama, Masatoshi and Saiki, Jun},
+  journal   = {Cognitive Research: Principles and Implications},
+  volume    = {5},
+  pages     = {48},
+  year      = {2020},
+  note      = {119 participants, 25 groups; groups outperform individuals (error 36.88 vs 46.99)}
+}
+
+@article{hemon2024controversy,
+  title     = {When Instructions Based on Constructive Controversy Boost Synergy in Online Groups},
+  author    = {H{\'e}mon, Briva{\"e}l and Cherbonnier, Ana{\"\i}s and Michinov, Estelle and Jamet, {\'E}ric and Michinov, Nicolas},
+  journal   = {International Journal of Human-Computer Interaction},
+  pages     = {1--9},
+  year      = {2024},
+  note      = {125 participants, Desert Survival via videoconference; structured instructions boost synergy}
+}
+
+@article{stasser1992hidden,
+  title     = {Discovery of Hidden Profiles by Decision-Making Groups: Solving a Problem Versus Making a Judgment},
+  author    = {Stasser, Garold and Stewart, Donna D.},
+  journal   = {Journal of Personality and Social Psychology},
+  volume    = {63},
+  number    = {3},
+  pages     = {426--434},
+  year      = {1992},
+  note      = {Original hidden profile paradigm; murder mystery task used by Dubini (2024)}
+}

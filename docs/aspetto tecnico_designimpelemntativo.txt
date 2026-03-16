@@ -1,0 +1,192 @@
+
+Gap di ricerca emersi dallo stato dell’arte
+
+Dall’analisi della letteratura emergono alcune limitazioni nei sistemi conversazionali attuali, in particolare all’intersezione tra:
+•	sistemi conversazionali speech-based
+•	interazioni multi-party
+•	agenti conversazionali basati su LLM
+
+Gap 1
+I sistemi vocali sono quasi sempre dyadic
+
+La maggior parte dei sistemi conversational AI basati su voce è progettata per interazioni:
+1 utente ↔ 1 agente
+Esempi:
+•	voice assistants
+•	spoken dialogue systems
+•	interfacce vocali per LLM
+Tuttavia molte situazioni reali prevedono conversazioni di gruppo.
+
+Questo introduce nuove sfide:
+•	coordinamento dei turni
+•	gestione della conversazione
+•	partecipazione multipla.
+
+
+Gap 2
+I sistemi multiparty sono principalmente text-based
+
+La maggior parte della ricerca sulle conversazioni multi-utente riguarda sistemi basati su:
+•	chat collaborative
+•	forum
+•	piattaforme di messaggistica
+
+Questi sistemi operano su testo, non su parlato.
+L’interazione vocale introduce ulteriori difficoltà:
+•	latenza
+•	overlapping speech
+•	voice activity detection
+•	gestione dei turni in tempo reale.
+
+Gap 3
+Mancanza di architetture progettate per multiparty speech
+Le architetture attuali dei sistemi vocali sono generalmente progettate per interazioni dyadic.
+Esempi:
+•	pipeline STT → LLM → TTS
+•	modelli speech-to-speech
+•	sistemi multimodali conversazionali.
+
+Queste architetture assumono tipicamente:
+singolo parlante ↔ singolo agente
+Quando si passa a conversazioni di gruppo emergono nuove sfide:
+•	gestione di più stream audio
+•	coordinamento dei turni
+•	sincronizzazione tra partecipanti.
+
+Attualmente esistono poche architetture progettate specificamente per conversazioni vocali multiparty.
+
+Gap 4
+
+Il ruolo dell’AI come moderatore è poco studiato
+
+La maggior parte dei conversational agents agisce come:
+•	assistente
+•	sistema di risposta
+•	supporto informativo.
+
+Pochi lavori studiano il ruolo dell’AI come moderatore della conversazione.
+Un AI moderator potrebbe:
+•	gestire il turn-taking
+•	guidare la discussione
+•	facilitare la collaborazione
+•	supportare il problem solving di gruppo.
+
+Questo ruolo rimane ancora poco esplorato nella letteratura.
+
+
+
+
+ Posizionamento di AIutami
+
+Il sistema AIutami si colloca esattamente in questo spazio.
+
+Caratteristiche principali:
+•	conversazione speech-based
+•	multi-party
+•	AI moderatore
+•	interazione audio-only
+•	uso di LLM per reasoning
+
+Inoltre introduce alcune scelte progettuali interessanti:
+•	turn-taking esplicito tramite bottone
+•	stream audio separati per ogni utente
+•	moderazione attiva della conversazione.
+
+Questo lo rende un caso di studio interessante per sistemi di AI moderation.
+
+ Direzione di tesi 1
+
+AI Moderation for Collaborative Reasoning
+Idea
+
+Studiare come un agente AI può facilitare task di ragionamento collaborativo in conversazioni multiparty.
+
+Il murder mystery diventa un caso di studio.
+
+Possibili applicazioni
+•	giochi collaborativi (murder mystery)
+•	brainstorming
+•	discussioni accademiche
+•	decision making di gruppo.
+
+Contributo della tesi
+
+La tesi potrebbe studiare:
+•	strategie di moderazione AI
+•	come l’AI guida la discussione
+•	come stimolare ipotesi e riflessioni.
+
+ Direzione di tesi 2
+
+General AI Moderators for Group Conversations
+
+Idea
+
+Studiare sistemi di AI che moderano conversazioni di gruppo su diversi temi.
+Per esempio:
+•	discussioni scolastiche
+•	dibattiti
+•	gruppi di studio
+•	brainstorming.
+
+Contributo
+
+Costruire un framework per:
+AI-moderated group conversations
+
+Ad esempio:
+•	quando l’AI dovrebbe intervenire
+•	quanto deve essere proattiva
+•	come mantenere il flusso della conversazione.
+ 
+ Direzione di tesi 3
+
+Architecture for Multi-Party Speech Moderation Systems
+direzione più tecnica e sistemistica.
+
+Idea
+
+AIutami introduce alcune soluzioni architetturali interessanti:
+•	stream audio separati
+•	turn-taking esplicito
+•	moderatore AI
+•	pipeline speech-LLM.
+
+Contributo
+
+La tesi potrebbe proporre una architettura per sistemi conversational AI multiparty speech-based.
+
+Obiettivo
+
+Capire quali scelte architetturali permettono di costruire sistemi:
+•	robusti
+•	scalabili
+•	adatti a conversazioni di gruppo.
+
+
+
+La mia proposta
+
+Architectures and AI Moderation Strategies for Multi-Party Speech Conversational Systems
+
+Possibili contributi della tesi:
+
+1 Architettura per conversational AI multiparty speech
+
+Studio delle scelte architetturali necessarie per supportare conversazioni vocali tra più partecipanti.
+
+Esempi:
+•	gestione di più stream audio
+•	coordinamento dei turni
+•	integrazione con modelli LLM.
+
+2 Strategie di moderazione AI
+
+Studio di come un agente AI può:
+•	facilitare la conversazione
+•	guidare il ragionamento collaborativo
+•	stimolare la partecipazione del gruppo.
+
+3️ Caso di studio e valutazione
+
+Consultare le due proposte in docs/plans/2026-03-10-empirical-evaluation-proposals.md

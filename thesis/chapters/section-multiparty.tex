@@ -1,0 +1,713 @@
+% ============================================================
+%  \subsection: Multi-Party Conversational AI
+%  \subsection: Research Gaps
+%  \subsection: Positioning of AIutami
+%  Parent: \section{State of the Art}
+% ============================================================
+
+\subsection{Multi-Party Conversational AI}
+\label{subsec:multiparty-ca}
+
+% ----------------------------------------------------------
+\subsubsection{Why Multi-Party Is Different}
+\label{sssec:multiparty-why}
+
+Nearly all conversational agents in widespread use today---Siri, Alexa,
+ChatGPT, GPT-4o voice mode---are engineered for \emph{dyadic} interaction: a
+single human speaks to a single artificial interlocutor, and they take turns in
+strict alternation.  Real human communication, however, is predominantly
+group-based: meetings, classroom discussions, therapy sessions, and
+brainstorming workshops all involve multiple participants whose contributions
+interleave, overlap, and address different subsets of the group.
+
+The transition from dyadic to multi-party conversation is not an incremental
+extension; it constitutes a qualitative paradigm shift that introduces
+fundamentally new computational and design
+problems~\cite{gu2022mpc,zheng2022polyadic,traum2004issues}.  In a dyadic
+exchange, the information flow is sequential: speaker~A produces an utterance,
+speaker~B responds, and so forth in a predictable $A \!\to\! B \!\to\! A$
+pattern.  In a multi-party setting, the information flow becomes graph-based:
+any utterance can originate from any participant and can be directed at any
+individual, any subset, or the entire group, giving rise to parallel
+sub-conversations, shifting coalitions, and complex patterns of turn
+allocation~\cite{gu2022mpc}.  These structural differences propagate into every
+layer of a conversational AI system---from speaker identification and turn
+management to response generation and addressee resolution---and demand
+dedicated modelling strategies that have no counterpart in dyadic research.
+
+The remainder of this subsection organises the multi-party literature along
+three complementary axes: computational, design, and experiential.  It then
+reviews the small number of systems that have been built and deployed, and
+concludes with an analysis of the technical obstacles that explain why most
+multi-party research has remained text-based.
+
+% ----------------------------------------------------------
+\subsubsection{Taxonomies of Multi-Party Conversational AI}
+\label{sssec:multiparty-taxonomies}
+
+Three taxonomies, originating from different research communities, provide
+complementary lenses through which multi-party conversational AI can be
+analysed.  Together they span the computational, design, and user-experience
+dimensions of the problem.
+
+\paragraph{WHO Says WHAT to WHOM---a computational taxonomy.}
+Gu et al.~\cite{gu2022mpc} present a comprehensive IJCAI survey that
+decomposes multi-party conversation (MPC) into three interrelated computational
+problems.  The first, \emph{Speaker Modelling} (\textsc{who}), concerns the
+identification and prediction of the current and next speaker: who is speaking,
+and who will speak next?  Solutions range from Conditional Random Fields and
+LSTMs to Transformer-based turn-taking predictors.  The second, \emph{Utterance
+Modelling} (\textsc{what}), addresses the generation of the agent's
+contribution: what should it say?  The literature offers both retrieval-based
+methods (e.g., TopicBERT) and generation-based approaches (e.g., HeterMPC, and
+more recently LLM prompting).  The third, \emph{Addressee Modelling}
+(\textsc{whom}), tackles the problem of determining to whom an utterance is
+directed: addressee recognition, dialogue disentanglement, and the
+disambiguation of shared-channel messages.
+
+Gu et al.\ observe that these three problems are typically studied in
+isolation, yet they are deeply interdependent in practice: knowing \emph{who}
+speaks conditions the interpretation of \emph{what} is said, which in turn
+constrains the inference of \emph{whom} it addresses.  A critical limitation of
+the survey, however, is that it covers exclusively \emph{text-based} MPC.  The
+extension to speech introduces additional complexity layers---ASR errors,
+overlapping speech, prosodic cues, and real-time latency
+constraints---that the taxonomy does not address.
+
+\paragraph{WHEN / WHAT / WHERE + SPECIFY / ACCESS / IMPLEMENT---a design taxonomy.}
+Houde et al.~\cite{houde2025koala} propose an HCI-oriented framework,
+developed at IUI~2025, for specifying and controlling the behaviour of an AI
+agent participating in group conversations.  Their taxonomy is organised along
+two orthogonal axes.
+
+The first axis captures \emph{what to control}:
+\begin{itemize}[nosep]
+  \item \textsc{when}---the triggers, filters, and frequency that govern when
+    the agent contributes (e.g., only when addressed, when a self-assessed
+    relevance score exceeds a threshold, or at a fixed cadence);
+  \item \textsc{what}---the content, style, and modality of the agent's
+    contributions (e.g., conservative vs.\ creative ideas, formal vs.\ casual
+    tone);
+  \item \textsc{where}---the channel through which the agent communicates (a
+    shared group channel, a threaded reply, or a private message).
+\end{itemize}
+
+The second axis captures \emph{how to control it}:
+\begin{itemize}[nosep]
+  \item \textsc{specify}---the mechanism for configuring the agent's behaviour
+    (a UI panel, natural-language instructions, role-based presets);
+  \item \textsc{access}---who is authorised to adjust the configuration (an
+    administrator, any participant, or a democratic consensus);
+  \item \textsc{implement}---how the configuration is enforced at the system
+    level (system prompt, external logic module, or a hybrid of both).
+\end{itemize}
+
+This design taxonomy is complementary to Gu et al.'s computational
+decomposition: where the latter describes the \emph{technical sub-problems} of
+MPC, Houde et al.'s framework describes the \emph{design space} for governing
+the agent's participation.
+
+\paragraph{Four Challenges and Three Design Properties---a UX taxonomy.}
+Zheng et al.~\cite{zheng2022polyadic} conduct a CHI literature review of 36
+papers on polyadic (i.e., multi-party) human--AI interaction, distilling four
+recurrent challenges:
+\begin{enumerate}[nosep]
+  \item \emph{Inefficient communication}---topic drift, lack of structure,
+    difficulty reaching consensus;
+  \item \emph{Lack of engagement}---unequal participation, passive members;
+  \item \emph{Relationship-maintenance barriers}---insufficient emotional
+    awareness, difficulty regulating group affect;
+  \item \emph{Need for building connections}---ice-breaking, common-ground
+    establishment, cross-cultural challenges.
+\end{enumerate}
+
+From these challenges they derive three design properties that a polyadic
+conversational agent should exhibit.  The agent should be
+\emph{Visible}---participants must be aware of its presence and role.  It
+should be \emph{Ignorable}---its interventions must be non-intrusive; if they
+are too frequent or too long, they become counterproductive.  And it should be
+\emph{Accountable}---it must be clear to whom the agent is responding and who
+controls its behaviour.
+
+These three properties impose concrete constraints on system design.  In
+text-based environments, visibility can be achieved through distinct usernames
+or badges, ignorability through message threading, and accountability through
+explicit @-mentions.  In speech-based environments, as we discuss in
+Section~\ref{sssec:gaps}, all three properties take on fundamentally different
+meanings: the agent's voice is inherently visible (it occupies a shared audio
+channel), difficult to ignore (one cannot scroll past a spoken utterance), and
+hard to make accountable without explicit turn-assignment mechanisms.
+
+% ----------------------------------------------------------
+\subsubsection{Existing Multi-Party Systems}
+\label{sssec:multiparty-systems}
+
+Despite the extensive theoretical groundwork laid by the taxonomies above, the
+number of systems that actually implement a multi-party conversational agent
+remains small.  This section reviews five such systems---spanning text, speech,
+and multimodal modalities---and characterises each according to its interaction
+modality, the role assumed by the AI, the turn-management mechanism, and the
+degree of user control.
+
+\paragraph{Koala (Houde et al., 2025).}
+Koala~\cite{houde2025koala} is a Slack-based chatbot deployed in brainstorming
+sessions at IBM, with three human participants and one AI agent.  Houde et al.\
+evaluate two variants.  In the \emph{reactive} variant, Koala contributes only
+when explicitly addressed (via an @-mention).  In the \emph{proactive} variant,
+Koala employs a self-scoring LLM mechanism: after each human message, it
+estimates the potential value of a contribution on a 0--100 scale and
+autonomously posts if the score exceeds a configurable threshold.
+
+The proactive variant generated 73\% of all ideas in the AI-augmented
+conditions, yet only 33\% of the top-rated ideas were attributed to the agent.
+More critically, 72\% of participants preferred the reactive variant, and the
+proactive agent was described as a ``pedantic student who wouldn't create space
+for others.''  A follow-up study, Koala~II, introduced a user-configurable
+threshold: notably, no group reverted to the fully reactive mode, and the
+perceived usefulness of the controls was rated 4.46 out of~5.  The central
+finding is that agent proactivity should be neither binary nor static: users
+want to adjust it dynamically during a session.
+
+\paragraph{ARI Robot (Addlesee et al., 2024).}
+Addlesee et al.~\cite{addlesee2024ari} deploy the humanoid robot ARI in a
+hospital memory clinic, where it interacts with two human participants (a
+patient and a companion) via speech.  The system follows a cascaded pipeline:
+ASR transcription is followed by gaze-based addressee detection using an LLM
+classifier, which achieves 85.4\% accuracy---compared with 53.4\% when using
+text alone.  If the robot determines that it is not the intended addressee, it
+takes no action.
+
+Two additional contributions are noteworthy.  First, the system implements
+\emph{incremental Clarification Requests} (iCR): when an utterance is detected
+as incomplete---a frequent occurrence with patients experiencing cognitive
+decline---the robot generates a natural follow-up question rather than
+attempting to respond to a fragmentary input.  Second, a ``Jodie'' grounding
+technique attributes information to a fictitious persona, forcing the LLM to
+anchor its responses in the provided context and reducing hallucination by an
+average of 10 percentage points across annotated responses.  A key limitation is
+that the system has only been tested with two human participants and depends on
+a gaze-tracking camera for addressee detection.
+
+\paragraph{Furhat Robot (Axelsson and Skantze, 2025).}
+Axelsson and Skantze~\cite{axelsson2025furhat} present a social robot built on
+the Furhat platform that engages in open-ended, unscripted conversation with two
+human participants.  The system's pipeline processes voice direction-of-arrival
+signals, Azure STT transcription, speaker diarisation, and face recognition
+before forwarding the result to GPT-3.5 for response generation; the output is
+rendered via TTS and accompanied by gaze and head gestures.
+
+In a parallel setting (two users interacting separately with the robot),
+addressee accuracy reaches 92.6\%, but in a genuine group-conversation setting
+it drops to 79.3\%.  The most striking result concerns \emph{audio-only}
+addressee recognition for concurrent speakers: accuracy falls to just 26.8\%,
+confirming that audio alone is insufficient for resolving addressee ambiguity in
+multi-party speech.  Mean response latency is 1.35\,s, dominated by LLM
+inference.  The system is limited to two human participants, operates in a
+controlled laboratory environment, and assigns no moderating role to the robot.
+
+\paragraph{Empathic Co-facilitator (Adikari et al., 2022).}
+Adikari et al.~\cite{adikari2022empathic} propose a text-based AI
+co-facilitator for online cancer-support groups (Cancer Chat Canada), analysing
+approximately 120\,000 conversational turns.  The AI operates in the background
+alongside a human therapist: it monitors group dynamics, detects emotions using
+Plutchik's eight-emotion taxonomy via Word2Vec and GloVe embeddings, and models
+emotion-state transitions through Markov chains.  When a negativity score
+exceeds a threshold ($\lambda > 0.5$), the system either generates an empathic
+response from pre-defined templates or alerts the human therapist.
+
+The system demonstrates that an AI can play a valuable support role in
+emotionally sensitive group settings.  However, it pre-dates the LLM era: its
+natural-language capabilities are limited to template-based responses and
+classical classifiers, and it operates exclusively in asynchronous text.
+
+\paragraph{VIRTUAL HUMAN (Wahlster, 2006/2023).}
+Wahlster~\cite{wahlster2023virtual} describes a historical precursor: a
+multimodal sports-quiz system from 2006, featuring two human contestants and
+three virtual agents (one moderator and two domain experts).  Dialogue
+management relied on symbolic rules rather than statistical or neural models.
+While the system demonstrates that the concept of an AI moderator in multi-party
+conversation has a two-decade lineage, its pre-LLM architecture makes it
+fundamentally different from contemporary approaches in both flexibility and
+scalability.
+
+\paragraph{Comparative synthesis.}
+Table~\ref{tab:multiparty-comparison} provides a systematic comparison of all
+five systems, together with AIutami, across ten dimensions that capture the
+essential design choices identified by the taxonomies in
+Section~\ref{sssec:multiparty-taxonomies}.
+
+\begin{table}[ht]
+  \centering
+  \caption{Comparison of multi-party conversational AI systems.  AIutami is
+    included for reference and discussed in detail in
+    Section~\ref{subsec:positioning}.}
+  \label{tab:multiparty-comparison}
+  \footnotesize
+  \setlength{\tabcolsep}{3.5pt}
+  \begin{tabularx}{\textwidth}{@{} l X X X X X X @{}}
+    \toprule
+    \textbf{Dimension}
+      & \textbf{Koala}
+      & \textbf{ARI Robot}
+      & \textbf{Furhat}
+      & \textbf{Co-facilitator}
+      & \textbf{Virtual Human}
+      & \textbf{AIutami} \\
+    \midrule
+    Year
+      & 2025 & 2024 & 2025 & 2022 & 2006 & 2024 \\
+    Modality
+      & Text (Slack)
+      & Speech + gaze
+      & Speech + gaze
+      & Text (chat)
+      & Multimodal
+      & Speech (WebRTC) \\
+    AI role
+      & Participant
+      & Receptionist
+      & Conv.\ partner
+      & Co-facilitator
+      & Moderator
+      & Moderator \\
+    Participants
+      & 3\,H + 1\,AI
+      & 2\,H + 1\,robot
+      & 2\,H + 1\,robot
+      & $N$\,H + AI + therapist
+      & 2\,H + 3\,agents
+      & $N$\,H + 1\,AI \\
+    \textsc{when}
+      & Self-scoring (0--100)
+      & Addressee (gaze)
+      & Gaze + silence
+      & Negativity $\lambda$
+      & Symbolic rules
+      & Trigger-based \\
+    User control
+      & In-session panel
+      & None
+      & None
+      & None (therapist)
+      & None
+      & Session config \\
+    LLM
+      & Llama\,2/3
+      & Vicuna-13b
+      & GPT-3.5
+      & Pre-LLM
+      & Pre-LLM
+      & Azure OpenAI \\
+    Turn-taking
+      & Implicit (text)
+      & Addressee det.
+      & Gaze-based
+      & N/A (async)
+      & Multimodal rules
+      & Explicit + 8\,s resv. \\
+    Context
+      & Brainstorming
+      & Memory clinic
+      & Open-ended
+      & Oncology support
+      & Sports quiz
+      & Multi-context \\
+    Deployed
+      & Prototype
+      & Hospital
+      & Lab prototype
+      & Prototype
+      & Historical
+      & Web (production) \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+% ----------------------------------------------------------
+\subsubsection{Technical Challenges of Multi-Party Speech}
+\label{sssec:multiparty-technical}
+
+The paucity of speech-based multi-party systems is not accidental: it reflects
+the severity of the technical challenges that speech introduces relative to
+text.  Addlesee et al.~\cite{addlesee2020asr} provide a systematic evaluation
+of commercial ASR and speaker-diarisation services in both dyadic and
+multi-party settings, revealing performance degradation that is often
+prohibitive.  Table~\ref{tab:asr-challenges} summarises their findings.
+
+\begin{table}[ht]
+  \centering
+  \caption{Technical challenges of ASR in multi-party spoken interaction,
+    adapted from Addlesee et al.~\cite{addlesee2020asr}.}
+  \label{tab:asr-challenges}
+  \small
+  \begin{tabularx}{\textwidth}{@{} l X l @{}}
+    \toprule
+    \textbf{Challenge} & \textbf{Description} & \textbf{Measured Impact} \\
+    \midrule
+    Speaker diarisation
+      & Determining who is speaking at each moment
+      & DER 49--67\% (multi-party) \\
+    Overlapping speech
+      & Concurrent speakers degrade recognition
+      & ${\sim}$20\% WER degradation \\
+    Incremental ASR
+      & Real-time partial results vs.\ batch
+      & 33\% WER (incr.)\ vs.\ 5\% (batch) \\
+    Disfluencies
+      & Filled pauses, self-corrections, edit terms
+      & Variable across services \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Speaker diarisation---the task of attributing each audio segment to the correct
+speaker---exhibits Diarisation Error Rates between 49\% and 67\% in multi-party
+settings on commercial platforms, with Google's service failing entirely when
+the number of speakers exceeds three.  Overlapping speech, which occurs
+naturally whenever speakers compete for the floor or produce backchannels,
+degrades Word Error Rates by approximately 20\%.  Incremental (streaming) ASR,
+which is necessary for responsive turn-taking, yields a sixfold increase in WER
+compared with batch transcription (33\% vs.\ 5\%).  These compound difficulties
+explain why the vast majority of multi-party conversational AI research---as
+surveyed by Gu et al.~\cite{gu2022mpc}, Zheng et
+al.~\cite{zheng2022polyadic}, and Houde et al.~\cite{houde2025koala}---has
+operated exclusively in the text modality.
+
+
+% ============================================================
+\subsection{Research Gaps}
+\label{subsec:gaps}
+
+The preceding sections have traced three research threads---speech-based
+architectures, turn-taking models, and multi-party conversational
+AI---and have shown how each has matured largely in isolation from the others.
+This subsection consolidates the gaps that emerge at their intersection,
+identifying eight open problems that delineate opportunities for future work.
+
+% ----------------------------------------------------------
+\subsubsection{Gap~1: Multi-Party Speech-Based AI---the Nearly Empty Quadrant}
+\label{sssec:gap1}
+
+The most prominent gap in the literature is the near-absence of systems that
+combine speech-based interaction with multi-party group dynamics and an active
+AI participant.  As shown in Table~\ref{tab:multiparty-comparison}, only the
+ARI robot~\cite{addlesee2024ari} and the Furhat
+robot~\cite{axelsson2025furhat} operate in speech, and both are restricted to
+exactly two human participants plus one robot, with a hard dependency on gaze
+tracking for addressee resolution.  No existing system simultaneously satisfies
+all of the following criteria: speech-based input and output, support for $N$
+human participants, an active AI moderator role, LLM-based reasoning, and
+audio-only operation without gaze or video.  The MPCA
+Survey~\cite{mpcasurvey2025} corroborates this finding indirectly: it does not
+systematically distinguish between text-based and speech-based multi-party
+agents, signalling that the speech dimension is underrepresented in the field.
+
+% ----------------------------------------------------------
+\subsubsection{Gap~2: End-to-End and Half-Cascade Architectures for Multi-Party}
+\label{sssec:gap2}
+
+All recent speech-to-speech models---Moshi~\cite{defossez2024moshi},
+GPT-4o, LLaMA-Omni~\cite{fang2024llamaomni},
+Freeze-Omni~\cite{wang2024freezeomni}, Qwen3-Omni---are
+designed exclusively for dyadic interaction.  No published work investigates
+how these architectures could be adapted to the multi-party setting, where the
+system must handle $N$ concurrent audio streams, perform real-time speaker
+identification, manage $N$-way turn allocation, and decide \emph{when} and
+\emph{to whom} to respond.  The only architecture with demonstrated multi-party
+support remains the cascaded STT--LLM--TTS pipeline, as employed by both
+Addlesee et al.~\cite{addlesee2024ari} and AIutami.
+
+% ----------------------------------------------------------
+\subsubsection{Gap~3: Design Taxonomy for Multi-Party Speech}
+\label{sssec:gap3}
+
+Houde et al.'s design taxonomy~\cite{houde2025koala} was developed and
+validated exclusively on Slack, a text-based platform.  Transposing it to
+speech fundamentally alters the design space in at least four ways.  First,
+\emph{latency matters acutely}: in text, a response delivered after five
+seconds is unremarkable; in speech, a five-second silence is socially
+disruptive, and the agent must decide whether to intervene in under one second.
+Second, \emph{voice is sequential and non-skippable}: a long text message can
+be scanned or scrolled past, but a long spoken utterance physically occupies
+the shared audio channel and cannot be fast-forwarded.  Third, \emph{there are
+no threads in speech}: the \textsc{where} dimension collapses to a single
+shared channel (or, at best, a parallel private channel), eliminating the
+threaded-reply affordance that text platforms provide.  Fourth, \emph{control
+interfaces are incompatible with ongoing speech}: a participant cannot click a
+configuration panel while speaking.  DialogLab~\cite{hu2025dialoglab},
+a recent authoring tool from Google presented at UIST~2025, enables the design
+and simulation of group human--AI conversations but does not propose a design
+taxonomy specific to speech, nor does it address the latency and sequentiality
+constraints of the vocal modality.
+
+% ----------------------------------------------------------
+\subsubsection{Gap~4: Audio-Only Addressee Detection in Groups with $N > 2$}
+\label{sssec:gap4}
+
+Addressee detection---determining to whom an utterance is directed---is a
+prerequisite for appropriate agent behaviour in multi-party settings.  Current
+results are discouraging for audio-only scenarios.  Addlesee et
+al.~\cite{addlesee2024ari} achieve 85.4\% accuracy using a combination of gaze
+and text features, but only with two human participants; text alone yields
+53.4\%.  Axelsson and Skantze~\cite{axelsson2025furhat} report 92.6\% accuracy
+with gaze features, but when restricted to audio-only input with concurrent
+speakers, accuracy collapses to 26.8\%.  Without gaze or video, and with more
+than two speakers, the problem remains essentially open.  Lee and
+Deng~\cite{lee2024endofturn}, Best Paper Runner-up at ICMI~2024, address
+end-of-turn prediction for three-party conversations, but their approach
+requires an eight-camera motion-capture setup---far removed from the
+constraints of a typical web-based deployment.
+
+% ----------------------------------------------------------
+\subsubsection{Gap~5: Dynamic Agent Control in Speech Contexts}
+\label{sssec:gap5}
+
+Houde et al.~\cite{houde2025koala} demonstrate that users strongly prefer the
+ability to adjust agent behaviour during a session rather than only before it
+(rated 4.46/5 for perceived usefulness of in-session controls).  In text-based
+environments, this is straightforward: a side panel, a slider, or an in-chat
+command.  In speech, however, the control and conversational channels are
+conflated.  A voice command such as ``moderator, speak less'' is ambiguous:
+it could be interpreted as an instruction to the agent or as a conversational
+utterance directed at another participant.  Alternative modalities---gestural
+input (if video is available), a parallel web interface, or keyword-triggered
+control commands---have not been explored in the literature.
+
+% ----------------------------------------------------------
+\subsubsection{Gap~6: Incomplete Utterance Handling in Multi-Party Speech}
+\label{sssec:gap6}
+
+Addlesee et al.~\cite{addlesee2024ari} introduce incremental Clarification
+Requests (iCR) to handle incomplete utterances from patients with dementia.  In
+generic multi-party speech, the problem is amplified.  ASR endpointing
+algorithms may segment an utterance mid-sentence, particularly when the
+speaker pauses to think.  With $N$ speakers, interruptions and false endpoints
+occur more frequently, and the downstream LLM receives truncated input that
+can trigger incoherent or irrelevant responses.  No multi-party speech system
+currently implements recovery strategies---such as iCR, utterance-continuation
+detection, or endpointing rollback---for the general case.
+
+% ----------------------------------------------------------
+\subsubsection{Gap~7: Benchmarks for Multi-Party Speech-Based CA}
+\label{sssec:gap7}
+
+The field lacks a shared evaluation infrastructure for multi-party speech-based
+conversational agents.  There is no standard dataset, no common benchmark, and
+no agreed-upon evaluation protocol that spans both technical metrics (latency,
+WER, diarisation error rate) and user-experience measures (discussion quality,
+participation balance, perceived group climate).  Zheng et
+al.~\cite{zheng2022polyadic} propose UX evaluation dimensions for polyadic
+agents, but only for text.  Addlesee et al.~\cite{addlesee2020asr} provide ASR
+metrics for multi-party speech, but without downstream LLM evaluation.  Recent
+spoken-dialogue benchmarks---SD-Eval and Full-Duplex-Bench---are exclusively
+dyadic.  The MPCA Survey~\cite{mpcasurvey2025} explicitly confirms this gap,
+noting that ``current MPCA evaluation benchmarks have three limitations:
+(i)~each dataset focuses on a single specific skill of MPCAs; (ii)~lack of
+benchmarks for multi-modal settings; (iii)~lack of realistic
+metrics/simulations for evaluation.''
+
+% ----------------------------------------------------------
+\subsubsection{Gap~8: Amplified Proactivity Risk in Speech}
+\label{sssec:gap8}
+
+Houde et al.~\cite{houde2025koala} show that even in text, a proactive agent
+was perceived as a ``pedantic student who wouldn't create space for others.''
+In speech, this risk is amplified by three factors.  First, the AI's voice
+occupies a shared audio channel---unlike a text message, it cannot be scrolled
+past or collapsed.  Second, a long intervention physically blocks the
+conversation: all human participants must wait until the agent finishes
+speaking, an effect known as \emph{production blocking} in the group-creativity
+literature.  Third, the sequential nature of speech means that even a modestly
+verbose intervention consumes disproportionate floor time.  The balance between
+active moderation and conversational non-intrusiveness has not been empirically
+studied in speech-based multi-party settings.
+
+
+% ============================================================
+\subsection{Positioning of AIutami}
+\label{subsec:positioning}
+
+% ----------------------------------------------------------
+\subsubsection{The Research Landscape as a 2$\times$2 Matrix}
+\label{sssec:matrix}
+
+The preceding review reveals a pronounced asymmetry in the literature.
+Table~\ref{tab:positioning-matrix} organises the surveyed systems along two
+dimensions---interaction modality (text vs.\ speech) and conversation topology
+(dyadic vs.\ multi-party)---and exposes the quadrant in which AIutami is
+situated.
+
+\begin{table}[ht]
+  \centering
+  \caption{Positioning of conversational AI systems along two dimensions.  The
+    speech--multi-party quadrant is extremely sparse.}
+  \label{tab:positioning-matrix}
+  \small
+  \begin{tabularx}{\textwidth}{@{} l >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X @{}}
+    \toprule
+    & \textbf{Text-Based} & \textbf{Speech-Based} \\
+    \midrule
+    \textbf{Dyadic} \newline (1 human + 1 AI)
+      & ChatGPT, Siri, Alexa \newline (extensive literature)
+      & GPT-4o, Moshi, LLaMA-Omni, Freeze-Omni \newline (growing literature) \\
+    \addlinespace
+    \textbf{Multi-party} \newline ($N$ humans + AI)
+      & Koala~\cite{houde2025koala}, Adikari~\cite{adikari2022empathic},
+        DialogLab~\cite{hu2025dialoglab} \newline (moderate literature)
+      & \textbf{AIutami}, Addlesee~\cite{addlesee2024ari}\,(2+1, gaze),
+        Furhat~\cite{axelsson2025furhat}\,(2+1, gaze) \newline
+        \emph{(extremely sparse)} \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+The text--dyadic and speech--dyadic quadrants enjoy substantial coverage, and
+the text--multi-party quadrant has seen growing activity in recent years.  The
+speech--multi-party quadrant, by contrast, contains only two prior systems, both
+of which are limited to two human participants, depend on gaze tracking, and do
+not assign a moderating role to the AI.  To the best of our knowledge, few existing systems combine all of the
+following properties: (i)~speech-based input and output, (ii)~support for
+$N$ concurrent human participants, (iii)~an active AI moderator role,
+(iv)~audio-only operation with no dependency on gaze or video, and
+(v)~LLM-based reasoning.  AIutami is an attempt to address this
+combination within a single platform.
+
+% ----------------------------------------------------------
+\subsubsection{How AIutami Addresses Known Challenges}
+\label{sssec:aiutami-solutions}
+
+AIutami's architecture incorporates design decisions that directly address
+several of the technical and design challenges identified in the literature.
+Table~\ref{tab:aiutami-solutions} maps each challenge to the corresponding
+architectural mechanism.
+
+\begin{table}[ht]
+  \centering
+  \caption{How AIutami addresses challenges identified in the literature.}
+  \label{tab:aiutami-solutions}
+  \small
+  \begin{tabularx}{\textwidth}{@{} l X l @{}}
+    \toprule
+    \textbf{Challenge (source)} & \textbf{AIutami's approach} & \textbf{Module} \\
+    \midrule
+    Unreliable speaker diarisation \newline\cite{addlesee2020asr}
+      & Separate WebRTC audio streams per participant eliminate the need for diarisation entirely
+      & WebRTC \\
+    \addlinespace
+    Overlapping speech degrades ASR \newline\cite{addlesee2020asr}
+      & ASR gating: transcription is activated only for the current speaker, as determined by the turn-management subsystem, preventing echo and cross-talk from contaminating the input
+      & ASR \\
+    \addlinespace
+    Addressee detection without gaze \newline\cite{addlesee2024ari}
+      & Structural bypass via explicit turn-taking: the moderator addresses the group, and participants request the floor through a dedicated control, removing addressee ambiguity
+      & Turns \\
+    \addlinespace
+    Disruptive proactivity \newline\cite{houde2025koala}
+      & 8-second reservation window for the next speaker after the current turn ends, combined with conditional trigger logic that limits unprompted AI interventions
+      & Turns + Moderation \\
+    \addlinespace
+    Unequal engagement \newline\cite{zheng2022polyadic}
+      & Balanced turn-taking mechanism: any participant can request a turn at any time, and the moderator can explicitly invite quieter members
+      & Turns \\
+    \addlinespace
+    Inefficient communication \newline\cite{zheng2022polyadic}
+      & Evolving summary maintained by the AI; the moderator manages discussion flow, redirects off-topic contributions, and synthesises emerging consensus
+      & Moderation \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Three architectural choices merit additional discussion.  First, the use of
+\emph{per-participant WebRTC audio streams} is a deliberate departure from the
+single-channel audio that characterises both ARI and Furhat.  By receiving a
+dedicated stream from each participant, AIutami sidesteps the speaker
+diarisation problem entirely---a problem that, as Addlesee et
+al.~\cite{addlesee2020asr} demonstrate, remains largely unsolved in real-time
+multi-party settings (DER 49--67\%).
+
+Second, the \emph{ASR gating} mechanism---whereby transcription is activated
+only for the participant who currently holds the floor---mitigates two problems
+at once.  It prevents overlapping speech from corrupting the transcript (thereby
+avoiding the ${\sim}$20\% WER degradation reported by Addlesee et
+al.~\cite{addlesee2020asr}), and it eliminates echo loops in which the agent's
+own TTS output is inadvertently re-transcribed.
+
+Third, the \emph{explicit turn-taking} model with an 8-second reservation
+window provides a structural solution to both the addressee-detection and the
+proactivity challenges.  Rather than attempting to infer the addressee from
+prosodic or textual cues---a task that achieves at most 26.8\% accuracy in
+audio-only multi-party settings~\cite{axelsson2025furhat}---AIutami eliminates
+the ambiguity by design: the floor is assigned to one speaker at a time, and
+the moderator's interventions are directed at the group as a whole.  The
+reservation window ensures that the AI does not immediately seize the floor
+after a human finishes speaking, providing a temporal buffer that reduces the
+``production blocking'' effect observed by Houde et
+al.~\cite{houde2025koala}.
+
+% ----------------------------------------------------------
+\subsubsection{Limitations and Open Directions}
+\label{sssec:aiutami-limitations}
+
+The current design of AIutami leaves several gaps unaddressed, each of which
+represents a potential direction for future work.
+Table~\ref{tab:aiutami-limitations} summarises these limitations alongside the
+literature that motivates them.
+
+\begin{table}[ht]
+  \centering
+  \caption{Challenges not addressed by AIutami and their corresponding
+    literature references.}
+  \label{tab:aiutami-limitations}
+  \small
+  \begin{tabularx}{\textwidth}{@{} l X l @{}}
+    \toprule
+    \textbf{Open challenge} & \textbf{Potential extension} & \textbf{Reference} \\
+    \midrule
+    Clarification requests for incomplete utterances
+      & Detect truncated utterances at the ASR endpointing stage and generate
+        natural follow-up questions before forwarding to the LLM
+      & \cite{addlesee2024ari} \\
+    \addlinespace
+    Dynamic agent control during session
+      & Voice commands with keyword detection, a parallel web interface, or
+        gestural input to adjust moderator behaviour in real time
+      & \cite{houde2025koala} \\
+    \addlinespace
+    Explicit anti-hallucination grounding
+      & Adopt context-anchoring techniques (e.g., the ``Jodie'' persona) to
+        force the LLM to ground responses in session-specific information
+      & \cite{addlesee2024ari} \\
+    \addlinespace
+    Emotion-aware moderation
+      & Integrate sentiment analysis from transcribed text or prosodic features
+        into the moderator's decision logic, enabling affect-sensitive
+        interventions
+      & \cite{adikari2022empathic} \\
+    \addlinespace
+    VAP-informed turn management
+      & Incorporate Voice Activity Projection~\cite{ekstedt2022vap} to
+        anticipate turn transitions, reducing perceived latency and enabling
+        smoother floor handovers
+      & \cite{ekstedt2022vap} \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+These limitations are not incidental: they correspond directly to
+Gaps~4--8 identified in Section~\ref{subsec:gaps} and represent the most
+promising avenues for extending the current system.  The explicit turn-taking
+model, while effective, sacrifices conversational naturalness; future work might
+relax it by integrating predictive turn-taking signals.  The absence of
+emotion-aware moderation means that the system currently optimises for
+\emph{procedural} fairness (equal floor time) without attending to
+\emph{affective} dynamics (group mood, individual distress).  And the lack of
+in-session control mechanisms means that, unlike Koala~II's configurable
+threshold, AIutami's moderator behaviour is fixed for the duration of a
+session.
+
+Together, the solutions and limitations outlined in this section position
+AIutami as an early attempt to populate the largely empty
+speech--multi-party quadrant---one that addresses several critical technical
+barriers (diarisation, overlapping speech, addressee ambiguity, proactivity
+risk) while leaving a well-defined set of open challenges for future
+investigation.

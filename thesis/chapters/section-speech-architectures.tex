@@ -1,0 +1,190 @@
+% ============================================================
+%  \subsection: Speech-Based Conversational Architectures
+%  Parent: \section{State of the Art}
+% ============================================================
+
+\subsection{Speech-Based Conversational Architectures}
+\label{subsec:speech-architectures}
+
+The design of speech-based conversational agents revolves around a fundamental
+question: how should a system map an incoming acoustic signal to a meaningful
+spoken response?  Ji et al.\ provide a comprehensive taxonomy in the WavChat
+survey~\cite{ji2024wavechat}, identifying three broad families of
+architectures---\emph{cascaded}, \emph{half-cascade} (or semi-cascaded), and
+\emph{end-to-end}---that differ in the degree to which speech understanding,
+language reasoning, and speech synthesis are fused into a single model.  This
+subsection reviews each family and compares their trade-offs.
+
+% ----------------------------------------------------------
+\subsubsection{Cascaded Pipeline (STT--LLM--TTS)}
+\label{sssec:cascaded}
+
+The cascaded approach decomposes the problem into three independently developed
+stages: an Automatic Speech Recognition (ASR) module transcribes the user's
+utterance into text, a Large Language Model (LLM) produces a textual response,
+and a Text-to-Speech (TTS) engine renders that response as audio.  Because each
+component communicates through a well-defined textual interface, the pipeline is
+highly modular: individual stages can be upgraded, replaced, or scaled without
+retraining the others.
+
+This architecture underpins the majority of commercially deployed voice
+assistants, including the speech pipelines offered by Azure, Google Cloud, and
+Amazon Web Services.  In the research literature, X-Talk~\cite{lin2025xtalk}
+proposes a cascaded dialogue framework targeting low-latency interaction, while
+ESPnet-SDS~\cite{li2025espnetsds} provides an open-source toolkit that
+implements cascaded spoken-dialogue systems with pluggable ASR, LLM, and TTS
+back-ends.
+
+The principal advantages of the cascaded pipeline are its maturity and
+interpretability.  The intermediate text representation enables straightforward
+logging, debugging, and content moderation---capabilities that are essential in
+enterprise and safety-critical settings.  Training costs are low because each
+stage can leverage pre-trained, off-the-shelf models.
+
+The main drawback is latency.  The sequential execution of three distinct
+inference steps introduces cumulative delays in the range of two to five
+seconds, far exceeding the approximately 200\,ms inter-turn gap that
+characterises natural human conversation~\cite{heldner2010pauses}.  Moreover,
+errors compound across stages: an ASR misrecognition propagates into the LLM
+prompt and may trigger an irrelevant response.  Finally, the text bottleneck
+discards paralinguistic information---prosody, emotion, hesitation
+markers---that is often crucial for pragmatic interpretation, and prevents
+native support for full-duplex interaction.
+
+% ----------------------------------------------------------
+\subsubsection{Half-Cascade (Semi-Cascaded) Architectures}
+\label{sssec:half-cascade}
+
+Half-cascade designs seek a middle ground by fusing two of the three stages
+while retaining the third as a separate component.  The WavChat
+taxonomy~\cite{ji2024wavechat} distinguishes three variants, each eliminating
+a different inter-stage boundary.
+
+\emph{Speech-In fusion} (Variant~A) removes the ASR stage: the LLM ingests
+audio features directly through a learnable encoder and projection layer,
+preserving paralinguistic cues that text transcription would discard (e.g.,
+SALMONN~\cite{tang2024salmonn}, Freeze-Omni~\cite{wang2024freezeomni}).
+\emph{Speech-Out fusion} (Variant~B) absorbs the TTS stage into the LLM,
+which generates discrete speech tokens alongside text, reducing output latency
+(e.g., LLaMA-Omni~\cite{fang2024llamaomni}).  \emph{Inner Monologue}
+(Variant~C) retains text as an internal reasoning scaffold while producing
+speech output directly, attempting to combine coherent reasoning with
+expressive synthesis (e.g., SpeechGPT~\cite{zhang2023speechgpt}).
+
+These architectures reduce latency and exploit richer multimodal
+representations compared to cascaded pipelines.  However, they introduce
+significant trade-offs.  Aligning audio and text representation spaces
+requires carefully staged training curricula, and there is a documented risk
+of \emph{reasoning degradation}---the model's language abilities may decline
+after fine-tuning on speech data~\cite{chen2025urobench}.  Speech quality
+also tends to lag behind dedicated TTS systems, and none of these models has
+been evaluated beyond dyadic interaction.
+
+% ----------------------------------------------------------
+\subsubsection{End-to-End Speech-to-Speech Models}
+\label{sssec:e2e}
+
+End-to-end architectures collapse the entire spoken-dialogue pipeline into a
+single neural model that maps audio input directly to audio output.  A key
+enabler of this paradigm is the family of \emph{neural audio codecs}---models
+such as SoundStream, EnCodec, and Mimi---that convert continuous waveforms into
+compact sequences of discrete tokens amenable to autoregressive modelling.
+
+Moshi~\cite{defossez2024moshi} is widely regarded as the first publicly
+demonstrated full-duplex speech-to-speech model, achieving a mouth-to-ear
+latency of approximately 200\,ms.  Commercial systems such as GPT-4o
+(OpenAI), Gemini~2.5 (Google), Qwen3-Omni (Alibaba), and Kimi Audio
+(Moonshot AI) have since adopted end-to-end or near-end-to-end designs, though
+their architectural details remain largely proprietary.  In the academic domain,
+dGSLM extends the Generative Spoken Language Model to dialogue by modelling two
+audio channels jointly.
+
+The appeal of end-to-end models is clear: by eliminating intermediate
+representations, they minimise latency and preserve paralinguistic cues---pitch
+contour, speaking rate, emotional colouring---that cascaded systems discard.
+They also support full-duplex interaction natively, as the model can listen and
+speak simultaneously.
+
+Nevertheless, current end-to-end systems exhibit significant limitations.
+URO-Bench~\cite{chen2025urobench} demonstrates that, when evaluated on
+reasoning-intensive tasks, end-to-end speech models substantially underperform
+their text-only LLM counterparts, suggesting that the speech modality introduces
+a reasoning bottleneck.  Training costs are high, requiring large volumes of
+paired speech--speech data.  Reliability remains a concern: Lin et
+al.~\cite{lin2025xtalk} observe that end-to-end speech models are ``often
+unsuitable for deployment'' in production settings due to hallucination,
+inconsistent output quality, and limited controllability.
+
+% ----------------------------------------------------------
+\subsubsection{Comparative Summary}
+\label{sssec:arch-comparison}
+
+Table~\ref{tab:arch-comparison} synthesises the trade-offs discussed above
+across nine evaluation dimensions.
+
+\begin{table}[ht]
+  \centering
+  \caption{Comparison of speech-based conversational architectures.}
+  \label{tab:arch-comparison}
+  \small
+  \begin{tabularx}{\textwidth}{@{} l >{\centering\arraybackslash}X >{\centering\arraybackslash}X >{\centering\arraybackslash}X @{}}
+    \toprule
+    \textbf{Aspect} & \textbf{Cascaded} & \textbf{Half-Cascade} & \textbf{End-to-End} \\
+    \midrule
+    Latency
+      & High (2--5\,s)
+      & Medium
+      & Low (${\sim}$200\,ms) \\
+    Reasoning quality
+      & High (text LLM)
+      & Medium (risk of degradation)
+      & Low~\cite{chen2025urobench} \\
+    Paralinguistic info
+      & Lost (text bottleneck)
+      & Partially preserved
+      & Fully preserved \\
+    Audio quality
+      & High (dedicated TTS)
+      & Medium
+      & Variable \\
+    Full-duplex
+      & Not native
+      & Partial
+      & Native \\
+    Modularity
+      & High
+      & Medium
+      & Low \\
+    Training cost
+      & Low
+      & Medium
+      & High \\
+    Production readiness
+      & High
+      & Medium
+      & Low~\cite{lin2025xtalk} \\
+    Multi-party support
+      & Demonstrated
+      & Unexplored
+      & Unexplored \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+% ----------------------------------------------------------
+\subsubsection{The Multi-Party Gap}
+\label{sssec:multiparty-gap}
+
+A striking observation emerges from the literature: virtually all end-to-end and
+half-cascade models are designed and evaluated exclusively in \emph{dyadic}
+settings, i.e., one human conversing with one agent.  Multi-party spoken
+interaction---where an AI agent participates in a group conversation with two or
+more human speakers---remains largely unexplored in the context of neural
+speech-to-speech models.  Prior work on multi-party conversational AI, such as
+the studies by Addlesee~\cite{addlesee2024ari} with the ARI robot and by
+Axelsson and Skantze~\cite{axelsson2025furhat} with the Furhat platform,
+invariably relies on cascaded pipelines to handle the additional complexity of
+speaker identification, overlapping speech, and group-level turn management.
+This gap represents both a limitation of the current state of the art and an
+opportunity for future research.
+
