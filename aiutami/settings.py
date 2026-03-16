@@ -103,6 +103,7 @@ USE_TZ = True
 
 # File statici
 STATIC_URL = "static/"
+STATIC_ROOT = Path(__file__).resolve().parent.parent / "staticfiles"
 
 # ASGI (Channels per WebSocket)
 ASGI_APPLICATION = "aiutami.asgi.application"

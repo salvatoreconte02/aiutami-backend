@@ -1,0 +1,59 @@
+# Dockerfile.prod — Produzione AIutami Backend
+# Multi-stage build per immagine più leggera
+
+# ---- Stage 1: builder ----
+FROM python:3.11-bullseye AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --upgrade pip && \
+    pip install --prefix=/install -r requirements.txt
+
+# ---- Stage 2: runtime ----
+FROM python:3.11-slim-bullseye
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Dipendenze runtime (no build-essential)
+RUN apt-get update && apt-get install -y \
+    libpq5 \
+    ca-certificates \
+    curl \
+    libcurl4 \
+    libgssapi-krb5-2 \
+    zlib1g \
+    libasound2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copia pacchetti Python dal builder
+COPY --from=builder /install /usr/local
+
+# User non-root
+RUN useradd -m -r appuser
+WORKDIR /app
+
+# Copia codice
+COPY . /app/
+
+# Collectstatic (senza DB, serve DJANGO_SECRET_KEY dummy)
+RUN DJANGO_SECRET_KEY=build-placeholder \
+    DJANGO_DEBUG=0 \
+    python manage.py collectstatic --noinput
+
+# Ownership
+RUN chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "aiutami.asgi:application"]

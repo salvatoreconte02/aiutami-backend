@@ -1,0 +1,14 @@
+.git
+.gitignore
+.venv
+.env
+*.pyc
+__pycache__
+*.egg-info
+.DS_Store
+docs/
+research/
+thesis/
+node_modules/
+*.md
+!requirements.txt
