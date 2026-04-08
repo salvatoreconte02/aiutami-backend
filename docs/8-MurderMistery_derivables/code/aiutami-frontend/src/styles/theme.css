@@ -1,0 +1,45 @@
+:root {
+
+  /* BLU PRINCIPALE (header, pulsanti primary) */
+  --primary: #54718C;
+  --primary-dark: #455c72;
+  --primary-light: #6f8fad;
+
+  /* BLU ACCENTO (icone, piccoli dettagli) */
+  --accent-blue: #1E3247;
+
+  /* SFONDI */
+  --bg-light: #F2F6FA;
+  --bg-card: #FFFFFF;
+
+  /* BORDI */
+  --border-light: #D9E2EC;
+
+  /* SUCCESSO / WARNING / ERROR */
+  --success: #2ECC71;
+  --warning: #F1C40F;
+  --danger: #E74C3C;
+
+  /* TESTO */
+  --text-dark: #1E3247;
+  --text-medium: #5B5B5B;
+  --text-light: #9BA7B4;
+
+  /* SPACING */
+  --space-xs: 0.4rem;
+  --space-sm: 0.7rem;
+  --space-md: 1rem;
+  --space-lg: 2rem;
+
+  /* BORDER RADIUS */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* SHADOWS */
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+
+  /* FONT */
+  --font-main: "Inter", sans-serif;
+}

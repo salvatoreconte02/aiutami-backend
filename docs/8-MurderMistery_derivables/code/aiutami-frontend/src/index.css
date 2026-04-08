@@ -1,0 +1,72 @@
+
+/* Reset di base */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ---------------------------------------------------------------
+   :root – definizione dei colori e stili globali, con reset della dark-mode automatica di Vite
+---------------------------------------------------------------- */
+:root {
+  --text-color: #000;
+  --background-color: #ffffff;
+
+  /* Reset dei colori “dark-mode” che Vite abilitava automaticamente */
+  color: var(--text-color);
+  background-color: var(--background-color);
+
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ---------------------------------------------------------------
+   Body – comportamenti STANDARD
+---------------------------------------------------------------- */
+body {
+  /* No display:flex e min-height 100vh del template Vite */
+  margin: 0;
+  padding: 0;
+
+  /* Altezza automatica, gestita dalle pagine */
+  width: 100%;
+  min-height: 100vh;
+}
+
+/* Link */
+a {
+  text-decoration: none;
+  color: #3b6ba5;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* Titoli */
+h1, h2, h3, h4 {
+  color: #000;
+  font-weight: 600;
+}
+
+/* Bottoni di base */
+button {
+  border-radius: 8px;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  cursor: pointer;
+  border: none;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #000;
+    background-color: #fff;
+  }
+}

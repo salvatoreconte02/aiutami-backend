@@ -1,0 +1,173 @@
+/* ======================================== */
+/* LAYOUT GENERALE */
+/* ======================================== */
+
+.dashboard-container {
+  width: 100%;
+  min-height: 100vh;
+  padding: 4rem 3rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: "Inter", sans-serif;
+}
+
+/* ======================================== */
+/* TITOLI E TESTI */
+/* ======================================== */
+
+.dashboard-title {
+  font-size: 2.6rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.dashboard-subtitle {
+  font-size: 1.2rem;
+  color: #555;
+  margin-bottom: 4rem;
+}
+
+/* ======================================== */
+/* SEZIONE ACTION CARD (in cima) */
+/* ======================================== */
+
+.dashboard-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 260px);
+  gap: 3rem;
+  margin-bottom: 4rem;
+}
+
+.action-card {
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.action-card-box {
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 14px;
+  padding: 2rem 1.5rem;
+  text-align: center;
+  transition: 0.2s;
+}
+
+.action-card-box:hover {
+  border-color: #b4b4b4;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+}
+
+.action-card-icon {
+  margin-bottom: 1rem;
+}
+
+.action-card-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+}
+
+.action-card-desc {
+  font-size: 0.9rem;
+  color: #666;
+}
+
+/* ======================================== */
+/* COLONNE */
+/* ======================================== */
+
+.dashboard-columns {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4rem;
+  width: 100%;
+  max-width: 1500px;
+}
+
+.column-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.column-subtitle {
+  color: #666;
+  font-size: 0.95rem;
+  margin-bottom: 1rem;
+}
+
+.column-empty {
+  color: #888;
+  font-size: 0.95rem;
+}
+
+/* ============  */
+/* SESSION CARD  */
+/* ============  */
+
+.session-card {
+  border: 1px solid #ddd;
+  background: white;
+  border-radius: 14px;
+  padding: 1.6rem;
+  margin-top: 1rem;
+}
+
+.session-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 0.6rem;
+}
+
+.session-users {
+  font-size: 0.95rem;
+  margin-bottom: 1rem;
+  color: #444;
+}
+
+.session-buttons {
+  display: flex;
+  gap: 0.6rem;
+}
+
+/* ======= */
+/* BUTTONS */
+/* ======= */
+
+.btn-primary {
+  background: #3b82f6;
+  color: white;
+  border: none;
+  padding: 0.45rem 1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.btn-primary:hover {
+  background: #2563eb;
+}
+
+.btn-secondary {
+  background: white;
+  border: 1px solid #3b82f6;
+  color: #3b82f6;
+  padding: 0.45rem 1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.btn-secondary:hover {
+  background: #f3f7ff;
+}
