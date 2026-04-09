@@ -16,6 +16,22 @@ from .state import (
     save_moderation_state,
 )
 
+from apps.tasks.base import TaskDefinition
+from apps.tasks.registry import get_task
+
+
+def _resolve_task(task_key: Optional[str]) -> TaskDefinition:
+    """
+    Risolve il TaskDefinition da usare per costruire i prompt.
+
+    Step 3 del refactor task-pluggable: finché l'orchestrator non propaga
+    `task_key` (lavoro rimandato allo step successivo), i call site esistenti
+    chiamano i metodi senza specificare il task. In quel caso si ricade sul
+    task Murder Mystery, che è l'unico registrato in produzione oggi, così
+    il comportamento è identico al pre-refactor.
+    """
+    return get_task(task_key or "murder_mystery")
+
 # Parametri configurabili (in seguito si possono spostare in settings)
 AI_INTERVENTION_COOLDOWN = timedelta(seconds=60)
 COOLDOWN_BYPASS_REASONS = {"conflict", "user_request"}
@@ -58,6 +74,7 @@ class ModerationService:
         session_phase: str,            # es. "ACTIVE", "CONCLUSION"
         hard_action: HardModerationAction,
         speaker_name: Optional[str] = None,
+        task_key: Optional[str] = None,
     ) -> ModerationResult:
         """
         Chiamato alla fine di ogni turno umano, DOPO che:
@@ -89,6 +106,7 @@ class ModerationService:
             session_phase=session_phase,
             speaker_name=speaker_name,
             turns_per_participant=state.turns_per_participant,
+            task_key=task_key,
         )
 
         # 3) Aggiornare il riassunto in ogni caso
@@ -172,6 +190,7 @@ class ModerationService:
         session_phase: str,
         speaker_name: Optional[str] = None,
         turns_per_participant: Optional[dict[str, int]] = None,
+        task_key: Optional[str] = None,
     ) -> dict:
         """
         Chiamata al LLM secondo il contratto stabilito.
@@ -193,12 +212,11 @@ class ModerationService:
 
         total_turns = sum(turns_per_participant.values()) if turns_per_participant else 0
 
+        task = _resolve_task(task_key)
+
         llm_input = {
             "mode": mode,
-            "scenario": {
-                "type": "murder_mystery",
-                "objective": "Discutere gli indizi e scoprire chi è l'assassino",
-            },
+            "scenario": task.llm_scenario_payload(mode),
             "discussion": {
                 "summary": summary_in,
                 "last_turn": last_turn,
@@ -228,7 +246,7 @@ class ModerationService:
             client = cls._build_azure_client()
             deployment = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-mini")
 
-            system_prompt = cls._build_system_prompt(mode)
+            system_prompt = cls._build_system_prompt(mode, task=task)
 
             response = client.chat.completions.create(
                 model=deployment,
@@ -255,7 +273,7 @@ class ModerationService:
         except Exception as e:
             # In caso di errore di rete/API, si torna a un fallback locale
             logger.warning("[MODERATION][LLM][ERROR] mode=%s error=%s", mode, str(e))
-            return cls._fallback_llm_output(mode, base_updated_summary)
+            return cls._fallback_llm_output(mode, base_updated_summary, task=task)
 
         # 3) Parsing e normalizzazione dell'output del modello
         try:
@@ -266,7 +284,7 @@ class ModerationService:
                 "[MODERATION][LLM][PARSE_ERROR] mode=%s raw_output=%r error=%s",
                 mode, raw_output, str(e)
             )
-            return cls._fallback_llm_output(mode, base_updated_summary)
+            return cls._fallback_llm_output(mode, base_updated_summary, task=task)
 
         updated_summary = parsed.get("updated_summary", summary_in)
         should_ai_speak = bool(parsed.get("should_ai_speak", False))
@@ -297,7 +315,12 @@ class ModerationService:
         }
 
     @classmethod
-    def _fallback_llm_output(cls, mode: str, base_updated_summary: str) -> dict:
+    def _fallback_llm_output(
+        cls,
+        mode: str,
+        base_updated_summary: str,
+        task: Optional[TaskDefinition] = None,
+    ) -> dict:
         """
         Comportamento di riserva se la chiamata ad Azure fallisce
         o l'output non è parsabile. Mantiene la stessa semantica
@@ -315,14 +338,13 @@ class ModerationService:
             }
 
         if mode == "forced_conclusion":
+            if task is None:
+                task = _resolve_task(None)
             return {
                 "updated_summary": base_updated_summary,
                 "should_ai_speak": True,
-                "message_to_say": (
-                    "In conclusione: "
-                    f"{base_updated_summary}. "
-                    "Ora ciascun partecipante deve selezionare il colpevole nella propria interfaccia. "
-                    "Quando tutti avranno votato, la sessione verrà chiusa."
+                "message_to_say": task.fallback_forced_conclusion_body(
+                    base_updated_summary, ""
                 ),
                 "reason": "conclusion_fallback",
                 "intervention_score": 1.0,
@@ -402,6 +424,7 @@ class ModerationService:
         summary_in: str,
         conclusion_reason: str,  # "timer_expired" o "all_participants_ready"
         session_duration_minutes: int = 30,
+        task_key: Optional[str] = None,
     ) -> dict:
         """
         Chiamata LLM dedicata per FORCED_CONCLUSION.
@@ -422,22 +445,20 @@ class ModerationService:
             session_duration_minutes,
         )
 
+        task = _resolve_task(task_key)
+
         try:
             client = cls._build_azure_client()
             deployment = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-mini")
 
-            system_prompt = cls._build_forced_conclusion_system_prompt()
+            system_prompt = cls._build_forced_conclusion_system_prompt(task=task)
 
             llm_input = {
                 "mode": "forced_conclusion",
                 "summary_in": summary_in,
                 "conclusion_reason": conclusion_reason,
                 "session_duration_minutes": session_duration_minutes,
-                "scenario": {
-                    "type": "murder_mystery",
-                    "vote_action": "selezionare il colpevole",
-                    "vote_outcome": "scoprirete se avete indovinato l'assassino"
-                },
+                "scenario": task.llm_scenario_payload("forced_conclusion"),
                 "language": "it",
             }
 
@@ -457,7 +478,7 @@ class ModerationService:
 
         except Exception as e:
             logger.warning("[MODERATION][LLM][CONCLUSION_ERROR] error=%s", str(e))
-            return cls._fallback_forced_conclusion(summary_in, conclusion_reason)
+            return cls._fallback_forced_conclusion(summary_in, conclusion_reason, task=task)
 
         try:
             parsed = json.loads(raw_output)
@@ -466,7 +487,7 @@ class ModerationService:
                 "[MODERATION][LLM][CONCLUSION_PARSE_ERROR] raw=%r error=%s",
                 raw_output, str(e)
             )
-            return cls._fallback_forced_conclusion(summary_in, conclusion_reason)
+            return cls._fallback_forced_conclusion(summary_in, conclusion_reason, task=task)
 
         logger.info(
             "[MODERATION][LLM][CONCLUSION_RESPONSE] message=%r",
@@ -479,9 +500,20 @@ class ModerationService:
         }
 
     @classmethod
-    def _build_forced_conclusion_system_prompt(cls) -> str:
-        """Prompt di sistema per FORCED_CONCLUSION."""
-        return """Sei il moderatore AI di AIutami, una piattaforma per discussioni di gruppo moderate.
+    def _build_forced_conclusion_system_prompt(
+        cls, task: Optional[TaskDefinition] = None
+    ) -> str:
+        """Prompt di sistema per FORCED_CONCLUSION.
+
+        Scheletro task-agnostic + blocco di scenario iniettato dal task.
+        """
+        if task is None:
+            task = _resolve_task(None)
+        scenario_block = task.task_context_block("forced_conclusion")
+
+        template = """Sei il moderatore AI di AIutami, una piattaforma per discussioni di gruppo moderate.
+
+__SCENARIO_BLOCK__
 
 La sessione sta per concludersi e devi generare il messaggio finale di chiusura.
 
@@ -490,7 +522,7 @@ La sessione sta per concludersi e devi generare il messaggio finale di chiusura.
 Genera un messaggio che:
 1. **Riassuma la discussione** - Parti dal summary fornito e adattalo per un contesto di chiusura. Evidenzia i punti chiave emersi, le posizioni principali, eventuali accordi o disaccordi.
 
-2. **Dia istruzioni per il voto** - Spiega chiaramente cosa devono fare i partecipanti (es. selezionare il colpevole) e cosa succederà dopo (es. quando tutti avranno votato, vedranno i risultati).
+2. **Dia istruzioni per l'azione finale** - Se lo scenario prevede un'azione finale (es. un voto, una scelta, una submission) spiega chiaramente cosa devono fare i partecipanti e cosa succederà dopo. Se lo scenario non prevede nessuna azione finale, salta questo punto.
 
 3. **Ringrazi i partecipanti** - Concludi con un ringraziamento generale per aver usato AIutami per la moderazione.
 
@@ -515,25 +547,23 @@ Rispondi SOLO con un JSON valido:
 }
 
 IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ringraziamento) in un unico messaggio fluido e ben collegato."""
+        return template.replace("__SCENARIO_BLOCK__", scenario_block)
 
     @classmethod
-    def _fallback_forced_conclusion(cls, summary: str, conclusion_reason: str) -> dict:
+    def _fallback_forced_conclusion(
+        cls,
+        summary: str,
+        conclusion_reason: str,
+        task: Optional[TaskDefinition] = None,
+    ) -> dict:
         """
         Messaggio di fallback se la chiamata LLM per conclusion fallisce.
+        Il testo task-specifico (es. "selezionate il colpevole") è delegato
+        al TaskDefinition.
         """
-        if conclusion_reason == "timer_expired":
-            intro = "Il tempo a disposizione è terminato."
-        else:
-            intro = "Avete deciso di procedere alla votazione."
-
-        message = (
-            f"{intro} "
-            f"Ecco un breve riepilogo della vostra discussione: {summary}. "
-            f"Ora è il momento di selezionare chi pensate sia il colpevole. "
-            f"Quando tutti avranno votato, scoprirete se avete indovinato. "
-            f"Grazie per aver usato AIutami per la vostra sessione!"
-        )
-
+        if task is None:
+            task = _resolve_task(None)
+        message = task.fallback_forced_conclusion_body(summary, conclusion_reason)
         return {
             "updated_summary": summary,
             "message_to_say": message,
@@ -548,6 +578,7 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
         last_turn_speaker: Optional[str],
         participants_turns: dict[str, int],
         total_turns: int,
+        task_key: Optional[str] = None,
     ) -> dict:
         """
         Chiamata LLM dedicata per FORCED_SUMMARY.
@@ -568,6 +599,8 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
             total_turns,
         )
 
+        task = _resolve_task(task_key)
+
         llm_input = {
             "mode": "forced_summary",
             "summary_in": summary_in,
@@ -583,10 +616,7 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
             "session": {
                 "total_turns": total_turns,
             },
-            "scenario": {
-                "type": "murder_mystery",
-                "objective": "Scoprire chi è l'assassino tra i sospettati",
-            },
+            "scenario": task.llm_scenario_payload("forced_summary"),
             "language": "it",
         }
 
@@ -594,7 +624,7 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
             client = cls._build_azure_client()
             deployment = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-mini")
 
-            system_prompt = cls._build_forced_summary_system_prompt()
+            system_prompt = cls._build_forced_summary_system_prompt(task=task)
 
             response = client.chat.completions.create(
                 model=deployment,
@@ -653,9 +683,15 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
         }
 
     @classmethod
-    def _build_forced_summary_system_prompt(cls) -> str:
+    def _build_forced_summary_system_prompt(
+        cls, task: Optional[TaskDefinition] = None
+    ) -> str:
         """System prompt dedicato per FORCED_SUMMARY con comportamento ibrido."""
-        return """Sei il moderatore AI di AIutami, una piattaforma per discussioni di gruppo.
+        if task is None:
+            task = _resolve_task(None)
+        scenario_block = task.task_context_block("forced_summary")
+
+        template = """Sei il moderatore AI di AIutami, una piattaforma per discussioni di gruppo.
 
 ## Contesto importante
 
@@ -672,8 +708,7 @@ Ti sei GIÀ PRESENTATO all'inizio della sessione. Questo è un intervento INTERM
 - "La discussione ha toccato..."
 - "Vediamo a che punto siamo..."
 
-## Scenario
-I partecipanti stanno giocando a un murder mystery. Devono discutere gli indizi e scoprire chi è l'assassino.
+__SCENARIO_BLOCK__
 
 ## Il tuo compito
 
@@ -682,13 +717,13 @@ Genera un messaggio di ricapitolazione periodica. Parla in modo naturale e coinv
 ### Struttura del messaggio
 
 1. **[Solo se necessario] Correzione gentile** - Se rilevi un problema nell'ultimo turno, inizia con un invito delicato a riequilibrare
-2. **Ricapitolazione fluida** - Riassumi gli indizi emersi in modo discorsivo, menzionando chi ha sollevato cosa e su quale sospettato
+2. **Ricapitolazione fluida** - Riassumi in modo discorsivo i punti emersi finora, menzionando chi ha sollevato cosa
 3. **Apertura sul contenuto** - Concludi invitando ad approfondire un aspetto non ancora esplorato
 
 ## Criteri per la correzione
 
 Includi una correzione SOLO se rilevi un problema nell'ultimo turno (`last_turn.text`):
-- **Off-topic**: L'ultimo turno è fuori tema rispetto al caso?
+- **Off-topic**: L'ultimo turno è fuori tema rispetto allo scenario?
 - **Conflitto**: L'ultimo turno contiene toni aggressivi?
 
 ⚠️ NON usare il summary per valutare questi problemi. Il summary è storico e potresti correggere problemi già affrontati in turni precedenti.
@@ -711,23 +746,29 @@ Rispondi SOLO con un JSON valido:
 }
 
 IMPORTANTE: `correction_reason` indica il tipo di problema rilevato. Se non c'è problema, usa null."""
+        return template.replace("__SCENARIO_BLOCK__", scenario_block)
 
     @classmethod
-    def _build_normal_mode_prompt(cls) -> str:
+    def _build_normal_mode_prompt(
+        cls, task: Optional[TaskDefinition] = None
+    ) -> str:
         """System prompt per la modalità normal - criteri dettagliati di intervento."""
-        return """Sei il moderatore AI di una discussione di gruppo su AIutami.
+        if task is None:
+            task = _resolve_task(None)
+        scenario_block = task.task_context_block("normal")
 
-## Scenario
-I partecipanti stanno giocando a un murder mystery. Il loro obiettivo è discutere gli indizi e scoprire chi è l'assassino.
+        template = """Sei il moderatore AI di una discussione di gruppo su AIutami.
+
+__SCENARIO_BLOCK__
 
 ## Il tuo ruolo
-Sei un facilitatore neutro. Non partecipi alla discussione, non dai opinioni sul caso. Il tuo compito è assicurarti che la conversazione sia equilibrata e produttiva.
+Sei un facilitatore neutro. Non partecipi alla discussione, non dai opinioni sul tema. Il tuo compito è assicurarti che la conversazione sia equilibrata e produttiva.
 
 ## Quando intervenire
 Intervieni SOLO se:
 1. **Monopolizzazione**: Un partecipante ha parlato molti più turni degli altri e continua a dominare
 2. **Esclusione**: Un partecipante non ha quasi mai parlato e nessuno lo coinvolge
-3. **Off-topic evidente**: La discussione deraglia completamente (es. parlano di cose scollegate dal caso)
+3. **Off-topic evidente**: La discussione deraglia completamente rispetto allo scenario
 4. **Conflitto**: Toni aggressivi, insulti, attacchi personali
 5. **Richiesta diretta**: Qualcuno chiede esplicitamente aiuto al moderatore
 
@@ -739,13 +780,13 @@ NON intervenire per:
 ## Stile
 - Tono: gentile, indiretto, mai autoritario
 - Lunghezza: 1-2 frasi (20-30 parole max)
-- Esempi: "Lucia, tu cosa ne pensi di questo indizio?" / "Interessante, ma tornando al caso..."
+- Esempi: "Lucia, tu cosa ne pensi di questo?" / "Interessante, ma tornando al tema..."
 
 ## Come valutare
 
 ### Problemi PUNTUALI → guarda SOLO `last_turn`
 Per decidere se intervenire su questi problemi, valuta ESCLUSIVAMENTE l'ultimo turno:
-- **Off-topic**: L'ultimo turno è fuori tema rispetto al caso?
+- **Off-topic**: L'ultimo turno è fuori tema rispetto allo scenario?
 - **Conflitto**: L'ultimo turno contiene toni aggressivi, insulti o attacchi personali?
 - **Richiesta diretta**: L'ultimo turno contiene una richiesta esplicita al moderatore?
 
@@ -785,52 +826,27 @@ Rispondi SEMPRE con un JSON valido:
   "reason": "monopolization | exclusion | off_topic | conflict | user_request | all_ok",
   "intervention_score": 0.0-1.0
 }"""
+        return template.replace("__SCENARIO_BLOCK__", scenario_block)
 
     @classmethod
-    def _build_system_prompt(cls, mode: str) -> str:
+    def _build_system_prompt(
+        cls, mode: str, task: Optional[TaskDefinition] = None
+    ) -> str:
         """
         Costruisce il system prompt appropriato in base alla modalità.
 
         Args:
             mode: "normal", "forced_summary", o "forced_conclusion"
+            task: TaskDefinition da cui estrarre il blocco scenario. Se None,
+                  risolve al task di default (Murder Mystery) per backward
+                  compat durante il refactor task-pluggable.
 
         Returns:
             System prompt string per il modello LLM
         """
-        if mode == "normal":
-            return cls._build_normal_mode_prompt()
-        elif mode == "forced_conclusion":
-            return cls._build_forced_conclusion_system_prompt()
-        elif mode == "forced_summary":
-            # Per forced_summary usa un prompt dedicato al riassunto
-            return cls._build_forced_summary_prompt()
-        # Fallback a normal mode per modalità sconosciute
-        return cls._build_normal_mode_prompt()
-
-    @classmethod
-    def _build_forced_summary_prompt(cls) -> str:
-        """System prompt per la modalità forced_summary."""
-        return """Sei il moderatore AI di una discussione di gruppo su AIutami.
-
-Il tuo compito è generare un breve riassunto della discussione finora.
-
-## Istruzioni
-
-1. Leggi il summary esistente e l'ultimo turno
-2. Genera un riassunto aggiornato che includa i nuovi punti emersi
-3. Il riassunto deve essere:
-   - Neutro e oggettivo
-   - Conciso (max 100 parole)
-   - Focalizzato sui punti chiave della discussione
-
-## Output
-
-Rispondi SEMPRE con un JSON valido:
-
-{
-  "updated_summary": "Il riassunto aggiornato della discussione",
-  "should_ai_speak": true,
-  "message_to_say": "Breve ricapitolazione verbale dei punti principali (max 50 parole)",
-  "reason": "forced_summary",
-  "intervention_score": 1.0
-}"""
+        if mode == "forced_conclusion":
+            return cls._build_forced_conclusion_system_prompt(task=task)
+        if mode == "forced_summary":
+            return cls._build_forced_summary_system_prompt(task=task)
+        # normal e qualsiasi modalità sconosciuta → normal mode
+        return cls._build_normal_mode_prompt(task=task)

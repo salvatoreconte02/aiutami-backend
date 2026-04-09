@@ -1258,11 +1258,12 @@ class BuildSystemPromptTests(TestCase):
         self.assertIn("monopol", prompt.lower())
 
     def test_build_system_prompt_forced_summary_mode(self):
-        """_build_system_prompt('forced_summary') should return appropriate prompt."""
+        """_build_system_prompt('forced_summary') should return the rich forced_summary prompt."""
         prompt = ModerationService._build_system_prompt("forced_summary")
         self.assertIsInstance(prompt, str)
-        # forced_summary uses the existing generic prompt (for now)
-        self.assertIn("riassunto", prompt.lower())
+        # Step 3 refactor: forced_summary ora route a _build_forced_summary_system_prompt
+        # (il duplicato più minimale _build_forced_summary_prompt è stato rimosso).
+        self.assertIn("ricapitolazione", prompt.lower())
 
     def test_build_system_prompt_forced_conclusion_mode(self):
         """_build_system_prompt('forced_conclusion') should return conclusion prompt."""
