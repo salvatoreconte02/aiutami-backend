@@ -90,6 +90,15 @@ class TaskDefinition(ABC):
         """
         return {}
 
+    def intro_message_tail(self) -> str:
+        """
+        Frase finale task-specifica iniettata nel template intro prima del
+        "Buona discussione!". I task concreti spiegano qui come concludere
+        (es. MM: "Quando avrete capito chi è il colpevole..."). Default
+        generico per task senza condizione di terminazione specifica.
+        """
+        return "Quando sarete pronti a concludere, premete 'Pronto alla conclusione'."
+
     def fallback_forced_conclusion_body(
         self, summary: str, conclusion_reason: str
     ) -> str:

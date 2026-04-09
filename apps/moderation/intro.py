@@ -4,24 +4,31 @@ Modulo per il messaggio introduttivo del moderatore AI a inizio sessione.
 from django.core.cache import cache
 
 
+# Scheletro task-agnostic. La frase `{tail}` viene iniettata dal
+# TaskDefinition corrispondente al contesto della sessione
+# (vedi step 4 di docs/plans/2026-04-08-task-pluggable-architecture.md).
 INTRO_MESSAGE_TEMPLATE = (
     "Benvenuti {nomi}. Sono il moderatore e vi guiderò nella discussione. "
     "Per parlare, premete il pulsante microfono. Se qualcuno sta già parlando, potete prenotarvi. "
     "Ascoltate gli altri e argomentate le vostre ipotesi. Avrete a disposizione trenta minuti per confrontarvi. "
-    "Quando avrete capito chi è il colpevole, premete 'Pronto alla conclusione'. "
+    "{tail} "
     "Buona discussione!"
 )
 
 
 def format_participant_names(names: list[str]) -> str:
     """
-    Formatta i nomi dei partecipanti per il messaggio intro.
-    Per 3 nomi: "Marco, Giulia e Luca"
-    Per altri casi: separati da virgola
+    Formatta i nomi dei partecipanti per il messaggio intro, generalizzato
+    a N partecipanti qualunque:
+      - 1 nome: "Marco"
+      - 2 nomi: "Marco e Giulia"
+      - 3+ nomi: "Marco, Giulia e Luca"
     """
-    if len(names) == 3:
-        return f"{names[0]}, {names[1]} e {names[2]}"
-    return ", ".join(names)
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    return f"{', '.join(names[:-1])} e {names[-1]}"
 
 
 def set_intro_pending(session_id: str) -> None:
@@ -41,7 +48,8 @@ def has_intro_pending(session_id: str) -> bool:
 
 def generate_intro_message(session_id: str) -> str:
     """
-    Genera il messaggio intro con i nomi dei partecipanti.
+    Genera il messaggio intro con i nomi dei partecipanti e la frase
+    finale task-specifica.
 
     Args:
         session_id: ID della sessione (stringa UUID)
@@ -49,7 +57,8 @@ def generate_intro_message(session_id: str) -> str:
     Returns:
         Il messaggio intro formattato con i nomi dei partecipanti
     """
-    from apps.sessions.models import SessionParticipant
+    from apps.sessions.models import Session, SessionParticipant
+    from apps.tasks.registry import get_task
 
     participants = SessionParticipant.objects.filter(
         session_id=session_id
@@ -60,4 +69,10 @@ def generate_intro_message(session_id: str) -> str:
         for p in participants
     ]
 
-    return INTRO_MESSAGE_TEMPLATE.format(nomi=format_participant_names(names))
+    session = Session.objects.get(id=session_id)
+    task = get_task(session.context)
+
+    return INTRO_MESSAGE_TEMPLATE.format(
+        nomi=format_participant_names(names),
+        tail=task.intro_message_tail(),
+    )

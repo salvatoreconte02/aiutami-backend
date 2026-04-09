@@ -77,6 +77,10 @@ class MurderMysteryTask(TaskDefinition):
             "objective": "Discutere gli indizi e scoprire chi è l'assassino",
         }
 
+    def intro_message_tail(self) -> str:
+        # Testo MM verbatim pre-refactor (apps/moderation/intro.py)
+        return "Quando avrete capito chi è il colpevole, premete 'Pronto alla conclusione'."
+
     def fallback_forced_conclusion_body(
         self, summary: str, conclusion_reason: str
     ) -> str:

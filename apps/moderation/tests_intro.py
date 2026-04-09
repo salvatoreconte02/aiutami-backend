@@ -21,7 +21,7 @@ class IntroMessageGenerationTests(TestCase):
         from apps.moderation.intro import format_participant_names
 
         result = format_participant_names(["Marco", "Giulia"])
-        self.assertEqual(result, "Marco, Giulia")
+        self.assertEqual(result, "Marco e Giulia")
 
     def test_intro_message_template_exists(self):
         """INTRO_MESSAGE_TEMPLATE should be defined."""
