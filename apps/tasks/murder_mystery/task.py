@@ -32,3 +32,16 @@ class MurderMysteryTask(TaskDefinition):
     @property
     def display_name(self) -> str:
         return "Murder Mystery"
+
+    # Murder Mystery è sempre 3 partecipanti esatti (vincolo del task).
+    @property
+    def min_participants(self) -> int:
+        return 3
+
+    @property
+    def max_participants(self) -> int:
+        return 3
+
+    @property
+    def fixed_size(self) -> bool:
+        return True

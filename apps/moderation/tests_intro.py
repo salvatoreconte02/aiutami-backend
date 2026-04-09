@@ -81,7 +81,7 @@ class GenerateIntroMessageTests(TestCase):
         self.session = Session.objects.create(
             host=self.user1,
             title="Test Session",
-            context="MURDER_MYSTERY",
+            context="murder_mystery",
             min_size=3,
             max_size=3,
         )

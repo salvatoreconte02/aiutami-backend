@@ -41,6 +41,18 @@ class _DummyTask(TaskDefinition):
     def display_name(self) -> str:
         return self._display_name
 
+    @property
+    def min_participants(self) -> int:
+        return 2
+
+    @property
+    def max_participants(self) -> int:
+        return 8
+
+    @property
+    def fixed_size(self) -> bool:
+        return False
+
 
 class RegistryTests(SimpleTestCase):
     def setUp(self) -> None:

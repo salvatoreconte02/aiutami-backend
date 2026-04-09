@@ -81,7 +81,7 @@ class RequestSpeakBlockedDuringIntroTests(TestCase):
         self.session = Session.objects.create(
             host=self.user,
             title="Test Session",
-            context="MURDER_MYSTERY",
+            context="murder_mystery",
             min_size=3,
             max_size=3,
         )
@@ -114,7 +114,7 @@ class RequestReserveBlockedDuringIntroTests(TestCase):
         self.session = Session.objects.create(
             host=self.user,
             title="Test Session",
-            context="MURDER_MYSTERY",
+            context="murder_mystery",
             min_size=3,
             max_size=3,
         )

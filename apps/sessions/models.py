@@ -15,13 +15,6 @@ class SessionState(models.TextChoices):
     CLOSED = "CLOSED", "Closed"
 
 
-class SessionContext(models.TextChoices):
-    MURDER_MYSTERY = "MURDER_MYSTERY", "Murder Mystery"
-    THERAPY = "THERAPEUTIC", "Contesto terapeutico"
-    WORK = "WORKPLACE", "Contesto lavorativo"
-    ACADEMIC = "ACADEMIC", "Contesto accademico"
-
-
 class ParticipantRole(models.TextChoices):
     HOST = "HOST", "Host"
     PARTICIPANT = "PARTICIPANT", "Participant"
@@ -55,7 +48,9 @@ class Session(models.Model):
 
     # Metadati
     title = models.CharField(max_length=200)
-    context = models.CharField(max_length=32, choices=SessionContext.choices)
+    # Step 2 refactor task-pluggable: il valore è una chiave del registry
+    # in apps/tasks/registry.py (es. "murder_mystery"). Validato in clean().
+    context = models.CharField(max_length=64)
     state = models.CharField(
         max_length=16, choices=SessionState.choices, default=SessionState.LOBBY
     )
@@ -105,11 +100,34 @@ class Session(models.Model):
         if self.min_size > self.max_size:
             raise ValidationError("min_size non può superare max_size.")
 
-        # Regola di contesto (Murder Mystery => 3/3 fissi)
-        if self.context == SessionContext.MURDER_MYSTERY:
-            if self.min_size != 3 or self.max_size != 3:
+        # Validazione del context contro il registry dei task.
+        # Import lazy per evitare cicli di import al boot.
+        from apps.tasks.registry import get_task, TaskNotFound
+
+        try:
+            task = get_task(self.context)
+        except TaskNotFound as exc:
+            raise ValidationError(
+                f"Context '{self.context}' non è un task registrato."
+            ) from exc
+
+        if task.fixed_size:
+            if (
+                self.min_size != task.min_participants
+                or self.max_size != task.max_participants
+            ):
                 raise ValidationError(
-                    "Per il contesto Murder Mystery, min_size e max_size devono essere 3."
+                    f"Per il task {task.display_name}, min_size e max_size "
+                    f"devono essere {task.min_participants}."
+                )
+        else:
+            if self.min_size < task.min_participants:
+                raise ValidationError(
+                    f"min_size per {task.display_name} deve essere >= {task.min_participants}."
+                )
+            if self.max_size > task.max_participants:
+                raise ValidationError(
+                    f"max_size per {task.display_name} deve essere <= {task.max_participants}."
                 )
 
     @property

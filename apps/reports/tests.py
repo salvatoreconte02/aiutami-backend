@@ -77,7 +77,7 @@ class ReportLLMServiceTests(TestCase):
 
 
 from django.contrib.auth import get_user_model
-from apps.sessions.models import Session, SessionParticipant, SessionVote, SessionState, SessionContext, ParticipantRole
+from apps.sessions.models import Session, SessionParticipant, SessionVote, SessionState, ParticipantRole
 
 User = get_user_model()
 
@@ -93,7 +93,7 @@ class ReportPDFServiceTests(TestCase):
 
         self.session = Session.objects.create(
             title="Murder Mystery - Villa Rosa",
-            context=SessionContext.MURDER_MYSTERY,
+            context="murder_mystery",
             state=SessionState.CLOSED,
             min_size=3,
             max_size=3,
@@ -151,7 +151,7 @@ class ReportDownloadEndpointTests(APITestCase):
 
         self.session = Session.objects.create(
             title="Murder Mystery - Villa Rosa",
-            context=SessionContext.MURDER_MYSTERY,
+            context="murder_mystery",
             state=SessionState.CLOSED,
             min_size=3,
             max_size=3,

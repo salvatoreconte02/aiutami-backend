@@ -6,11 +6,12 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
+from apps.tasks.registry import get_task, TaskNotFound
+
 from .models import (
     Invitation,
     ParticipantRole,
     Session,
-    SessionContext,
     SessionEvent,
     SessionEventType,
     SessionState,
@@ -77,15 +78,24 @@ class SessionCreateSerializer(serializers.ModelSerializer):
 
         context = attrs.get("context")
 
-        # Caso Murder Mystery: forzare 3/3 anche se non passati
-        if context == SessionContext.MURDER_MYSTERY:
-            attrs["min_size"] = 3
-            attrs["max_size"] = 3
+        # Validazione contro il registry dei task plugin.
+        try:
+            task = get_task(context)
+        except TaskNotFound:
+            raise serializers.ValidationError(
+                {"context": f"Task '{context}' non registrato."}
+            )
+
+        if task.fixed_size:
+            # Task a capienza fissa (es. Murder Mystery): forziamo i valori
+            # corretti anche se il client non li ha passati.
+            attrs["min_size"] = task.min_participants
+            attrs["max_size"] = task.max_participants
         else:
-            # Altri contesti: richiedere esplicitamente min/max se non presenti
+            # Task con range variabile: min/max obbligatori.
             if "min_size" not in attrs or "max_size" not in attrs:
                 raise serializers.ValidationError(
-                    "Per questo contesto sono richiesti min_size e max_size."
+                    "Per questo task sono richiesti min_size e max_size."
                 )
 
         return attrs

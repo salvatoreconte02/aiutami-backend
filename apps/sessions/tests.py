@@ -5,7 +5,7 @@ from django.db import IntegrityError
 from rest_framework.test import APITestCase
 from rest_framework import status
 
-from apps.sessions.models import Session, SessionParticipant, SessionVote, SessionState, SessionContext, ParticipantRole
+from apps.sessions.models import Session, SessionParticipant, SessionVote, SessionState, ParticipantRole
 
 User = get_user_model()
 
@@ -20,7 +20,7 @@ class SessionVoteModelTests(TestCase):
         )
         self.session = Session.objects.create(
             title="Test Murder Mystery",
-            context=SessionContext.MURDER_MYSTERY,
+            context="murder_mystery",
             state=SessionState.CONCLUSION,
             min_size=3,
             max_size=3,
@@ -82,7 +82,7 @@ class SessionReportTextTests(TestCase):
         )
         self.session = Session.objects.create(
             title="Test Session",
-            context=SessionContext.MURDER_MYSTERY,
+            context="murder_mystery",
             state=SessionState.CLOSED,
             min_size=3,
             max_size=3,
@@ -118,7 +118,7 @@ class VoteEndpointTests(APITestCase):
 
         self.session = Session.objects.create(
             title="Test Murder Mystery",
-            context=SessionContext.MURDER_MYSTERY,
+            context="murder_mystery",
             state=SessionState.CONCLUSION,
             min_size=3,
             max_size=3,
@@ -215,7 +215,7 @@ class VoteStatusEndpointTests(APITestCase):
 
         self.session = Session.objects.create(
             title="Test Murder Mystery",
-            context=SessionContext.MURDER_MYSTERY,
+            context="murder_mystery",
             state=SessionState.CONCLUSION,
             min_size=3,
             max_size=3,
@@ -281,7 +281,7 @@ class AllVotedBroadcastTests(APITestCase):
 
         self.session = Session.objects.create(
             title="Test Murder Mystery",
-            context=SessionContext.MURDER_MYSTERY,
+            context="murder_mystery",
             state=SessionState.CONCLUSION,
             min_size=3,
             max_size=3,
@@ -340,7 +340,7 @@ class CloseSessionEndpointTests(APITestCase):
 
         self.session = Session.objects.create(
             title="Test Murder Mystery",
-            context=SessionContext.MURDER_MYSTERY,
+            context="murder_mystery",
             state=SessionState.CONCLUSION,
             min_size=3,
             max_size=3,
@@ -416,7 +416,7 @@ class CloseSessionReportGenerationTests(TestCase):
 
         self.session = Session.objects.create(
             title="Test Murder Mystery",
-            context=SessionContext.MURDER_MYSTERY,
+            context="murder_mystery",
             state=SessionState.CONCLUSION,
             min_size=3,
             max_size=3,
@@ -477,7 +477,7 @@ class SessionDetailSerializerVotesTests(TestCase):
 
         self.session = Session.objects.create(
             title="Test Murder Mystery",
-            context=SessionContext.MURDER_MYSTERY,
+            context="murder_mystery",
             state=SessionState.CLOSED,
             min_size=3,
             max_size=3,
@@ -573,7 +573,7 @@ class VotingFlowIntegrationTests(APITestCase):
 
         self.session = Session.objects.create(
             title="Integration Test Session",
-            context=SessionContext.MURDER_MYSTERY,
+            context="murder_mystery",
             state=SessionState.CONCLUSION,
             min_size=3,
             max_size=3,

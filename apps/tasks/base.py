@@ -38,5 +38,31 @@ class TaskDefinition(ABC):
     def display_name(self) -> str:
         """Nome leggibile del task."""
 
+    # --- Capienza della sessione ---
+    # Step 2: questi campi servono al core (Session.clean, serializer validate)
+    # per validare min_size/max_size di una sessione senza hardcodare Murder
+    # Mystery. Task a numero fisso di partecipanti (es. MM 3/3) dichiarano
+    # `fixed_size=True` e usano min_participants == max_participants.
+
+    @property
+    @abstractmethod
+    def min_participants(self) -> int:
+        """Numero minimo di partecipanti ammesso dal task."""
+
+    @property
+    @abstractmethod
+    def max_participants(self) -> int:
+        """Numero massimo di partecipanti ammesso dal task."""
+
+    @property
+    @abstractmethod
+    def fixed_size(self) -> bool:
+        """
+        True se il task richiede esattamente `min_participants` partecipanti
+        (es. Murder Mystery: sempre 3). In quel caso min_size e max_size di
+        una Session devono coincidere con min_participants/max_participants.
+        False se il task accetta un range (es. discussione generica).
+        """
+
     def __repr__(self) -> str:
         return f"<TaskDefinition key={self.key!r}>"
