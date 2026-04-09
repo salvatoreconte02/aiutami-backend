@@ -558,16 +558,17 @@ Il refactor è finito quando **tutti** i seguenti sono veri:
 
 ---
 
-## 10. Domande aperte (da risolvere prima di Step 6)
+## 10. Decisioni confermate (2026-04-08)
 
-1. Confermi l'**Opzione B pragmatica** per SessionVote (classe Python si sposta,
-   tabella fisica resta in schema `sessions`)? Oppure preferisci l'Opzione A
-   pura (nuova tabella + data migration)?
-2. Per il **contratto API**: i vecchi path `/api/sessions/<id>/vote/` devono
-   restare come alias di compatibilità, o possiamo breaking-change direttamente
-   a `/api/tasks/murder-mystery/sessions/<id>/vote/` visto che il frontend è
-   in riscrittura?
-3. Il prompt `_build_forced_summary_prompt` a riga 811 di `moderation/service.py`
-   sembra un duplicato di `_build_forced_summary_system_prompt` a riga 656.
-   Durante Step 3 lo rimuoviamo se confermiamo che non è usato? (Da verificare
-   con grep in fase di esecuzione.)
+1. **SessionVote**: Opzione **A pura**. Nuova tabella dentro l'app
+   `apps/tasks/murder_mystery/` (es. `tasks_murder_mystery_sessionvote`),
+   data migration che copia le righe dalla vecchia tabella `session_vote`,
+   drop della vecchia tabella. Lo Step 6 include la migration con verifica
+   dei conteggi pre/post.
+2. **API URLs**: breaking change diretto. I path vote passano a
+   `/api/tasks/murder-mystery/sessions/<id>/vote/` (e `/vote-status/`).
+   Nessun alias di compatibilità perché il frontend viene riscritto da zero.
+3. **Codice morto in `moderation/service.py`**: durante lo Step 3, se `grep`
+   conferma che `_build_forced_summary_prompt` (riga 811) non è chiamato da
+   nessuna parte, viene rimosso. Se invece risulta usato, si indaga prima
+   di toccarlo.

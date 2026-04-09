@@ -29,6 +29,7 @@ INSTALLED_APPS = [
      "apps.turns.apps.TurnsConfig",
      "apps.asr.apps.AsrConfig",
      "apps.reports",
+     "apps.tasks.apps.TasksConfig",
 ]
 
 # Middleware
