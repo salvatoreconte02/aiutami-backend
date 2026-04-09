@@ -19,7 +19,11 @@ class TasksConfig(AppConfig):
     label = "tasks"
 
     def ready(self) -> None:
-        # I sottopacchetti dei task verranno importati qui nei prossimi step.
-        # In Step 0 il registry è vuoto: nessun task registrato, il core non
-        # lo usa ancora, quindi nessun comportamento cambia.
-        pass
+        # Import dei sottopacchetti dei task: ogni __init__.py registra la
+        # propria TaskDefinition nel registry. L'import qui in ready() forza
+        # la registrazione al boot Django.
+        #
+        # Nota: importiamo SOLO i plugin di task. Il core del backend continua
+        # a non sapere nulla dei task specifici e li raggiunge solo via
+        # apps.tasks.registry.get_task(key).
+        from . import murder_mystery  # noqa: F401

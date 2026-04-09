@@ -89,11 +89,32 @@ def task_choices() -> List[Tuple[str, str]]:
     return [(t.key, t.display_name) for t in sorted(_REGISTRY.values(), key=lambda t: t.key)]
 
 
+def _snapshot_for_tests() -> Dict[str, TaskDefinition]:
+    """
+    Ritorna una copia superficiale del registry corrente. USO ESCLUSIVO PER TEST.
+
+    Va usato insieme a _restore_for_tests() per isolare test che modificano il
+    registry, senza perdere le registrazioni fatte da TasksConfig.ready() al
+    boot Django.
+    """
+    return dict(_REGISTRY)
+
+
+def _restore_for_tests(snapshot: Dict[str, TaskDefinition]) -> None:
+    """
+    Ripristina il registry a uno snapshot preso con _snapshot_for_tests().
+    USO ESCLUSIVO PER TEST.
+    """
+    _REGISTRY.clear()
+    _REGISTRY.update(snapshot)
+
+
 def _reset_for_tests() -> None:
     """
     Svuota il registry. USO ESCLUSIVO PER TEST.
 
-    Non chiamare in codice di produzione: il registry è costruito una sola
-    volta al boot Django e deve restare stabile per tutta la vita del processo.
+    Attenzione: cancella anche i task registrati da TasksConfig.ready(). In
+    test che convivono con quelli reali, preferire _snapshot_for_tests() +
+    _restore_for_tests() per isolamento non distruttivo.
     """
     _REGISTRY.clear()

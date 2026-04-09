@@ -19,6 +19,8 @@ from apps.tasks.registry import (
     TaskAlreadyRegistered,
     TaskNotFound,
     _reset_for_tests,
+    _restore_for_tests,
+    _snapshot_for_tests,
     all_keys,
     get_task,
     register,
@@ -42,11 +44,16 @@ class _DummyTask(TaskDefinition):
 
 class RegistryTests(SimpleTestCase):
     def setUp(self) -> None:
-        # Ogni test parte con un registry pulito per isolamento.
+        # Salva lo stato reale del registry (contiene i task registrati da
+        # TasksConfig.ready() al boot Django) e parte pulito per isolamento.
+        self._snapshot = _snapshot_for_tests()
         _reset_for_tests()
 
     def tearDown(self) -> None:
-        _reset_for_tests()
+        # Ripristina il registry allo stato reale pre-test, così i task
+        # registrati da TasksConfig.ready() restano disponibili per gli
+        # altri test della suite.
+        _restore_for_tests(self._snapshot)
 
     def test_register_and_get(self) -> None:
         task = _DummyTask("foo", "Foo Task")
