@@ -29,9 +29,8 @@ class SessionEventType(models.TextChoices):
     CLOSED_AUTO = "CLOSED_AUTO", "Closed (auto)"
 
 
-# Hardcoded suspects for Murder Mystery MVP
-MURDER_MYSTERY_SUSPECTS = ["Eddie", "Mickey", "Billy"]
-MURDER_MYSTERY_GUILTY = "Eddie"
+# Costanti MM e modello SessionVote spostati in apps/tasks/murder_mystery/models.py
+# (Step 6 del refactor task-pluggable). La tabella DB resta la stessa.
 
 
 class Session(models.Model):
@@ -246,32 +245,3 @@ class SessionEvent(models.Model):
         return f"{self.session_id} - {self.type}"
 
 
-class SessionVote(models.Model):
-    """
-    Voto di un partecipante per il colpevole (Murder Mystery).
-    Un solo voto per partecipante per sessione.
-    """
-
-    id = models.BigAutoField(primary_key=True)
-    session = models.ForeignKey(
-        Session,
-        on_delete=models.CASCADE,
-        related_name="votes"
-    )
-    participant = models.ForeignKey(
-        SessionParticipant,
-        on_delete=models.CASCADE,
-        related_name="votes"
-    )
-    suspect_chosen = models.CharField(max_length=32)  # "Eddie", "Mickey", "Billy"
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table = "session_vote"
-        unique_together = [("session", "participant")]
-        indexes = [
-            models.Index(fields=["session"]),
-        ]
-
-    def __str__(self) -> str:
-        return f"{self.participant.user_id} voted {self.suspect_chosen} in {self.session_id}"

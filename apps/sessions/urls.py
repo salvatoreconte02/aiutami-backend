@@ -11,8 +11,6 @@ from .views import (
     SessionStartView,
     SessionDebugForceCloseView,
     SessionReadyToConcludeView,
-    SessionVoteView,
-    SessionVoteStatusView,
     SessionCloseView,
 )
 
@@ -30,17 +28,7 @@ urlpatterns = [
         name="session_ready_to_conclude",
     ),  # POST /<id>/ready_to_conclude/
 
-    # Votazione
-    path(
-        "<uuid:session_id>/vote/",
-        SessionVoteView.as_view(),
-        name="session_vote",
-    ),  # POST /<id>/vote/
-    path(
-        "<uuid:session_id>/vote-status/",
-        SessionVoteStatusView.as_view(),
-        name="session_vote_status",
-    ),  # GET /<id>/vote-status/
+    # Votazione spostata in apps/tasks/murder_mystery/urls.py (Step 6)
     path(
         "<uuid:session_id>/close/",
         SessionCloseView.as_view(),

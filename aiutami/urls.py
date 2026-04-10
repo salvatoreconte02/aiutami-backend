@@ -17,4 +17,7 @@ urlpatterns = [
 
     # Reports (montato sotto il path sessions per /api/sessions/{id}/report/)
     path("api/sessions/", include("apps.reports.urls")),
+
+    # Task-specific endpoints
+    path("api/tasks/murder-mystery/", include("apps.tasks.murder_mystery.urls")),
 ]

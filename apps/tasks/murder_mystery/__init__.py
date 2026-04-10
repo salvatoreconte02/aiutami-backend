@@ -10,5 +10,6 @@ senza che il core debba conoscerlo direttamente.
 from apps.tasks.registry import register
 
 from .task import MurderMysteryTask
+from . import models as _mm_models  # noqa: F401 — Django deve scoprire SessionVote
 
 register(MurderMysteryTask())

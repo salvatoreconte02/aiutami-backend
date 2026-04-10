@@ -5,7 +5,8 @@ from django.db import IntegrityError
 from rest_framework.test import APITestCase
 from rest_framework import status
 
-from apps.sessions.models import Session, SessionParticipant, SessionVote, SessionState, ParticipantRole
+from apps.sessions.models import Session, SessionParticipant, SessionState, ParticipantRole
+from apps.tasks.murder_mystery.models import SessionVote
 
 User = get_user_model()
 
@@ -138,7 +139,7 @@ class VoteEndpointTests(APITestCase):
         """Valid vote is recorded."""
         self.client.force_authenticate(user=self.user1)
         response = self.client.post(
-            f"/api/sessions/{self.session.id}/vote/",
+            f"/api/tasks/murder-mystery/sessions/{self.session.id}/vote/",
             {"suspect": "Eddie"},
             format="json",
         )
@@ -151,7 +152,7 @@ class VoteEndpointTests(APITestCase):
         """Invalid suspect returns 400."""
         self.client.force_authenticate(user=self.user1)
         response = self.client.post(
-            f"/api/sessions/{self.session.id}/vote/",
+            f"/api/tasks/murder-mystery/sessions/{self.session.id}/vote/",
             {"suspect": "InvalidName"},
             format="json",
         )
@@ -161,12 +162,12 @@ class VoteEndpointTests(APITestCase):
         """Duplicate vote returns 400."""
         self.client.force_authenticate(user=self.user1)
         self.client.post(
-            f"/api/sessions/{self.session.id}/vote/",
+            f"/api/tasks/murder-mystery/sessions/{self.session.id}/vote/",
             {"suspect": "Eddie"},
             format="json",
         )
         response = self.client.post(
-            f"/api/sessions/{self.session.id}/vote/",
+            f"/api/tasks/murder-mystery/sessions/{self.session.id}/vote/",
             {"suspect": "Mickey"},
             format="json",
         )
@@ -176,7 +177,7 @@ class VoteEndpointTests(APITestCase):
         """Non-participant returns 403."""
         self.client.force_authenticate(user=self.outsider)
         response = self.client.post(
-            f"/api/sessions/{self.session.id}/vote/",
+            f"/api/tasks/murder-mystery/sessions/{self.session.id}/vote/",
             {"suspect": "Eddie"},
             format="json",
         )
@@ -188,7 +189,7 @@ class VoteEndpointTests(APITestCase):
         self.session.save()
         self.client.force_authenticate(user=self.user1)
         response = self.client.post(
-            f"/api/sessions/{self.session.id}/vote/",
+            f"/api/tasks/murder-mystery/sessions/{self.session.id}/vote/",
             {"suspect": "Eddie"},
             format="json",
         )
@@ -197,7 +198,7 @@ class VoteEndpointTests(APITestCase):
     def test_vote_unauthenticated(self):
         """Unauthenticated request returns 401."""
         response = self.client.post(
-            f"/api/sessions/{self.session.id}/vote/",
+            f"/api/tasks/murder-mystery/sessions/{self.session.id}/vote/",
             {"suspect": "Eddie"},
             format="json",
         )
@@ -231,7 +232,7 @@ class VoteStatusEndpointTests(APITestCase):
     def test_vote_status_no_votes(self):
         """Vote status with no votes cast."""
         self.client.force_authenticate(user=self.user1)
-        response = self.client.get(f"/api/sessions/{self.session.id}/vote-status/")
+        response = self.client.get(f"/api/tasks/murder-mystery/sessions/{self.session.id}/vote-status/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["total_participants"], 2)
         self.assertEqual(response.data["votes_cast"], 0)
@@ -244,7 +245,7 @@ class VoteStatusEndpointTests(APITestCase):
             session=self.session, participant=self.p1, suspect_chosen="Eddie"
         )
         self.client.force_authenticate(user=self.user1)
-        response = self.client.get(f"/api/sessions/{self.session.id}/vote-status/")
+        response = self.client.get(f"/api/tasks/murder-mystery/sessions/{self.session.id}/vote-status/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["votes_cast"], 1)
         self.assertTrue(response.data["has_current_user_voted"])
@@ -259,7 +260,7 @@ class VoteStatusEndpointTests(APITestCase):
             session=self.session, participant=self.p2, suspect_chosen="Mickey"
         )
         self.client.force_authenticate(user=self.user1)
-        response = self.client.get(f"/api/sessions/{self.session.id}/vote-status/")
+        response = self.client.get(f"/api/tasks/murder-mystery/sessions/{self.session.id}/vote-status/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data["all_voted"])
 
@@ -304,12 +305,12 @@ class AllVotedBroadcastTests(APITestCase):
             session=self.session, participant=self.p2, suspect_chosen="Mickey"
         )
 
-    @patch("apps.sessions.views._broadcast_session_event")
+    @patch("apps.tasks.murder_mystery.views._broadcast_session_event")
     def test_all_voted_broadcast_on_last_vote(self, mock_broadcast):
         """ALL_VOTED is broadcast when last vote is cast."""
         self.client.force_authenticate(user=self.user3)
         response = self.client.post(
-            f"/api/sessions/{self.session.id}/vote/",
+            f"/api/tasks/murder-mystery/sessions/{self.session.id}/vote/",
             {"suspect": "Eddie"},
             format="json",
         )
@@ -593,7 +594,7 @@ class VotingFlowIntegrationTests(APITestCase):
     def tearDown(self):
         cache.clear()
 
-    @patch("apps.sessions.views._broadcast_session_event")
+    @patch("apps.tasks.murder_mystery.views._broadcast_session_event")
     @patch("apps.reports.llm_service.ReportLLMService.generate_report_text")
     def test_full_voting_flow(self, mock_llm, mock_broadcast):
         """Test complete flow: votes -> ALL_VOTED -> close -> download."""
@@ -602,7 +603,7 @@ class VotingFlowIntegrationTests(APITestCase):
         # 1. First vote
         self.client.force_authenticate(user=self.host)
         response = self.client.post(
-            f"/api/sessions/{self.session.id}/vote/",
+            f"/api/tasks/murder-mystery/sessions/{self.session.id}/vote/",
             {"suspect": "Eddie"},
             format="json",
         )
@@ -611,7 +612,7 @@ class VotingFlowIntegrationTests(APITestCase):
         # 2. Second vote
         self.client.force_authenticate(user=self.player2)
         response = self.client.post(
-            f"/api/sessions/{self.session.id}/vote/",
+            f"/api/tasks/murder-mystery/sessions/{self.session.id}/vote/",
             {"suspect": "Mickey"},
             format="json",
         )
@@ -620,7 +621,7 @@ class VotingFlowIntegrationTests(APITestCase):
         # 3. Third vote (triggers ALL_VOTED)
         self.client.force_authenticate(user=self.player3)
         response = self.client.post(
-            f"/api/sessions/{self.session.id}/vote/",
+            f"/api/tasks/murder-mystery/sessions/{self.session.id}/vote/",
             {"suspect": "Eddie"},
             format="json",
         )

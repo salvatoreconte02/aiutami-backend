@@ -45,17 +45,12 @@ Formato:
 """
 
 
-# Sospettati e colpevole MM — spostati da apps/sessions/models.py
-MURDER_MYSTERY_SUSPECTS = ["Eddie", "Mickey", "Billy"]
-MURDER_MYSTERY_GUILTY = "Eddie"
-
-
 def collect_mm_report_context(session) -> Dict[str, Any]:
     """
     Raccoglie voti e calcola correttezza per il report MM.
     Logica verbatim da apps/sessions/services.py:_collect_report_data.
     """
-    from apps.sessions.models import SessionVote
+    from .models import SessionVote, MURDER_MYSTERY_GUILTY
 
     votes = SessionVote.objects.filter(session=session).select_related(
         "participant__user"
@@ -94,7 +89,7 @@ def build_mm_pdf_sections(session, context: Dict[str, Any], styles: Dict[str, An
     from reportlab.lib import colors
     from reportlab.lib.units import cm
     from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
-    from apps.sessions.models import SessionVote
+    from .models import SessionVote, MURDER_MYSTERY_GUILTY
 
     section_style = styles["section"]
     body_style = styles["body"]

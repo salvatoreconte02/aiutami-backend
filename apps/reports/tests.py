@@ -77,7 +77,8 @@ class ReportLLMServiceTests(TestCase):
 
 
 from django.contrib.auth import get_user_model
-from apps.sessions.models import Session, SessionParticipant, SessionVote, SessionState, ParticipantRole
+from apps.sessions.models import Session, SessionParticipant, SessionState, ParticipantRole
+from apps.tasks.murder_mystery.models import SessionVote
 
 User = get_user_model()
 

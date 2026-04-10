@@ -99,6 +99,39 @@ class MurderMysteryTask(TaskDefinition):
     def build_report_fallback(self, data: Dict[str, Any]) -> list[str]:
         return mm_report.build_mm_report_fallback_lines(data)
 
+    # --- Step 6: submission (voto colpevole) ---
+
+    def all_submissions_received(self, session) -> bool:
+        from .models import SessionVote
+        from apps.sessions.models import SessionParticipant
+        total = SessionParticipant.objects.filter(session=session).count()
+        votes = SessionVote.objects.filter(session=session).count()
+        return votes >= total
+
+    def submission_summary(self, session):
+        from .models import SessionVote, MURDER_MYSTERY_GUILTY
+        votes = SessionVote.objects.filter(session=session).select_related("participant__user")
+        results = []
+        correct_count = 0
+        for vote in votes:
+            username = getattr(vote.participant.user, "display_name", None) or vote.participant.user.get_username()
+            is_correct = vote.suspect_chosen == MURDER_MYSTERY_GUILTY
+            if is_correct:
+                correct_count += 1
+            results.append({
+                "user_id": vote.participant.user_id,
+                "username": username,
+                "chose": vote.suspect_chosen,
+                "correct": is_correct,
+            })
+        total = len(results)
+        success_rate = int((correct_count / total) * 100) if total > 0 else 0
+        return {
+            "results": results,
+            "guilty": MURDER_MYSTERY_GUILTY,
+            "success_rate": success_rate,
+        }
+
     def fallback_forced_conclusion_body(
         self, summary: str, conclusion_reason: str
     ) -> str:

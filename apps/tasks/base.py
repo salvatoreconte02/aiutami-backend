@@ -172,5 +172,26 @@ class TaskDefinition(ABC):
         """
         return []
 
+    # --- Submission (voto, ranking, ecc.) ---
+    # Step 6: il core usa questi metodi per sapere se tutti i partecipanti
+    # hanno completato la loro submission task-specifica e per serializzare
+    # il riepilogo delle submission nella risposta API.
+
+    def all_submissions_received(self, session) -> bool:
+        """
+        True se tutti i partecipanti hanno completato la submission
+        task-specifica (es. voto colpevole per MM, ranking per NASA).
+        Default True = task senza submission.
+        """
+        return True
+
+    def submission_summary(self, session) -> Any:
+        """
+        Riepilogo delle submission per il SessionDetail API.
+        Per MM: dict con results/guilty/success_rate.
+        Default None = nessuna submission per questo task.
+        """
+        return None
+
     def __repr__(self) -> str:
         return f"<TaskDefinition key={self.key!r}>"

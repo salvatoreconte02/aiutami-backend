@@ -16,8 +16,6 @@ from .models import (
     SessionEventType,
     SessionState,
     SessionParticipant,
-    SessionVote,
-    MURDER_MYSTERY_GUILTY,
 )
 
 
@@ -197,31 +195,8 @@ class SessionDetailSerializer(serializers.ModelSerializer):
     def get_votes_summary(self, obj: Session) -> Optional[Dict[str, Any]]:
         if obj.state != SessionState.CLOSED:
             return None
-
-        votes = SessionVote.objects.filter(session=obj).select_related("participant__user")
-        results = []
-        correct_count = 0
-
-        for vote in votes:
-            username = getattr(vote.participant.user, "display_name", None) or vote.participant.user.get_username()
-            is_correct = vote.suspect_chosen == MURDER_MYSTERY_GUILTY
-            if is_correct:
-                correct_count += 1
-            results.append({
-                "user_id": vote.participant.user_id,
-                "username": username,
-                "chose": vote.suspect_chosen,
-                "correct": is_correct,
-            })
-
-        total = len(results)
-        success_rate = int((correct_count / total) * 100) if total > 0 else 0
-
-        return {
-            "results": results,
-            "guilty": MURDER_MYSTERY_GUILTY,
-            "success_rate": success_rate,
-        }
+        task = get_task(obj.context)
+        return task.submission_summary(obj)
 
 
 # Session transitions
