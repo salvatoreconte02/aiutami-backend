@@ -28,3 +28,4 @@ class TasksConfig(AppConfig):
         # apps.tasks.registry.get_task(key).
         from . import generic  # noqa: F401
         from . import murder_mystery  # noqa: F401
+        from . import nasa_moon  # noqa: F401

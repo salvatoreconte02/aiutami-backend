@@ -20,4 +20,5 @@ urlpatterns = [
 
     # Task-specific endpoints
     path("api/tasks/murder-mystery/", include("apps.tasks.murder_mystery.urls")),
+    path("api/tasks/nasa-moon/", include("apps.tasks.nasa_moon.urls")),
 ]
