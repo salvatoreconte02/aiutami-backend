@@ -26,4 +26,5 @@ class TasksConfig(AppConfig):
         # Nota: importiamo SOLO i plugin di task. Il core del backend continua
         # a non sapere nulla dei task specifici e li raggiunge solo via
         # apps.tasks.registry.get_task(key).
+        from . import generic  # noqa: F401
         from . import murder_mystery  # noqa: F401
