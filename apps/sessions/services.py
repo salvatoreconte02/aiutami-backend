@@ -7,9 +7,6 @@ from django.utils import timezone
 from apps.sessions.models import (
     Session,
     SessionState,
-    SessionParticipant,
-    SessionVote,
-    MURDER_MYSTERY_GUILTY,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,9 +55,11 @@ def close_session(session_id: str) -> Session:
 
     # 2. Genera report text via LLM
     try:
-        report_data = _collect_report_data(session, mod_state)
+        from apps.tasks.registry import get_task
+        task = get_task(session.context)
+        report_data = _collect_report_data(session, mod_state, task)
         from apps.reports.llm_service import ReportLLMService
-        session.report_text = ReportLLMService.generate_report_text(report_data)
+        session.report_text = ReportLLMService.generate_report_text(report_data, task=task)
     except Exception as e:
         logger.warning(f"Could not generate report for session {session_id}: {e}")
         session.report_text = ""
@@ -78,9 +77,11 @@ def close_session(session_id: str) -> Session:
     return session
 
 
-def _collect_report_data(session, mod_state=None) -> dict:
+def _collect_report_data(session, mod_state=None, task=None) -> dict:
     """
     Raccoglie i dati per la generazione del report.
+    La parte generica (titolo, durata, partecipanti, summary) è qui.
+    La parte task-specifica (es. voti MM) è delegata a task.collect_report_context().
     """
     duration_minutes = 0
     if session.started_at and session.ended_at:
@@ -110,34 +111,20 @@ def _collect_report_data(session, mod_state=None) -> dict:
             "percentage": percentage,
         })
 
-    votes = SessionVote.objects.filter(session=session).select_related("participant__user")
-    votes_data = []
-    correct_count = 0
-    for vote in votes:
-        username = getattr(vote.participant.user, "display_name", None) or vote.participant.user.get_username()
-        is_correct = vote.suspect_chosen == MURDER_MYSTERY_GUILTY
-        if is_correct:
-            correct_count += 1
-        votes_data.append({
-            "name": username,
-            "chose": vote.suspect_chosen,
-            "correct": is_correct,
-        })
-
-    total_voters = votes.count()
-    success_rate = int((correct_count / total_voters) * 100) if total_voters > 0 else 0
-
-    return {
+    data = {
         "session_title": session.title,
         "duration_minutes": duration_minutes,
         "participants": participants_data,
         "ai_interventions": ai_interventions,
         "ai_intervention_percentage": ai_percentage,
-        "votes": votes_data,
-        "guilty": MURDER_MYSTERY_GUILTY,
-        "success_rate": success_rate,
         "final_summary": session.final_summary or "",
     }
+
+    # Mergia dati task-specifici (per MM: votes, guilty, success_rate)
+    if task is not None:
+        data.update(task.collect_report_context(session))
+
+    return data
 
 
 def _cleanup_session_redis_keys(session_id: str) -> None:

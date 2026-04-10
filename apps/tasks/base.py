@@ -120,5 +120,57 @@ class TaskDefinition(ABC):
             f"Grazie per aver usato AIutami per la vostra sessione!"
         )
 
+    # --- Report PDF e LLM ---
+    # Step 5: il core dei report (apps/reports/) diventa uno scheletro
+    # task-agnostic. I task concreti forniscono prompt LLM, titolo PDF,
+    # dati task-specifici e sezioni PDF extra.
+
+    def build_report_llm_prompt(self) -> str:
+        """
+        System prompt inviato all'LLM per generare il testo narrativo
+        del report. I task concreti descrivono il proprio scenario e le
+        sezioni desiderate. Default generico.
+        """
+        return (
+            "Sei un analista di sessioni di discussione moderate su AIutami.\n\n"
+            "Genera un report testuale in italiano per una sessione di discussione.\n\n"
+            "Il report deve includere:\n"
+            "- STATISTICHE PARTECIPAZIONE: interventi per partecipante\n"
+            "- RIASSUNTO DELLA DISCUSSIONE: basato sul final_summary\n"
+            "- ANALISI FINALE: breve analisi di come è andata\n\n"
+            "Formato: testo semplice, NO markdown, sezioni separate da riga vuota.\n"
+            "Lunghezza: 200-400 parole."
+        )
+
+    def report_title(self) -> str:
+        """Titolo del PDF del report. Default: 'REPORT SESSIONE'."""
+        return "REPORT SESSIONE"
+
+    def collect_report_context(self, session) -> Dict[str, Any]:
+        """
+        Raccoglie dal DB i dati task-specifici per il report (es. voti,
+        risultato). Ritorna un dict che viene mergiato nei dati generici
+        (titolo, durata, partecipanti, summary) e passato sia all'LLM
+        che al PDF builder. Default vuoto = nessun dato task-specifico.
+        """
+        return {}
+
+    def build_report_pdf_sections(self, session, context: Dict[str, Any], styles: Dict[str, Any]) -> list:
+        """
+        Ritorna una lista di elementi ReportLab (Paragraph, Spacer, Table...)
+        da appendere alla story del PDF dopo le sezioni generiche.
+        `context` è il dict ritornato da collect_report_context().
+        `styles` contiene gli stili ReportLab ('section', 'body') usati dal core.
+        Default vuoto = nessuna sezione extra.
+        """
+        return []
+
+    def build_report_fallback(self, data: Dict[str, Any]) -> list[str]:
+        """
+        Righe extra da appendere al report di fallback (quando LLM non
+        disponibile). Default vuoto.
+        """
+        return []
+
     def __repr__(self) -> str:
         return f"<TaskDefinition key={self.key!r}>"

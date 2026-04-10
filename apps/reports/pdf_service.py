@@ -4,13 +4,12 @@ Report PDF Service - genera PDF del report usando ReportLab.
 
 import io
 import logging
-from datetime import datetime
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +17,9 @@ logger = logging.getLogger(__name__)
 class ReportPDFService:
     """
     Servizio per generare PDF del report sessione.
+    Scheletro task-agnostic: titolo, data/durata e testo LLM sono generici.
+    Le sezioni task-specifiche (es. tabella voti MM) vengono iniettate dal
+    TaskDefinition tramite build_report_pdf_sections().
     """
 
     @classmethod
@@ -31,7 +33,9 @@ class ReportPDFService:
         Returns:
             bytes del PDF generato
         """
-        from apps.sessions.models import SessionVote, SessionParticipant, MURDER_MYSTERY_GUILTY
+        from apps.tasks.registry import get_task
+
+        task = get_task(session.context)
 
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(
@@ -84,11 +88,17 @@ class ReportPDFService:
             spaceBefore=30,
         )
 
+        # Dict di stili passato al task per le sezioni extra
+        task_styles = {
+            "section": section_style,
+            "body": body_style,
+        }
+
         # Costruisci contenuto
         story = []
 
-        # Titolo
-        story.append(Paragraph("REPORT SESSIONE MURDER MYSTERY", title_style))
+        # Titolo (dal task)
+        story.append(Paragraph(task.report_title(), title_style))
         story.append(Paragraph(f'"{session.title}"', subtitle_style))
 
         # Data e durata
@@ -99,42 +109,9 @@ class ReportPDFService:
         story.append(Paragraph(f"Data: {date_str} - Durata: {duration} minuti", body_style))
         story.append(Spacer(1, 12))
 
-        # Sezione risultati
-        votes = SessionVote.objects.filter(session=session).select_related("participant__user")
-        total = votes.count()
-        correct = sum(1 for v in votes if v.suspect_chosen == MURDER_MYSTERY_GUILTY)
-        success_rate = int((correct / total) * 100) if total > 0 else 0
-
-        story.append(Paragraph("RISULTATO FINALE", section_style))
-        story.append(Paragraph(f"Il colpevole era: <b>{MURDER_MYSTERY_GUILTY}</b>", body_style))
-        story.append(Paragraph(f"Partecipanti che hanno indovinato: {correct}/{total}", body_style))
-        story.append(Paragraph(f"Percentuale di successo: {success_rate}%", body_style))
-        story.append(Spacer(1, 12))
-
-        # Tabella voti
-        story.append(Paragraph("VOTI", section_style))
-        vote_data = [["Partecipante", "Scelta", "Risultato"]]
-        for vote in votes:
-            username = getattr(vote.participant.user, "display_name", None) or vote.participant.user.get_username()
-            result = "Corretto" if vote.suspect_chosen == MURDER_MYSTERY_GUILTY else "Sbagliato"
-            vote_data.append([username, vote.suspect_chosen, result])
-
-        vote_table = Table(vote_data, colWidths=[6*cm, 4*cm, 4*cm])
-        vote_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2E86AB')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 11),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#F5F5F5')),
-            ('GRID', (0, 0), (-1, -1), 1, colors.white),
-            ('FONTSIZE', (0, 1), (-1, -1), 10),
-            ('TOPPADDING', (0, 1), (-1, -1), 8),
-            ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
-        ]))
-        story.append(vote_table)
-        story.append(Spacer(1, 12))
+        # Sezioni task-specifiche (per MM: risultato finale + tabella voti)
+        task_sections = task.build_report_pdf_sections(session, {}, task_styles)
+        story.extend(task_sections)
 
         # Testo report (generato da LLM)
         if session.report_text:

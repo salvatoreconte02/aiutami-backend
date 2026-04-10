@@ -26,6 +26,7 @@ from typing import Any, Dict
 from apps.tasks.base import TaskDefinition
 
 from . import prompts as mm_prompts
+from . import report as mm_report
 
 
 class MurderMysteryTask(TaskDefinition):
@@ -80,6 +81,23 @@ class MurderMysteryTask(TaskDefinition):
     def intro_message_tail(self) -> str:
         # Testo MM verbatim pre-refactor (apps/moderation/intro.py)
         return "Quando avrete capito chi è il colpevole, premete 'Pronto alla conclusione'."
+
+    # --- Step 5: report ---
+
+    def build_report_llm_prompt(self) -> str:
+        return mm_report.REPORT_LLM_PROMPT
+
+    def report_title(self) -> str:
+        return "REPORT SESSIONE MURDER MYSTERY"
+
+    def collect_report_context(self, session) -> Dict[str, Any]:
+        return mm_report.collect_mm_report_context(session)
+
+    def build_report_pdf_sections(self, session, context: Dict[str, Any], styles: Dict[str, Any]) -> list:
+        return mm_report.build_mm_pdf_sections(session, context, styles)
+
+    def build_report_fallback(self, data: Dict[str, Any]) -> list[str]:
+        return mm_report.build_mm_report_fallback_lines(data)
 
     def fallback_forced_conclusion_body(
         self, summary: str, conclusion_reason: str
