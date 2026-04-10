@@ -58,6 +58,13 @@ class ModerationOrchestrator:
         Deve essere chiamato subito dopo che un turno umano è
         terminato, durante la finestra di moderazione (microfoni chiusi).
         """
+        # Risolvi task_key dalla sessione per propagarlo ai servizi LLM
+        task_key = None
+        try:
+            from apps.sessions.models import Session
+            task_key = Session.objects.values_list("context", flat=True).get(id=session_id)
+        except Exception:
+            pass  # Nei test unitari la sessione potrebbe non esistere nel DB
 
         # 1) Carica stato moderazione
         moderation_state = load_moderation_state(session_id)
@@ -79,6 +86,7 @@ class ModerationOrchestrator:
                 speaker_name=speaker_name,
                 moderation_state=moderation_state,
                 trigger_result=trigger_result,
+                task_key=task_key,
             )
         else:
             # Path normale: chiama handle_human_turn_ended
@@ -89,6 +97,7 @@ class ModerationOrchestrator:
                 session_phase=session_phase,
                 hard_action=trigger_result.hard_action,
                 speaker_name=speaker_name,
+                task_key=task_key,
             )
 
             return FullModerationDecision(
@@ -108,6 +117,7 @@ class ModerationOrchestrator:
         speaker_name: Optional[str],
         moderation_state: ModerationState,
         trigger_result: TriggerEvaluationResult,
+        task_key: Optional[str] = None,
     ) -> FullModerationDecision:
         """
         Gestisce il path FORCED_SUMMARY separatamente.
@@ -134,6 +144,7 @@ class ModerationOrchestrator:
             last_turn_speaker=speaker_name,
             participants_turns=moderation_state.turns_per_participant,
             total_turns=total_turns,
+            task_key=task_key,
         )
 
         # Aggiorna stato

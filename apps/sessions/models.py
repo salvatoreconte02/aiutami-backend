@@ -36,11 +36,11 @@ class SessionEventType(models.TextChoices):
 class Session(models.Model):
     """
     Contenitore della stanza vocale e del suo ciclo di vita.
-    Regole chiave (MVP):
+    Regole chiave:
       - Stati: LOBBY -> ACTIVE -> CONCLUSION -> CLOSED
       - Join consentito solo in LOBBY
       - Capienza non superabile
-      - Murder Mystery: min_size=max_size=3 (obbligatorio)
+      - Capienza validata tramite TaskDefinition (min/max_participants, fixed_size)
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

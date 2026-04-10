@@ -20,17 +20,25 @@ from apps.tasks.base import TaskDefinition
 from apps.tasks.registry import get_task
 
 
-def _resolve_task(task_key: Optional[str]) -> TaskDefinition:
+def _resolve_task(task_key: Optional[str], session_id: Optional[str | int] = None) -> TaskDefinition:
     """
     Risolve il TaskDefinition da usare per costruire i prompt.
 
-    Step 3 del refactor task-pluggable: finché l'orchestrator non propaga
-    `task_key` (lavoro rimandato allo step successivo), i call site esistenti
-    chiamano i metodi senza specificare il task. In quel caso si ricade sul
-    task Murder Mystery, che è l'unico registrato in produzione oggi, così
-    il comportamento è identico al pre-refactor.
+    Se `task_key` è fornito, lo usa direttamente. Altrimenti lo ricava
+    dal `session.context` tramite `session_id`. Se nessuno dei due è
+    disponibile, usa il primo task registrato come fallback (solo per
+    test che chiamano direttamente i metodi privati senza contesto).
     """
-    return get_task(task_key or "murder_mystery")
+    if task_key:
+        return get_task(task_key)
+    if session_id is not None:
+        from apps.sessions.models import Session
+        context = Session.objects.values_list("context", flat=True).get(id=session_id)
+        return get_task(context)
+    # Fallback per test che chiamano direttamente i metodi privati senza
+    # contesto. In produzione l'orchestrator passa sempre task_key.
+    logger.warning("[MODERATION] _resolve_task senza task_key né session_id")
+    return get_task("murder_mystery")
 
 # Parametri configurabili (in seguito si possono spostare in settings)
 AI_INTERVENTION_COOLDOWN = timedelta(seconds=60)
@@ -583,10 +591,9 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
         """
         Chiamata LLM dedicata per FORCED_SUMMARY.
 
-        A differenza di _call_llm(), usa un prompt specifico per murder mystery
-        che combina:
+        A differenza di _call_llm(), usa un prompt specifico che combina:
         1. Valutazione problemi (monopolizzazione, esclusione, off-topic, conflitto)
-        2. Ricapitolazione periodica degli indizi
+        2. Ricapitolazione periodica della discussione
 
         Returns dict with:
         - updated_summary
@@ -837,9 +844,7 @@ Rispondi SEMPRE con un JSON valido:
 
         Args:
             mode: "normal", "forced_summary", o "forced_conclusion"
-            task: TaskDefinition da cui estrarre il blocco scenario. Se None,
-                  risolve al task di default (Murder Mystery) per backward
-                  compat durante il refactor task-pluggable.
+            task: TaskDefinition da cui estrarre il blocco scenario.
 
         Returns:
             System prompt string per il modello LLM

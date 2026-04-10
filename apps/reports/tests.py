@@ -69,7 +69,9 @@ class ReportLLMServiceTests(TestCase):
                 "final_summary": "Test summary",
             }
 
-            result = ReportLLMService.generate_report_text(data)
+            from apps.tasks.registry import get_task
+            task = get_task("murder_mystery")
+            result = ReportLLMService.generate_report_text(data, task=task)
 
             # Should return fallback with basic info
             self.assertIn("Test Session", result)

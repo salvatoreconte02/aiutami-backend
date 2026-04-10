@@ -35,10 +35,12 @@ class ReportLLMService:
             Il testo del report generato
         """
         if task is None:
-            from apps.tasks.registry import get_task
-            task = get_task("murder_mystery")
+            logger.warning("[REPORT][LLM] task=None — il caller dovrebbe sempre passare il task")
 
-        system_prompt = task.build_report_llm_prompt()
+        system_prompt = task.build_report_llm_prompt() if task else (
+            "Genera un report testuale in italiano per una sessione di discussione. "
+            "Includi statistiche partecipazione e riassunto. Formato: testo semplice, 200-400 parole."
+        )
 
         logger.info("[REPORT][LLM][REQUEST] Generating report for session: %s", data.get("session_title"))
 
@@ -80,10 +82,6 @@ class ReportLLMService:
     @classmethod
     def _fallback_report(cls, data: dict[str, Any], task: Optional[TaskDefinition] = None) -> str:
         """Genera un report di fallback se LLM non disponibile."""
-        if task is None:
-            from apps.tasks.registry import get_task
-            task = get_task("murder_mystery")
-
         lines = [
             f"REPORT SESSIONE: {data.get('session_title', 'Sessione senza titolo')}",
             f"Durata: {data.get('duration_minutes', 0)} minuti",
@@ -91,8 +89,9 @@ class ReportLLMService:
             "RISULTATO FINALE",
         ]
 
-        # Sezione task-specifica (per MM: colpevole + voti)
-        lines.extend(task.build_report_fallback(data))
+        # Sezione task-specifica
+        if task is not None:
+            lines.extend(task.build_report_fallback(data))
 
         lines.extend([
             "",
