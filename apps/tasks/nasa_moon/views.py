@@ -24,7 +24,7 @@ from .models import NasaRanking
 class NasaRankingView(APIView):
     """
     PUT  /api/tasks/nasa-moon/sessions/{session_id}/ranking/
-        Crea o aggiorna il ranking di gruppo (solo host, solo in ACTIVE).
+        Crea o aggiorna il ranking di gruppo (solo host, ACTIVE o CONCLUSION).
 
     GET  /api/tasks/nasa-moon/sessions/{session_id}/ranking/
         Ritorna il ranking corrente (qualsiasi membro della sessione).
@@ -48,20 +48,22 @@ class NasaRankingView(APIView):
             ranking = NasaRanking.objects.get(session=session)
             return Response({
                 "ranked_items": ranking.ranked_items,
+                "is_final": ranking.is_final,
                 "updated_at": ranking.updated_at.isoformat(),
             })
         except NasaRanking.DoesNotExist:
             return Response({
                 "ranked_items": None,
+                "is_final": False,
                 "updated_at": None,
             })
 
     def put(self, request, session_id: str):
         session = get_object_or_404(Session, pk=session_id)
 
-        if session.state != SessionState.ACTIVE:
+        if session.state not in (SessionState.ACTIVE, SessionState.CONCLUSION):
             return Response(
-                {"detail": "Il ranking puo essere modificato solo durante la discussione."},
+                {"detail": "Il ranking puo essere modificato solo durante ACTIVE o CONCLUSION."},
                 status=status.HTTP_409_CONFLICT,
             )
 
@@ -156,9 +158,84 @@ class NasaRankingStatusView(APIView):
         session = get_object_or_404(Session, pk=session_id)
         self.check_object_permissions(request, session)
 
-        has_ranking = NasaRanking.objects.filter(session=session).exists()
+        try:
+            ranking = NasaRanking.objects.get(session=session)
+            has_ranking = True
+            is_final = ranking.is_final
+        except NasaRanking.DoesNotExist:
+            has_ranking = False
+            is_final = False
 
         return Response({
             "has_ranking": has_ranking,
+            "is_final": is_final,
             "session_state": session.state,
+        })
+
+
+class NasaRankingSubmitView(APIView):
+    """
+    POST /api/tasks/nasa-moon/sessions/{session_id}/ranking/submit/
+    Conferma il ranking come definitivo (solo host, solo in CONCLUSION).
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, session_id: str):
+        session = get_object_or_404(Session, pk=session_id)
+
+        if session.state != SessionState.CONCLUSION:
+            return Response(
+                {"detail": "Il ranking puo essere confermato solo in fase CONCLUSION."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # Solo l'host
+        try:
+            participant = SessionParticipant.objects.get(
+                session=session, user=request.user
+            )
+        except SessionParticipant.DoesNotExist:
+            return Response(
+                {"detail": "Non sei un partecipante di questa sessione."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if participant.role != ParticipantRole.HOST:
+            return Response(
+                {"detail": "Solo l'host puo confermare il ranking di gruppo."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Il ranking deve esistere
+        try:
+            ranking = NasaRanking.objects.get(session=session)
+        except NasaRanking.DoesNotExist:
+            return Response(
+                {"detail": "Nessun ranking da confermare. Componi prima il ranking."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if ranking.is_final:
+            return Response(
+                {"detail": "Il ranking e gia stato confermato."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ranking.is_final = True
+        ranking.save(update_fields=["is_final"])
+
+        _broadcast_session_event(
+            session_id=str(session.id),
+            event_type="RANKING_SUBMITTED",
+            payload={
+                "ranked_items": ranking.ranked_items,
+                "submitted_by": request.user.id,
+            },
+        )
+
+        return Response({
+            "success": True,
+            "ranked_items": ranking.ranked_items,
+            "is_final": True,
         })

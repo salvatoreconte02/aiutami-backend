@@ -125,7 +125,7 @@ class NasaMoonTask(TaskDefinition):
     def all_submissions_received(self, session) -> bool:
         from .models import NasaRanking
 
-        return NasaRanking.objects.filter(session=session).exists()
+        return NasaRanking.objects.filter(session=session, is_final=True).exists()
 
     def submission_summary(self, session):
         from .models import NasaRanking

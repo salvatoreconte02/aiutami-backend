@@ -28,6 +28,10 @@ class NasaRanking(models.Model):
     ranked_items = models.JSONField(
         help_text="Lista ordinata dei 15 oggetti (posizione 0 = piu importante)."
     )
+    is_final = models.BooleanField(
+        default=False,
+        help_text="True quando l'host ha confermato il ranking in fase CONCLUSION."
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

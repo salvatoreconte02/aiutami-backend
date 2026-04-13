@@ -203,7 +203,7 @@ class NasaMoonSubmissionTests(TestCase):
         # NASA richiede submission, quindi False senza ranking
         self.assertFalse(self.task.all_submissions_received(self.session))
 
-    def test_with_ranking_submissions_received_true(self) -> None:
+    def test_with_ranking_not_final_submissions_received_false(self) -> None:
         participant = SessionParticipant.objects.create(
             session=self.session, user=self.user, role=ParticipantRole.HOST,
         )
@@ -212,6 +212,20 @@ class NasaMoonSubmissionTests(TestCase):
             session=self.session,
             submitted_by=participant,
             ranked_items=perfect,
+            is_final=False,
+        )
+        self.assertFalse(self.task.all_submissions_received(self.session))
+
+    def test_with_ranking_final_submissions_received_true(self) -> None:
+        participant = SessionParticipant.objects.create(
+            session=self.session, user=self.user, role=ParticipantRole.HOST,
+        )
+        perfect = sorted(NASA_ITEMS, key=lambda item: EXPERT_RANKING[item])
+        NasaRanking.objects.create(
+            session=self.session,
+            submitted_by=participant,
+            ranked_items=perfect,
+            is_final=True,
         )
         self.assertTrue(self.task.all_submissions_received(self.session))
 
@@ -385,3 +399,107 @@ class NasaRankingEndpointTests(TestCase):
         resp = self.client.get(self._url("ranking-status/"))
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.data["has_ranking"])
+
+    def test_ranking_status_includes_is_final(self) -> None:
+        self.client.force_authenticate(user=self.host)
+        self.client.put(
+            self._url(), {"ranked_items": self.perfect_ranking}, format="json"
+        )
+        resp = self.client.get(self._url("ranking-status/"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data["is_final"])
+
+    # --- PUT ranking in CONCLUSION ---
+
+    def test_put_ranking_in_conclusion(self) -> None:
+        self.session.state = SessionState.CONCLUSION
+        self.session.save()
+        self.client.force_authenticate(user=self.host)
+        resp = self.client.put(
+            self._url(), {"ranked_items": self.perfect_ranking}, format="json"
+        )
+        self.assertIn(resp.status_code, (200, 201))
+
+    def test_put_ranking_in_closed_forbidden(self) -> None:
+        self.session.state = SessionState.CLOSED
+        self.session.save()
+        self.client.force_authenticate(user=self.host)
+        resp = self.client.put(
+            self._url(), {"ranked_items": self.perfect_ranking}, format="json"
+        )
+        self.assertEqual(resp.status_code, 409)
+
+    # --- GET ranking includes is_final ---
+
+    def test_get_ranking_includes_is_final(self) -> None:
+        self.client.force_authenticate(user=self.host)
+        self.client.put(
+            self._url(), {"ranked_items": self.perfect_ranking}, format="json"
+        )
+        resp = self.client.get(self._url())
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data["is_final"])
+
+    # --- POST submit ---
+
+    def test_submit_ranking_success(self) -> None:
+        # Create ranking during ACTIVE
+        self.client.force_authenticate(user=self.host)
+        self.client.put(
+            self._url(), {"ranked_items": self.perfect_ranking}, format="json"
+        )
+        # Move to CONCLUSION and submit
+        self.session.state = SessionState.CONCLUSION
+        self.session.save()
+        resp = self.client.post(self._url("ranking/submit/"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["success"])
+        self.assertTrue(resp.data["is_final"])
+        # Verify in DB
+        ranking = NasaRanking.objects.get(session=self.session)
+        self.assertTrue(ranking.is_final)
+
+    def test_submit_ranking_not_in_conclusion(self) -> None:
+        self.client.force_authenticate(user=self.host)
+        self.client.put(
+            self._url(), {"ranked_items": self.perfect_ranking}, format="json"
+        )
+        # Still in ACTIVE
+        resp = self.client.post(self._url("ranking/submit/"))
+        self.assertEqual(resp.status_code, 409)
+
+    def test_submit_ranking_as_member_forbidden(self) -> None:
+        self.client.force_authenticate(user=self.host)
+        self.client.put(
+            self._url(), {"ranked_items": self.perfect_ranking}, format="json"
+        )
+        self.session.state = SessionState.CONCLUSION
+        self.session.save()
+        self.client.force_authenticate(user=self.member)
+        resp = self.client.post(self._url("ranking/submit/"))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_submit_ranking_no_ranking_exists(self) -> None:
+        self.session.state = SessionState.CONCLUSION
+        self.session.save()
+        self.client.force_authenticate(user=self.host)
+        resp = self.client.post(self._url("ranking/submit/"))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_submit_ranking_already_final(self) -> None:
+        self.client.force_authenticate(user=self.host)
+        self.client.put(
+            self._url(), {"ranked_items": self.perfect_ranking}, format="json"
+        )
+        self.session.state = SessionState.CONCLUSION
+        self.session.save()
+        self.client.post(self._url("ranking/submit/"))
+        resp = self.client.post(self._url("ranking/submit/"))
+        self.assertEqual(resp.status_code, 400)
+
+    def test_submit_ranking_outsider_forbidden(self) -> None:
+        self.session.state = SessionState.CONCLUSION
+        self.session.save()
+        self.client.force_authenticate(user=self.outsider)
+        resp = self.client.post(self._url("ranking/submit/"))
+        self.assertEqual(resp.status_code, 403)
