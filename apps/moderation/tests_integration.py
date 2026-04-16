@@ -30,7 +30,7 @@ class ForcedConclusionIntegrationTests(TestCase):
     def tearDown(self):
         cache.clear()
 
-    @patch.object(ModerationService, '_build_azure_client')
+    @patch.object(ModerationService, '_build_openai_client')
     def test_full_conclusion_flow_timer_expired(self, mock_client):
         """Test complete flow when timer expires."""
         # Setup mock LLM response

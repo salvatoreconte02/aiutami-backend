@@ -4,9 +4,9 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional, Any
 import json
-import os
 
-from openai import AzureOpenAI  # client ufficiale per Azure OpenAI
+from django.conf import settings
+from openai import OpenAI  # client ufficiale OpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -174,19 +174,11 @@ class ModerationService:
         return "normal"
 
     @classmethod
-    def _build_azure_client(cls) -> AzureOpenAI:
+    def _build_openai_client(cls) -> OpenAI:
         """
-        Crea un client AzureOpenAI usando le variabili d'ambiente del container.
+        Crea un client OpenAI usando la chiave configurata nelle settings.
         """
-        endpoint = os.environ["AZURE_OPENAI_ENDPOINT"].rstrip("/")
-        api_key = os.environ["AZURE_OPENAI_API_KEY"]
-        api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
-
-        return AzureOpenAI(
-            api_key=api_key,
-            api_version=api_version,
-            azure_endpoint=endpoint,
-        )
+        return OpenAI(api_key=settings.OPENAI_API_KEY)
 
     @classmethod
     def _call_llm(
@@ -249,15 +241,14 @@ class ModerationService:
             last_turn,
         )
 
-        # 2) Tentativo di chiamata reale verso Azure OpenAI
+        # 2) Tentativo di chiamata reale verso OpenAI
         try:
-            client = cls._build_azure_client()
-            deployment = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-mini")
+            client = cls._build_openai_client()
 
             system_prompt = cls._build_system_prompt(mode, task=task)
 
             response = client.chat.completions.create(
-                model=deployment,
+                model=settings.OPENAI_LLM_MODEL,
                 messages=[
                     {
                         "role": "system",
@@ -270,9 +261,10 @@ class ModerationService:
                 ],
                 temperature=0.4,
                 max_tokens=512,
+                response_format={"type": "json_object"},
             )
 
-            # In AzureOpenAI, content è solitamente una stringa JSON
+            # content è una stringa JSON (JSON mode)
             raw_output = response.choices[0].message.content
             if isinstance(raw_output, list):
                 # In caso di contenuto multi-parte (non comune qui), si concatena
@@ -456,8 +448,7 @@ class ModerationService:
         task = _resolve_task(task_key)
 
         try:
-            client = cls._build_azure_client()
-            deployment = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-mini")
+            client = cls._build_openai_client()
 
             system_prompt = cls._build_forced_conclusion_system_prompt(task=task)
 
@@ -471,13 +462,14 @@ class ModerationService:
             }
 
             response = client.chat.completions.create(
-                model=deployment,
+                model=settings.OPENAI_LLM_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": json.dumps(llm_input, ensure_ascii=False)},
                 ],
                 temperature=0.5,  # Leggermente più alta per tono più caldo
                 max_tokens=512,
+                response_format={"type": "json_object"},
             )
 
             raw_output = response.choices[0].message.content
@@ -628,19 +620,19 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
         }
 
         try:
-            client = cls._build_azure_client()
-            deployment = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-mini")
+            client = cls._build_openai_client()
 
             system_prompt = cls._build_forced_summary_system_prompt(task=task)
 
             response = client.chat.completions.create(
-                model=deployment,
+                model=settings.OPENAI_LLM_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": json.dumps(llm_input, ensure_ascii=False)},
                 ],
                 temperature=0.4,
                 max_tokens=512,
+                response_format={"type": "json_object"},
             )
 
             raw_output = response.choices[0].message.content

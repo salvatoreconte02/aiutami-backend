@@ -1285,7 +1285,7 @@ class CallLLMStructuredInputTests(TestCase):
     def tearDown(self):
         cache.clear()
 
-    @patch.object(ModerationService, '_build_azure_client')
+    @patch.object(ModerationService, '_build_openai_client')
     def test_call_llm_sends_structured_input_with_participants(self, mock_client):
         """_call_llm should send structured input including participants.turns."""
         # Setup mock
@@ -1327,7 +1327,7 @@ class CallLLMStructuredInputTests(TestCase):
         self.assertIn("turns", user_data["participants"])
         self.assertEqual(user_data["participants"]["turns"], {"Mario": 5, "Lucia": 2})
 
-    @patch.object(ModerationService, '_build_azure_client')
+    @patch.object(ModerationService, '_build_openai_client')
     def test_call_llm_uses_normal_mode_prompt(self, mock_client):
         """_call_llm in normal mode should use _build_normal_mode_prompt."""
         mock_response = MagicMock()
@@ -1434,7 +1434,7 @@ class ForcedConclusionLLMTests(TestCase):
     def tearDown(self):
         cache.clear()
 
-    @patch.object(ModerationService, '_build_azure_client')
+    @patch.object(ModerationService, '_build_openai_client')
     def test_call_llm_for_conclusion_returns_expected_structure(self, mock_client):
         """call_llm_for_conclusion should return expected dict structure."""
         # Mock the Azure response
@@ -1577,7 +1577,7 @@ class CallLLMForSummaryTests(TestCase):
     def tearDown(self):
         cache.clear()
 
-    @patch.object(ModerationService, '_build_azure_client')
+    @patch.object(ModerationService, '_build_openai_client')
     def test_call_llm_for_summary_returns_expected_structure(self, mock_client):
         """call_llm_for_summary should return dict with updated_summary, message_to_say, correction_reason."""
         mock_response = MagicMock()
@@ -1602,7 +1602,7 @@ class CallLLMForSummaryTests(TestCase):
         self.assertIn("correction_reason", result)
         self.assertIsNotNone(result["message_to_say"])
 
-    @patch.object(ModerationService, '_build_azure_client')
+    @patch.object(ModerationService, '_build_openai_client')
     def test_call_llm_for_summary_uses_fallback_on_api_error(self, mock_client):
         """call_llm_for_summary should use fallback when Azure API fails."""
         mock_client.return_value.chat.completions.create.side_effect = Exception("API Error")
@@ -1621,7 +1621,7 @@ class CallLLMForSummaryTests(TestCase):
         self.assertIn("approfondire", result["message_to_say"].lower())
         self.assertIsNone(result["correction_reason"])
 
-    @patch.object(ModerationService, '_build_azure_client')
+    @patch.object(ModerationService, '_build_openai_client')
     def test_call_llm_for_summary_uses_fallback_on_invalid_json(self, mock_client):
         """call_llm_for_summary should use fallback when LLM returns invalid JSON."""
         mock_response = MagicMock()
@@ -2001,7 +2001,7 @@ class LLMNormalModeIntegrationTests(TestCase):
     def tearDown(self):
         cache.clear()
 
-    @patch.object(ModerationService, '_build_azure_client')
+    @patch.object(ModerationService, '_build_openai_client')
     def test_full_normal_mode_flow_with_participant_tracking(self, mock_client):
         """Test complete flow: state tracking + structured LLM input + intervention decision."""
         session_id = "test-integration-1"
@@ -2051,7 +2051,7 @@ class LLMNormalModeIntegrationTests(TestCase):
         self.assertEqual(user_message["participants"]["turns"]["Lucia"], 0)
         self.assertEqual(user_message["scenario"]["type"], "murder_mystery")
 
-    @patch.object(ModerationService, '_build_azure_client')
+    @patch.object(ModerationService, '_build_openai_client')
     def test_forced_summary_does_not_use_normal_prompt(self, mock_client):
         """Forced summary should use its own prompt, not the normal mode prompt."""
         session_id = "test-integration-2"

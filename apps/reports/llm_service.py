@@ -1,13 +1,13 @@
 """
-Report LLM Service - genera il testo del report via Azure OpenAI.
+Report LLM Service - genera il testo del report via OpenAI.
 """
 
 import logging
-import os
 import json
 from typing import Any, Optional
 
-from openai import AzureOpenAI
+from django.conf import settings
+from openai import OpenAI
 
 from apps.tasks.base import TaskDefinition
 
@@ -45,11 +45,10 @@ class ReportLLMService:
         logger.info("[REPORT][LLM][REQUEST] Generating report for session: %s", data.get("session_title"))
 
         try:
-            client = cls._build_azure_client()
-            deployment = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-mini")
+            client = cls._build_openai_client()
 
             response = client.chat.completions.create(
-                model=deployment,
+                model=settings.OPENAI_LLM_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
@@ -67,17 +66,9 @@ class ReportLLMService:
             return cls._fallback_report(data, task=task)
 
     @classmethod
-    def _build_azure_client(cls) -> AzureOpenAI:
-        """Crea client Azure OpenAI."""
-        endpoint = os.environ["AZURE_OPENAI_ENDPOINT"].rstrip("/")
-        api_key = os.environ["AZURE_OPENAI_API_KEY"]
-        api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
-
-        return AzureOpenAI(
-            api_key=api_key,
-            api_version=api_version,
-            azure_endpoint=endpoint,
-        )
+    def _build_openai_client(cls) -> OpenAI:
+        """Crea client OpenAI."""
+        return OpenAI(api_key=settings.OPENAI_API_KEY)
 
     @classmethod
     def _fallback_report(cls, data: dict[str, Any], task: Optional[TaskDefinition] = None) -> str:

@@ -11,17 +11,18 @@ import numpy as np
 from django.conf import settings
 from django.core.cache import cache
 
-from .azure_client import AzureStreamingClient
+from .openai_realtime_client import OpenAIRealtimeTranscriptionClient as ASRStreamingClient
 
 logger = logging.getLogger(__name__)
 
 
 class ASRStreamWorker:
-    AZURE_TARGET_SR = 16000
+    # OpenAI Realtime pcm16 richiede 24kHz mono 16-bit little-endian
+    ASR_TARGET_SR = 24000
 
-    # chunk regolari verso Azure
-    AZURE_PUSH_MS = 300
-    AZURE_PUSH_BYTES = int(AZURE_TARGET_SR * (AZURE_PUSH_MS / 1000.0) * 2)  # 9600 bytes
+    # chunk regolari verso il client ASR
+    ASR_PUSH_MS = 300
+    ASR_PUSH_BYTES = int(ASR_TARGET_SR * (ASR_PUSH_MS / 1000.0) * 2)  # 14400 bytes
 
     # taglia i primissimi frame “sporchi” (pop/rumore WebRTC)
     WARMUP_MS = 400
@@ -57,7 +58,7 @@ class ASRStreamWorker:
         self.total_bytes: int = 0
         self.started: bool = False
 
-        self._azure_client: Optional[AzureStreamingClient] = None
+        self._asr_client: Optional[ASRStreamingClient] = None
 
         self._push_buf = bytearray()
         self._logged_audio_stats = False
@@ -76,14 +77,14 @@ class ASRStreamWorker:
         # debug wav
         self._debug_wav_enabled = False
         self._debug_wav_raw_path: Optional[str] = None
-        self._debug_wav_16k_path: Optional[str] = None
+        self._debug_wav_target_path: Optional[str] = None
         self._debug_wav_raw_buf = bytearray()
-        self._debug_wav_16k_buf = bytearray()
-        self._debug_wav_max_bytes_16k = int(self.AZURE_TARGET_SR * self.DEBUG_WAV_SECONDS * 2)
+        self._debug_wav_target_buf = bytearray()
+        self._debug_wav_max_bytes_target = int(self.ASR_TARGET_SR * self.DEBUG_WAV_SECONDS * 2)
         self._debug_wav_max_bytes_raw = int(48000 * self.DEBUG_WAV_SECONDS * 2)  # cap “alto”, poi si riduce
         self._debug_wav_raw_sr: Optional[int] = None
 
-        # lock per append transcript (callback Azure arriva da thread)
+        # lock per append transcript (callback ASR arriva da thread)
         self._transcript_lock = threading.Lock()
 
     # Transcript cache helpers
@@ -107,7 +108,7 @@ class ASRStreamWorker:
     def _append_final_segment_to_cache(self, text: str) -> None:
         """
         Accoda un segmento "final" in cache (lista di stringhe).
-        Chiamato da callback Azure (thread), quindi deve essere robusto.
+        Chiamato da callback ASR (thread), quindi deve essere robusto.
         """
         t = (text or "").strip()
         if not t:
@@ -120,7 +121,7 @@ class ASRStreamWorker:
                 if not isinstance(segments, list):
                     segments = []
 
-                # deduplica soft: se Azure ripete l'ultimo final, non duplicare
+                # deduplica soft: se il provider ripete l'ultimo final, non duplicare
                 if segments:
                     last = str(segments[-1]).strip()
                     if last and (t == last or t in last or last in t):
@@ -161,32 +162,32 @@ class ASRStreamWorker:
 
     # Lifecycle
 
-    def _init_azure_client(self) -> None:
-        key = getattr(settings, "AZURE_SPEECH_KEY", None)
-        region = getattr(settings, "AZURE_SPEECH_REGION", None)
-        language = getattr(settings, "AZURE_SPEECH_LANGUAGE", "it-IT")
+    def _init_asr_client(self) -> None:
+        api_key = getattr(settings, "OPENAI_API_KEY", None)
+        model = getattr(settings, "OPENAI_STT_MODEL", "gpt-4o-mini-transcribe")
+        language = getattr(settings, "OPENAI_STT_LANGUAGE", "it")
 
-        if not key or not region:
-            logger.warning("[ASR] Azure Speech non configurato (key/region mancanti)")
+        if not api_key:
+            logger.warning("[ASR] OpenAI non configurato (OPENAI_API_KEY mancante)")
             return
 
         def _on_partial(text: str) -> None:
             if text:
-                logger.info("[ASR][AZURE][partial] session=%s user=%s text=%r", self.session_id, self.user_id, text)
+                logger.info("[ASR][OPENAI][partial] session=%s user=%s text=%r", self.session_id, self.user_id, text)
 
         def _on_final(text: str) -> None:
             # Log + persistenza in cache per consumo da TurnsConsumer (fine turno)
             if text:
-                logger.info("[ASR][AZURE][final] session=%s user=%s text=%r", self.session_id, self.user_id, text)
+                logger.info("[ASR][OPENAI][final] session=%s user=%s text=%r", self.session_id, self.user_id, text)
                 self._append_final_segment_to_cache(text)
 
-        self._azure_client = AzureStreamingClient(
-            key=key,
-            region=region,
+        self._asr_client = ASRStreamingClient(
+            api_key=api_key,
+            model=model,
             language=language,
             on_partial=_on_partial,
             on_final=_on_final,
-            sample_rate_hz=self.AZURE_TARGET_SR,
+            sample_rate_hz=self.ASR_TARGET_SR,
             channels=1,
             bits_per_sample=16,
         )
@@ -220,24 +221,24 @@ class ASRStreamWorker:
         # debug wav
         self._debug_wav_enabled = os.getenv(self.DEBUG_WAV_ENV, "0") == "1"
         self._debug_wav_raw_buf.clear()
-        self._debug_wav_16k_buf.clear()
+        self._debug_wav_target_buf.clear()
         self._debug_wav_raw_sr = None
         if self._debug_wav_enabled:
             self._debug_wav_raw_path = f"/tmp/asr_debug_raw_{self.session_id}.wav"
-            self._debug_wav_16k_path = f"/tmp/asr_debug_16k_{self.session_id}.wav"
+            self._debug_wav_target_path = f"/tmp/asr_debug_{self.ASR_TARGET_SR}_{self.session_id}.wav"
         else:
             self._debug_wav_raw_path = None
-            self._debug_wav_16k_path = None
+            self._debug_wav_target_path = None
 
         logger.info("[ASR] Worker avviato session=%s user=%s", self.session_id, self.user_id)
 
-        self._init_azure_client()
-        if self._azure_client:
-            self._azure_client.start()
-            logger.info("[ASR] AzureStreamingClient avviato session=%s user=%s", self.session_id, self.user_id)
+        self._init_asr_client()
+        if self._asr_client:
+            self._asr_client.start()
+            logger.info("[ASR] client streaming avviato session=%s user=%s", self.session_id, self.user_id)
 
     def _try_signal_end_of_stream(self) -> None:
-        c = self._azure_client
+        c = self._asr_client
         if c is None:
             return
         for name in ("end_stream", "end_of_stream", "close_stream", "close", "finish", "complete"):
@@ -245,13 +246,13 @@ class ASRStreamWorker:
             if callable(fn):
                 try:
                     fn()
-                    logger.info("[ASR] Segnalato end-of-stream a Azure via %s()", name)
+                    logger.info("[ASR] Segnalato end-of-stream al client via %s()", name)
                 except Exception:
                     logger.exception("[ASR] Errore durante end-of-stream via %s()", name)
                 return
 
     def _drain_queue_best_effort(self, timeout_s: float) -> None:
-        c = self._azure_client
+        c = self._asr_client
         if c is None:
             return
 
@@ -292,28 +293,28 @@ class ASRStreamWorker:
             return
         if self._debug_wav_raw_path and self._debug_wav_raw_sr and self._debug_wav_raw_buf:
             self._write_wav(self._debug_wav_raw_path, self._debug_wav_raw_sr, bytes(self._debug_wav_raw_buf))
-        if self._debug_wav_16k_path and self._debug_wav_16k_buf:
-            self._write_wav(self._debug_wav_16k_path, self.AZURE_TARGET_SR, bytes(self._debug_wav_16k_buf))
+        if self._debug_wav_target_path and self._debug_wav_target_buf:
+            self._write_wav(self._debug_wav_target_path, self.ASR_TARGET_SR, bytes(self._debug_wav_target_buf))
 
     def stop(self) -> None:
         if not self.started:
             return
 
         # flush residuo
-        if self._azure_client and self._push_buf:
+        if self._asr_client and self._push_buf:
             try:
-                self._azure_client.push_audio(bytes(self._push_buf))
+                self._asr_client.push_audio(bytes(self._push_buf))
                 self._sent_bytes += len(self._push_buf)
             except Exception:
-                logger.exception("[ASR] Errore flush buffer a Azure session=%s user=%s", self.session_id, self.user_id)
+                logger.exception("[ASR] Errore flush buffer al client session=%s user=%s", self.session_id, self.user_id)
             self._push_buf.clear()
 
         self._try_signal_end_of_stream()
         time.sleep(self.STOP_GRACE_SLEEP_S)
         self._drain_queue_best_effort(timeout_s=self.DRAIN_TIMEOUT_S)
 
-        if self._azure_client:
-            self._azure_client.stop()
+        if self._asr_client:
+            self._asr_client.stop()
 
         self._write_debug_wavs()
 
@@ -328,7 +329,7 @@ class ASRStreamWorker:
         )
 
         self.started = False
-        self._azure_client = None
+        self._asr_client = None
 
     # Audio helpers
 
@@ -391,30 +392,33 @@ class ASRStreamWorker:
         x = mono.astype(np.int32, copy=False)
         return np.clip(x, -32768, 32767).astype(np.int16)
 
-    def _resample_to_16k(self, pcm_int16: np.ndarray, src_sr: int) -> tuple[np.ndarray, int]:
-        if src_sr == self.AZURE_TARGET_SR or src_sr <= 0:
+    def _resample_to_target(self, pcm_int16: np.ndarray, src_sr: int) -> tuple[np.ndarray, int]:
+        """Resample PCM mono int16 alla frequenza target ASR_TARGET_SR."""
+        if src_sr == self.ASR_TARGET_SR or src_sr <= 0:
             return pcm_int16, src_sr
 
-        if src_sr == 48000:
-            n = (len(pcm_int16) // 3) * 3
+        # Fast path 48kHz → 24kHz: decimate 2x con media coppia
+        if src_sr == 48000 and self.ASR_TARGET_SR == 24000:
+            n = (len(pcm_int16) // 2) * 2
             if n <= 0:
                 return pcm_int16, src_sr
             x = pcm_int16[:n].astype(np.float32)
-            y = x.reshape(-1, 3).mean(axis=1)
-            return y.astype(np.int16), self.AZURE_TARGET_SR
+            y = x.reshape(-1, 2).mean(axis=1)
+            return y.astype(np.int16), self.ASR_TARGET_SR
 
+        # Path generico: interpolazione lineare
         x = pcm_int16.astype(np.float32)
         src_len = len(x)
         if src_len < 2:
             return pcm_int16, src_sr
 
-        dst_len = int(round(src_len * (self.AZURE_TARGET_SR / float(src_sr))))
+        dst_len = int(round(src_len * (self.ASR_TARGET_SR / float(src_sr))))
         dst_len = max(dst_len, 1)
 
         src_idx = np.linspace(0, src_len - 1, src_len)
         dst_idx = np.linspace(0, src_len - 1, dst_len)
         y = np.interp(dst_idx, src_idx, x)
-        return y.astype(np.int16), self.AZURE_TARGET_SR
+        return y.astype(np.int16), self.ASR_TARGET_SR
 
     @staticmethod
     def _rms_i16(x_i16: np.ndarray) -> float:
@@ -423,10 +427,10 @@ class ASRStreamWorker:
         xf = x_i16.astype(np.float32)
         return float(np.sqrt(np.mean(xf * xf)))
 
-    def _apply_gain_softclip(self, pcm_16k_i16: np.ndarray) -> np.ndarray:
+    def _apply_gain_softclip(self, pcm_target_i16: np.ndarray) -> np.ndarray:
         if self.GAIN <= 1.0001:
-            return pcm_16k_i16
-        x = pcm_16k_i16.astype(np.float32) * float(self.GAIN)
+            return pcm_target_i16
+        x = pcm_target_i16.astype(np.float32) * float(self.GAIN)
         limit = float(self.SOFTCLIP_LEVEL) * 32767.0
         limit = 32767.0 if limit <= 0 else limit
         y = np.tanh(x / limit) * limit
@@ -502,32 +506,32 @@ class ASRStreamWorker:
                 self._debug_wav_raw_buf.extend(raw_bytes[:remaining])
 
         # resample -> 16k
-        pcm_16k, out_sr = self._resample_to_16k(mono_i16, src_sr)
-        if not pcm_16k.size:
+        pcm_target, out_sr = self._resample_to_target(mono_i16, src_sr)
+        if not pcm_target.size:
             return
 
         # gain (di default no-op)
-        pcm_16k_g = self._apply_gain_softclip(pcm_16k)
+        pcm_target_g = self._apply_gain_softclip(pcm_target)
 
-        peak = int(np.max(np.abs(pcm_16k_g)))
-        rms = self._rms_i16(pcm_16k_g)
+        peak = int(np.max(np.abs(pcm_target_g)))
+        rms = self._rms_i16(pcm_target_g)
 
         now = time.time()
         if now < self._warmup_until:
             return
 
-        # --- DEBUG 16k (dopo warmup, come lo mandi ad Azure) ---
-        if self._debug_wav_enabled and len(self._debug_wav_16k_buf) < self._debug_wav_max_bytes_16k:
-            b = pcm_16k_g.tobytes()
-            remaining = self._debug_wav_max_bytes_16k - len(self._debug_wav_16k_buf)
-            self._debug_wav_16k_buf.extend(b[:remaining])
+        # --- DEBUG target-rate (dopo warmup, come lo mandi al client ASR) ---
+        if self._debug_wav_enabled and len(self._debug_wav_target_buf) < self._debug_wav_max_bytes_target:
+            b = pcm_target_g.tobytes()
+            remaining = self._debug_wav_max_bytes_target - len(self._debug_wav_target_buf)
+            self._debug_wav_target_buf.extend(b[:remaining])
 
         # diagnostica 1Hz (post-processing)
-        x = pcm_16k_g.astype(np.float32)
+        x = pcm_target_g.astype(np.float32)
         self._rms_acc += float(np.mean(x * x))
         self._rms_n += 1
-        self._zero_n += int(np.sum(pcm_16k_g == 0))
-        self._tot_n += int(pcm_16k_g.size)
+        self._zero_n += int(np.sum(pcm_target_g == 0))
+        self._tot_n += int(pcm_target_g.size)
 
         if now >= self._diag_next and self._rms_n > 0:
             rms_1s = (self._rms_acc / self._rms_n) ** 0.5
@@ -542,23 +546,23 @@ class ASRStreamWorker:
             self._tot_n = 0
             self._diag_next = now + (1.0 / self.DIAG_HZ)
 
-        pcm_bytes = pcm_16k_g.tobytes()
+        pcm_bytes = pcm_target_g.tobytes()
         num_bytes = int(len(pcm_bytes))
 
         self.total_bytes += num_bytes
-        self.total_samples += int(pcm_16k_g.shape[0])
+        self.total_samples += int(pcm_target_g.shape[0])
 
         self._push_buf.extend(pcm_bytes)
 
-        if self._azure_client and len(self._push_buf) >= self.AZURE_PUSH_BYTES:
+        if self._asr_client and len(self._push_buf) >= self.ASR_PUSH_BYTES:
             try:
-                while len(self._push_buf) >= self.AZURE_PUSH_BYTES:
-                    chunk = bytes(self._push_buf[: self.AZURE_PUSH_BYTES])
-                    del self._push_buf[: self.AZURE_PUSH_BYTES]
-                    self._azure_client.push_audio(chunk)
+                while len(self._push_buf) >= self.ASR_PUSH_BYTES:
+                    chunk = bytes(self._push_buf[: self.ASR_PUSH_BYTES])
+                    del self._push_buf[: self.ASR_PUSH_BYTES]
+                    self._asr_client.push_audio(chunk)
                     self._sent_bytes += len(chunk)
             except Exception:
-                logger.exception("[ASR] Errore invio buffer a Azure session=%s user=%s", self.session_id, self.user_id)
+                logger.exception("[ASR] Errore invio buffer al client session=%s user=%s", self.session_id, self.user_id)
                 self._push_buf.clear()
 
             logger.info(

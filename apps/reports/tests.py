@@ -29,7 +29,7 @@ class ReportLLMServiceTests(TestCase):
         self.assertIsInstance(result, str)
         self.assertGreater(len(result), 0)
 
-    @patch.object(ReportLLMService, '_build_azure_client')
+    @patch.object(ReportLLMService, '_build_openai_client')
     def test_generate_report_text_calls_azure(self, mock_client):
         """generate_report_text should call Azure OpenAI."""
         mock_response = MagicMock()
@@ -56,7 +56,7 @@ class ReportLLMServiceTests(TestCase):
 
     def test_fallback_report_on_error(self):
         """Fallback report is returned on Azure error."""
-        with patch.object(ReportLLMService, '_build_azure_client', side_effect=Exception("API Error")):
+        with patch.object(ReportLLMService, '_build_openai_client', side_effect=Exception("API Error")):
             data = {
                 "session_title": "Test Session",
                 "duration_minutes": 20,
