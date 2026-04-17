@@ -135,14 +135,11 @@ class Session(models.Model):
         return self.participants.count()
 
     def start(self):
-        # Transizione LOBBY -> ACTIVE (capienza richiesta raggiunta)
+        # Transizione LOBBY -> ACTIVE (minimo partecipanti raggiunto)
         if self.state != SessionState.LOBBY:
             raise ValidationError("La sessione non è in stato LOBBY.")
-        if self.participants_count < self.min_size or self.participants_count < self.max_size:
-            # Per Murder Mystery (3/3) va raggiunta la capienza; per altri contesti
-            # si può personalizzare. In MVP: avvio al raggiungimento della capienza.
-            if self.participants_count != self.max_size:
-                raise ValidationError("Capienza richiesta non raggiunta.")
+        if self.participants_count < self.min_size:
+            raise ValidationError("Numero minimo di partecipanti non raggiunto.")
         self.state = SessionState.ACTIVE
         self.started_at = timezone.now()
 

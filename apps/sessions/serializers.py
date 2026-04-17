@@ -210,9 +210,9 @@ class SessionStartSerializer(serializers.Serializer):
             raise serializers.ValidationError("Solo l'host può avviare la sessione.")
         if session.state != SessionState.LOBBY:
             raise serializers.ValidationError("La sessione non è in stato LOBBY.")
-        # Capienza richiesta raggiunta (MVP: avvio a capienza piena)
-        if session.participants_count != session.max_size:
-            raise serializers.ValidationError("Capienza richiesta non raggiunta.")
+        # Minimo partecipanti raggiunto
+        if session.participants_count < session.min_size:
+            raise serializers.ValidationError("Numero minimo di partecipanti non raggiunto.")
         return attrs
 
     @transaction.atomic
