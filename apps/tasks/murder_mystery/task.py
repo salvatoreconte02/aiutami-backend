@@ -82,6 +82,26 @@ class MurderMysteryTask(TaskDefinition):
         # Testo MM verbatim pre-refactor (apps/moderation/intro.py)
         return "Quando avrete capito chi è il colpevole, premete 'Pronto alla conclusione'."
 
+    def ready_to_conclude_messages(self) -> Dict[str, list[str]]:
+        return {
+            "normal": [
+                "{nome} è pronto a concludere. Se hai capito con certezza di chi si tratta, premi anche tu 'Pronto alla conclusione' per terminare la sessione.",
+                "{nome} ha indicato di essere pronto alla conclusione. Quando anche tu avrai raggiunto una certezza, premi il pulsante per concludere.",
+                "{nome} si è dichiarato pronto a concludere. Se hai già individuato il colpevole, puoi premere 'Pronto alla conclusione'.",
+                "{nome} è pronto. Ricorda: quando sei sicuro di chi si tratta, premi 'Pronto alla conclusione' per avviare la fase finale.",
+            ],
+            "last_one": [
+                "{nome} è pronto a concludere. Ora manca solo un partecipante per avviare la fase finale.",
+                "{nome} si è dichiarato pronto. Manca solo una persona: se hai raggiunto una certezza, premi 'Pronto alla conclusione'.",
+                "{nome} è pronto. Quasi tutti hanno deciso: manca solo un voto per concludere la sessione.",
+            ],
+            "all_ready": [
+                "Tutti i partecipanti sono pronti. Possiamo avviarci alla fase finale: è il momento di indicare chi pensate sia il colpevole.",
+                "Tutti hanno deciso. Possiamo avviarci alla fase finale per votare il colpevole.",
+                "Siete tutti pronti. Avviamoci alla votazione del colpevole.",
+            ],
+        }
+
     # --- Step 5: report ---
 
     def build_report_llm_prompt(self) -> str:

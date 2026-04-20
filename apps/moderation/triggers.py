@@ -5,6 +5,8 @@ import random
 
 from django.core.cache import cache
 
+from apps.tasks.base import TaskDefinition
+
 from .state import ModerationState
 from .service import HardModerationAction, SUMMARY_TURNS_INTERVAL
 
@@ -14,25 +16,6 @@ NO_PUSH_MESSAGES = [
     "C'è un momento di silenzio. Se qualcuno ha un pensiero da condividere, questo è un buon momento.",
     "Se qualcuno desidera aggiungere qualcosa alla discussione, può prendere la parola.",
     "La discussione è in pausa. Chi vuole intervenire può farlo ora.",
-]
-
-READY_TO_CONCLUDE_MESSAGES = [
-    "{nome} è pronto a concludere. Se hai capito con certezza di chi si tratta, premi anche tu 'pronto alla conclusione' per terminare la sessione.",
-    "{nome} ha indicato di essere pronto alla conclusione. Quando anche tu avrai raggiunto una certezza, premi il pulsante per concludere.",
-    "{nome} si è dichiarato pronto a concludere. Se hai già individuato il colpevole, puoi premere 'pronto alla conclusione'.",
-    "{nome} è pronto. Ricorda: quando sei sicuro di chi si tratta, premi 'pronto alla conclusione' per avviare la fase finale.",
-]
-
-READY_TO_CONCLUDE_LAST_ONE_MESSAGES = [
-    "{nome} è pronto a concludere. Ora manca solo un partecipante per avviare la fase finale.",
-    "{nome} si è dichiarato pronto. Manca solo una persona: se hai raggiunto una certezza, premi 'pronto alla conclusione'.",
-    "{nome} è pronto. Quasi tutti hanno deciso: manca solo un voto per concludere la sessione.",
-]
-
-READY_TO_CONCLUDE_ALL_READY_MESSAGES = [
-    "Tutti i partecipanti sono pronti. Possiamo avviarci alla fase di conclusione.",
-    "Tutti hanno deciso. Possiamo avviarci alla fase di conclusione.",
-    "Siete tutti pronti. Possiamo avviarci alla fase di conclusione.",
 ]
 
 # Varianti messaggio per trigger INACTIVE_USER (Livello 2: voce, 10 min)
@@ -68,6 +51,8 @@ def generate_ready_to_conclude_message(
     user_name: str,
     ready_count: int,
     total_count: int,
+    *,
+    task: TaskDefinition,
 ) -> ReadyToConcludeResult:
     """
     Genera il messaggio per quando un utente clicca 'pronto a concludere'.
@@ -76,24 +61,23 @@ def generate_ready_to_conclude_message(
         user_name: Nome dell'utente che ha cliccato
         ready_count: Numero di utenti già pronti (incluso questo)
         total_count: Numero totale di partecipanti
+        task: TaskDefinition della sessione, fornisce i template task-specifici
 
     Returns:
         ReadyToConcludeResult con messaggio e flag trigger_conclusion
     """
     trigger_conclusion = False
+    templates = task.ready_to_conclude_messages()
 
     # Caso "tutti pronti": ready_count == total_count
     if ready_count == total_count:
-        template = random.choice(READY_TO_CONCLUDE_ALL_READY_MESSAGES)
-        text = template
+        text = random.choice(templates["all_ready"])
         trigger_conclusion = True
     # Caso "manca solo uno": ready_count == total_count - 1
     elif ready_count == total_count - 1:
-        template = random.choice(READY_TO_CONCLUDE_LAST_ONE_MESSAGES)
-        text = template.format(nome=user_name)
+        text = random.choice(templates["last_one"]).format(nome=user_name)
     else:
-        template = random.choice(READY_TO_CONCLUDE_MESSAGES)
-        text = template.format(nome=user_name)
+        text = random.choice(templates["normal"]).format(nome=user_name)
 
     return ReadyToConcludeResult(
         message=StaticMessage(text=text, use_tts=True),

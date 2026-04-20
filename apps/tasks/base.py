@@ -99,6 +99,38 @@ class TaskDefinition(ABC):
         """
         return "Quando sarete pronti a concludere, premete 'Pronto alla conclusione'."
 
+    def ready_to_conclude_messages(self) -> Dict[str, list[str]]:
+        """
+        Template dei messaggi pronunciati dal moderatore quando un partecipante
+        preme "Pronto alla conclusione". Tre varianti:
+
+          - "normal": un partecipante è pronto, ne mancano altri.
+          - "last_one": manca un solo partecipante.
+          - "all_ready": tutti pronti, si transiziona a CONCLUSION.
+
+        I template "normal" e "last_one" devono contenere il placeholder
+        `{nome}`; "all_ready" no. Default = testi task-agnostici (nessun
+        riferimento a colpevole/ranking/ecc.). I task concreti possono
+        sovrascrivere per aggiungere terminologia di scenario.
+        """
+        return {
+            "normal": [
+                "{nome} è pronto a concludere. Quando anche tu sei pronto, premi 'Pronto alla conclusione' per terminare la sessione.",
+                "{nome} ha indicato di essere pronto alla conclusione. Premi anche tu il pulsante quando vuoi chiudere la discussione.",
+                "{nome} si è dichiarato pronto a concludere. Se sei pronto anche tu, premi 'Pronto alla conclusione'.",
+            ],
+            "last_one": [
+                "{nome} è pronto a concludere. Manca solo un partecipante per avviare la fase finale.",
+                "{nome} si è dichiarato pronto. Manca solo una persona: quando sei pronto, premi 'Pronto alla conclusione'.",
+                "{nome} è pronto. Manca solo un voto per concludere la sessione.",
+            ],
+            "all_ready": [
+                "Tutti i partecipanti sono pronti. Possiamo avviarci alla fase di conclusione.",
+                "Tutti hanno deciso. Possiamo avviarci alla fase di conclusione.",
+                "Siete tutti pronti. Possiamo avviarci alla fase di conclusione.",
+            ],
+        }
+
     def fallback_forced_conclusion_body(
         self, summary: str, conclusion_reason: str
     ) -> str:

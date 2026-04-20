@@ -84,6 +84,25 @@ class NasaMoonTask(TaskDefinition):
             "Quando il gruppo sara d'accordo sul ranking, premete 'Pronto alla conclusione'."
         )
 
+    def ready_to_conclude_messages(self) -> Dict[str, list[str]]:
+        return {
+            "normal": [
+                "{nome} è pronto a concludere. Se anche tu pensi che il ranking finale sia condiviso, premi 'Pronto alla conclusione'.",
+                "{nome} ha indicato di essere pronto alla conclusione. Quando anche tu sarai d'accordo sul ranking, premi il pulsante.",
+                "{nome} si è dichiarato pronto a concludere. Se ritieni che il gruppo abbia raggiunto un consenso, premi 'Pronto alla conclusione'.",
+            ],
+            "last_one": [
+                "{nome} è pronto a concludere. Manca solo un partecipante per chiudere il ranking.",
+                "{nome} si è dichiarato pronto. Manca solo una persona: se sei d'accordo sul ranking, premi 'Pronto alla conclusione'.",
+                "{nome} è pronto. Quasi tutti hanno deciso: manca solo un consenso per concludere.",
+            ],
+            "all_ready": [
+                "Tutti i partecipanti sono pronti. Possiamo chiudere la discussione: l'host confermerà ora il ranking finale.",
+                "Tutti hanno deciso. Avviamoci alla conferma del ranking finale.",
+                "Siete tutti pronti. Possiamo passare alla conferma del ranking dei 15 oggetti.",
+            ],
+        }
+
     def fallback_forced_conclusion_body(
         self, summary: str, conclusion_reason: str
     ) -> str:

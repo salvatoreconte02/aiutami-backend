@@ -943,11 +943,14 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         except Exception:
             duration_minutes = 30
 
+        task_key = await self._get_session_task_key()
+
         # Chiama LLM in modalità forced_conclusion
         result = await database_sync_to_async(ModerationService.call_llm_for_conclusion)(
             summary_in=state.summary,
             conclusion_reason=conclusion_reason,
             session_duration_minutes=duration_minutes,
+            task_key=task_key,
         )
 
         # Esegue messaggio TTS
@@ -975,6 +978,16 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         except Session.DoesNotExist:
             pass
         return 30  # Valore predefinito
+
+    @database_sync_to_async
+    def _get_session_task_key(self) -> str | None:
+        """Ritorna la chiave del task (Session.context) per la sessione corrente."""
+        from apps.sessions.models import Session
+
+        try:
+            return Session.objects.values_list("context", flat=True).get(pk=self.session_id)
+        except Session.DoesNotExist:
+            return None
 
     @database_sync_to_async
     def _set_conclusion_reason(self, reason: str) -> None:

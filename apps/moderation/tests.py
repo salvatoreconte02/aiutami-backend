@@ -928,77 +928,84 @@ class Timer25TriggerTypeTests(TestCase):
 class ReadyToConcludeTests(TestCase):
     """Tests for ready_to_conclude trigger fixes."""
 
+    def _task(self, key="murder_mystery"):
+        from apps.tasks.registry import get_task
+        return get_task(key)
+
     def test_ready_to_conclude_message_variants_exist(self):
-        """Verify READY_TO_CONCLUDE_MESSAGES constants exist."""
-        from apps.moderation.triggers import (
-            READY_TO_CONCLUDE_MESSAGES,
-            READY_TO_CONCLUDE_LAST_ONE_MESSAGES,
-        )
+        """Each task exposes ready_to_conclude templates with {nome} placeholders."""
+        for key in ("murder_mystery", "nasa_moon_survival", "generic"):
+            templates = self._task(key).ready_to_conclude_messages()
 
-        self.assertGreater(len(READY_TO_CONCLUDE_MESSAGES), 1)
-        self.assertGreater(len(READY_TO_CONCLUDE_LAST_ONE_MESSAGES), 1)
+            self.assertGreaterEqual(len(templates["normal"]), 1)
+            self.assertGreaterEqual(len(templates["last_one"]), 1)
+            self.assertGreaterEqual(len(templates["all_ready"]), 1)
 
-        # All should have {nome} placeholder
-        for msg in READY_TO_CONCLUDE_MESSAGES:
-            self.assertIn("{nome}", msg)
-        for msg in READY_TO_CONCLUDE_LAST_ONE_MESSAGES:
-            self.assertIn("{nome}", msg)
+            for msg in templates["normal"]:
+                self.assertIn("{nome}", msg)
+            for msg in templates["last_one"]:
+                self.assertIn("{nome}", msg)
 
     def test_generate_ready_to_conclude_message_normal(self):
         """generate_ready_to_conclude_message returns normal variant."""
-        from apps.moderation.triggers import (
-            generate_ready_to_conclude_message,
-            READY_TO_CONCLUDE_MESSAGES,
+        from apps.moderation.triggers import generate_ready_to_conclude_message
+
+        result = generate_ready_to_conclude_message(
+            "Mario", ready_count=1, total_count=4, task=self._task(),
         )
 
-        result = generate_ready_to_conclude_message("Mario", ready_count=1, total_count=4)
-
-        # Should be TTS
         self.assertTrue(result.message.use_tts)
-        # Should contain user name
         self.assertIn("Mario", result.message.text)
-        # Should NOT trigger conclusion (not 3/3)
         self.assertFalse(result.trigger_conclusion)
 
     def test_generate_ready_to_conclude_message_last_one(self):
         """generate_ready_to_conclude_message returns 'last one' variant when appropriate."""
-        from apps.moderation.triggers import (
-            generate_ready_to_conclude_message,
-            READY_TO_CONCLUDE_LAST_ONE_MESSAGES,
-        )
+        from apps.moderation.triggers import generate_ready_to_conclude_message
 
-        # 3 ready out of 4 = only 1 missing
-        result = generate_ready_to_conclude_message("Luigi", ready_count=3, total_count=4)
+        result = generate_ready_to_conclude_message(
+            "Luigi", ready_count=3, total_count=4, task=self._task(),
+        )
 
         self.assertTrue(result.message.use_tts)
         self.assertIn("Luigi", result.message.text)
-        # Should mention "manca solo" or similar
         self.assertTrue(
             "manca solo" in result.message.text.lower() or
             "quasi tutti" in result.message.text.lower()
         )
-        # Should NOT trigger conclusion (not 4/4)
         self.assertFalse(result.trigger_conclusion)
 
     def test_generate_ready_to_conclude_message_all_ready(self):
         """generate_ready_to_conclude_message returns 'all ready' variant and triggers conclusion."""
-        from apps.moderation.triggers import (
-            generate_ready_to_conclude_message,
-            READY_TO_CONCLUDE_ALL_READY_MESSAGES,
-        )
+        from apps.moderation.triggers import generate_ready_to_conclude_message
 
-        # 4 ready out of 4 = all ready
-        result = generate_ready_to_conclude_message("Luigi", ready_count=4, total_count=4)
+        result = generate_ready_to_conclude_message(
+            "Luigi", ready_count=4, total_count=4, task=self._task(),
+        )
 
         self.assertTrue(result.message.use_tts)
-        # Should NOT contain user name (all ready messages don't have {nome})
         self.assertNotIn("Luigi", result.message.text)
-        # Should mention "tutti" or similar
-        self.assertTrue(
-            "tutti" in result.message.text.lower()
-        )
-        # Should trigger conclusion (4/4)
+        self.assertTrue("tutti" in result.message.text.lower())
         self.assertTrue(result.trigger_conclusion)
+
+    def test_generic_task_messages_no_mm_terminology(self):
+        """Generic task templates must not leak Murder Mystery vocabulary."""
+        templates = self._task("generic").ready_to_conclude_messages()
+        forbidden = ("colpevol", "omicid", "assassin", "vittim", "indizi", "sospett")
+        all_text = " ".join(
+            templates["normal"] + templates["last_one"] + templates["all_ready"]
+        ).lower()
+        for word in forbidden:
+            self.assertNotIn(word, all_text)
+
+    def test_nasa_task_messages_no_mm_terminology(self):
+        """NASA task templates must not leak Murder Mystery vocabulary."""
+        templates = self._task("nasa_moon_survival").ready_to_conclude_messages()
+        forbidden = ("colpevol", "omicid", "assassin", "vittim", "indizi", "sospett")
+        all_text = " ".join(
+            templates["normal"] + templates["last_one"] + templates["all_ready"]
+        ).lower()
+        for word in forbidden:
+            self.assertNotIn(word, all_text)
 
 
 class ModerationStateTurnsPerParticipantTests(TestCase):
