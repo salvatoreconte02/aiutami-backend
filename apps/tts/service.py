@@ -6,13 +6,13 @@ di parlare agli utenti via WebRTC. Risample 24kHz→48kHz per
 compatibilità con l'audio hub.
 """
 from dataclasses import dataclass
-from typing import Callable, Awaitable, Optional
+from typing import Callable, Awaitable, Optional, Tuple
 import asyncio
 import logging
 
 import numpy as np
 from django.conf import settings
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +32,23 @@ OUTPUT_SAMPLE_RATE = 48000
 BYTES_PER_SAMPLE = 2
 CHANNELS = 1
 
+# Buffer di lettura dallo stream HTTP. Più piccolo = primo chunk audio più rapido,
+# meno chunk = meno overhead. 2048 bytes = 1024 sample 24k = ~42ms input.
+STREAM_READ_CHUNK_SIZE = 2048
+
+# Granularità di emissione verso AudioHub: 20ms = packet WebRTC standard.
+OUTPUT_FRAME_SIZE = OUTPUT_SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS // 50
+OUTPUT_FRAME_DURATION_SEC = OUTPUT_FRAME_SIZE / (OUTPUT_SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS)
+
 
 class TTSService:
     """
-    OpenAI TTS con streaming audio.
+    OpenAI TTS con streaming end-to-end.
 
-    Sintetizza testo in audio PCM 48kHz mono, compatibile con AudioHub.
+    Apre una connessione streaming a OpenAI, riceve PCM 24kHz mentre
+    viene generato, lo upsampla a 48kHz e lo invia all'AudioHub in frame
+    da 20ms con pacing realtime. Riduce il time-to-first-audio rispetto
+    al batch (che attendeva l'intero file prima di iniziare il playback).
     """
 
     def __init__(self):
@@ -74,56 +85,103 @@ class TTSService:
         text: str,
         on_audio_chunk: Callable[[bytes, int, int], Awaitable[None]]
     ) -> TTSResult:
-        """Esegue la sintesi con OpenAI TTS."""
-        client = OpenAI(api_key=self._api_key)
+        """Esegue la sintesi con OpenAI TTS in streaming."""
+        client = AsyncOpenAI(api_key=self._api_key)
 
-        # Chiamata bloccante in thread pool
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.audio.speech.create(
-                model=self._model,
-                voice=self._voice,
-                input=text,
-                response_format="pcm",
-            ),
-        )
+        prev_last_sample: Optional[int] = None
+        residual_48k = bytearray()
+        total_output_bytes = 0
 
-        audio_data_24k = response.read()
-        if not audio_data_24k:
+        async with client.audio.speech.with_streaming_response.create(
+            model=self._model,
+            voice=self._voice,
+            input=text,
+            response_format="pcm",
+        ) as response:
+            async for chunk_24k in response.iter_bytes(chunk_size=STREAM_READ_CHUNK_SIZE):
+                if not chunk_24k:
+                    continue
+
+                chunk_48k, prev_last_sample = self._resample_chunk_24k_to_48k(
+                    chunk_24k, prev_last_sample
+                )
+                if not chunk_48k:
+                    continue
+
+                residual_48k.extend(chunk_48k)
+
+                # Emette frame da 20ms con pacing realtime (~90% per evitare underrun).
+                while len(residual_48k) >= OUTPUT_FRAME_SIZE:
+                    frame = bytes(residual_48k[:OUTPUT_FRAME_SIZE])
+                    del residual_48k[:OUTPUT_FRAME_SIZE]
+                    await on_audio_chunk(
+                        frame, OUTPUT_FRAME_SIZE // BYTES_PER_SAMPLE, OUTPUT_SAMPLE_RATE
+                    )
+                    total_output_bytes += OUTPUT_FRAME_SIZE
+                    await asyncio.sleep(OUTPUT_FRAME_DURATION_SEC * 0.9)
+
+        # Emette eventuale frame residuo finale (< 20ms)
+        if residual_48k:
+            frame = bytes(residual_48k)
+            await on_audio_chunk(
+                frame, len(frame) // BYTES_PER_SAMPLE, OUTPUT_SAMPLE_RATE
+            )
+            total_output_bytes += len(frame)
+
+        if total_output_bytes == 0:
             return TTSResult(success=False, duration_ms=None, error="empty_audio")
 
-        # Resample 24kHz → 48kHz (upsample 2x con interpolazione lineare)
-        audio_data = self._resample_24k_to_48k(audio_data_24k)
-
-        # Durata calcolata dai bytes output
         duration_ms = int(
-            len(audio_data) / (OUTPUT_SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS) * 1000
+            total_output_bytes / (OUTPUT_SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS) * 1000
         )
-
-        # Invia audio in chunk con pacing per rispettare il timing reale
-        chunk_size = OUTPUT_SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS // 50  # 20ms
-        chunk_duration_sec = chunk_size / (OUTPUT_SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS)
-
-        for i in range(0, len(audio_data), chunk_size):
-            chunk = audio_data[i:i + chunk_size]
-            samples = len(chunk) // BYTES_PER_SAMPLE
-            await on_audio_chunk(chunk, samples, OUTPUT_SAMPLE_RATE)
-            # Pacing: ~90% della durata per evitare underrun
-            await asyncio.sleep(chunk_duration_sec * 0.9)
-
         return TTSResult(success=True, duration_ms=duration_ms, error=None)
 
     @staticmethod
-    def _resample_24k_to_48k(pcm_bytes: bytes) -> bytes:
-        """Upsample PCM 16-bit mono da 24kHz a 48kHz via interpolazione lineare."""
+    def _resample_chunk_24k_to_48k(
+        pcm_bytes: bytes, prev_last_sample: Optional[int]
+    ) -> Tuple[bytes, Optional[int]]:
+        """
+        Upsample 2x con interpolazione lineare per uno stream chunked.
+
+        Mantiene continuità ai bordi usando l'ultimo sample del chunk
+        precedente: il primo sample di output di ogni chunk è la media
+        tra prev_last_sample e il primo sample del chunk corrente.
+
+        Per il primo chunk (prev_last_sample=None) duplica il primo sample
+        come "predecessore virtuale" — equivalente a non interpolare il primo
+        bordo, dato che non c'è discontinuità da nascondere.
+
+        Returns:
+            (output_pcm_48k_bytes, last_input_sample) — passare il secondo
+            come prev_last_sample alla chiamata successiva.
+        """
         if not pcm_bytes:
-            return b""
-        pcm_in = np.frombuffer(pcm_bytes, dtype=np.int16)
-        if len(pcm_in) < 2:
-            # Pochi sample: duplica semplicemente
-            return np.repeat(pcm_in, 2).tobytes()
-        x_old = np.arange(len(pcm_in), dtype=np.float32)
-        x_new = np.linspace(0.0, float(len(pcm_in) - 1), num=len(pcm_in) * 2, dtype=np.float32)
-        pcm_out = np.interp(x_new, x_old, pcm_in.astype(np.float32))
-        return np.clip(pcm_out, -32768, 32767).astype(np.int16).tobytes()
+            return b"", prev_last_sample
+
+        pcm_in = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32)
+        n = len(pcm_in)
+        if n == 0:
+            return b"", prev_last_sample
+
+        prev = float(prev_last_sample) if prev_last_sample is not None else float(pcm_in[0])
+
+        # Estensione: [prev, x0, x1, ..., x(n-1)] su posizioni [0, 1, ..., n].
+        # Output: 2n sample alle posizioni [0.5, 1.0, 1.5, ..., n].
+        # Risultato: [(prev+x0)/2, x0, (x0+x1)/2, x1, ..., (x(n-2)+x(n-1))/2, x(n-1)].
+        extended = np.empty(n + 1, dtype=np.float32)
+        extended[0] = prev
+        extended[1:] = pcm_in
+
+        x_old = np.arange(n + 1, dtype=np.float32)
+        x_new = np.linspace(0.5, float(n), num=2 * n, dtype=np.float32)
+        pcm_out = np.interp(x_new, x_old, extended)
+
+        new_prev = int(pcm_in[-1])
+        pcm_out_int = np.clip(pcm_out, -32768, 32767).astype(np.int16)
+        return pcm_out_int.tobytes(), new_prev
+
+    @staticmethod
+    def _resample_24k_to_48k(pcm_bytes: bytes) -> bytes:
+        """Upsample PCM 16-bit mono da 24kHz a 48kHz, buffer singolo (no streaming)."""
+        out, _ = TTSService._resample_chunk_24k_to_48k(pcm_bytes, None)
+        return out
