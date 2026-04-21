@@ -27,5 +27,6 @@ class TasksConfig(AppConfig):
         # a non sapere nulla dei task specifici e li raggiunge solo via
         # apps.tasks.registry.get_task(key).
         from . import generic  # noqa: F401
+        from . import lost_at_sea  # noqa: F401
         from . import murder_mystery  # noqa: F401
         from . import nasa_moon  # noqa: F401
