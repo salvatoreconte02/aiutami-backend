@@ -39,7 +39,8 @@ class ReportLLMService:
 
         system_prompt = task.build_report_llm_prompt() if task else (
             "Genera un report testuale in italiano per una sessione di discussione. "
-            "Includi statistiche partecipazione e riassunto. Formato: testo semplice, 200-400 parole."
+            "Includi statistiche partecipazione, commenta il Gini index, e riassunto. "
+            "Formato: testo semplice, 200-400 parole."
         )
 
         logger.info("[REPORT][LLM][REQUEST] Generating report for session: %s", data.get("session_title"))
@@ -92,8 +93,10 @@ class ReportLLMService:
         for p in data.get("participants", []):
             lines.append(f"- {p.get('name')}: {p.get('turns')} interventi ({p.get('percentage')}%)")
 
+        gini = data.get("gini_index", 0)
         lines.extend([
             f"- Moderatore AI: {data.get('ai_interventions', 0)} interventi ({data.get('ai_intervention_percentage', 0)}%)",
+            f"Indice di Gini: {gini:.2f}",
             "",
             "RIASSUNTO",
             data.get("final_summary", "Nessun riassunto disponibile."),

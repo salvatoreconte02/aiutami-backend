@@ -9,7 +9,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +113,12 @@ class ReportPDFService:
         task_sections = task.build_report_pdf_sections(session, {}, task_styles)
         story.extend(task_sections)
 
+        # Sezione partecipazione (dal report_data salvato)
+        if session.report_data:
+            story.extend(cls._build_participation_section(
+                session.report_data, section_style, body_style
+            ))
+
         # Testo report (generato da LLM)
         if session.report_text:
             story.append(Paragraph("ANALISI DELLA SESSIONE", section_style))
@@ -142,3 +148,62 @@ class ReportPDFService:
 
         logger.info("[REPORT][PDF] Generated PDF for session %s, size: %d bytes", session.id, len(pdf_bytes))
         return pdf_bytes
+
+    @classmethod
+    def _build_participation_section(cls, data: dict, section_style, body_style) -> list:
+        """Costruisce la sezione STATISTICHE PARTECIPAZIONE per il PDF."""
+        elements = []
+
+        elements.append(Paragraph("STATISTICHE PARTECIPAZIONE", section_style))
+
+        # Tabella partecipanti
+        table_data = [["Partecipante", "Interventi", "%"]]
+        for p in data.get("participants", []):
+            table_data.append([
+                p.get("name", ""),
+                str(p.get("turns", 0)),
+                f"{p.get('percentage', 0)}%",
+            ])
+        # Riga moderatore AI
+        ai_interventions = data.get("ai_interventions", 0)
+        ai_pct = data.get("ai_intervention_percentage", 0)
+        table_data.append(["Moderatore AI", str(ai_interventions), f"{ai_pct}%"])
+
+        part_table = Table(
+            table_data,
+            colWidths=[8 * cm, 3 * cm, 3 * cm],
+        )
+        part_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2E86AB')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#F5F5F5')),
+            ('GRID', (0, 0), (-1, -1), 1, colors.white),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('TOPPADDING', (0, 1), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+        ]))
+        elements.append(part_table)
+        elements.append(Spacer(1, 8))
+
+        # Gini index
+        gini = data.get("gini_index", 0)
+        if gini <= 0.2:
+            gini_label = "molto equilibrata"
+        elif gini <= 0.4:
+            gini_label = "abbastanza equilibrata"
+        elif gini <= 0.6:
+            gini_label = "moderatamente sbilanciata"
+        else:
+            gini_label = "sbilanciata"
+        elements.append(Paragraph(
+            f"Indice di Gini: <b>{gini:.2f}</b> &mdash; partecipazione {gini_label}",
+            body_style,
+        ))
+        elements.append(Spacer(1, 12))
+
+        return elements

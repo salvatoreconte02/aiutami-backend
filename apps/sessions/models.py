@@ -80,6 +80,12 @@ class Session(models.Model):
         default="",
         help_text="Testo del report generato da LLM alla chiusura"
     )
+    report_data = models.JSONField(
+        null=True,
+        blank=True,
+        default=None,
+        help_text="Dati strutturati del report (partecipazione, Gini, etc.)"
+    )
 
     class Meta:
         db_table = "session"

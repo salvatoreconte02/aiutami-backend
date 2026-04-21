@@ -12,6 +12,19 @@ from apps.sessions.models import (
 logger = logging.getLogger(__name__)
 
 
+def _compute_gini(values: list[int]) -> float:
+    """Gini index: 0 = perfetta uguaglianza, 1 = massima disuguaglianza."""
+    if not values or all(v == 0 for v in values):
+        return 0.0
+    n = len(values)
+    sorted_vals = sorted(values)
+    total = sum(sorted_vals)
+    gini_sum = 0
+    for i, v in enumerate(sorted_vals):
+        gini_sum += (2 * (i + 1) - n - 1) * v
+    return gini_sum / (n * total)
+
+
 def close_session(session_id: str) -> Session:
     """
     Chiude la sessione, genera il report e salva.
@@ -58,14 +71,15 @@ def close_session(session_id: str) -> Session:
         from apps.tasks.registry import get_task
         task = get_task(session.context)
         report_data = _collect_report_data(session, mod_state, task)
+        session.report_data = report_data
         from apps.reports.llm_service import ReportLLMService
         session.report_text = ReportLLMService.generate_report_text(report_data, task=task)
     except Exception as e:
         logger.warning(f"Could not generate report for session {session_id}: {e}")
         session.report_text = ""
 
-    # 3. Salva report e summary (stato già aggiornato sopra)
-    update_fields = ["report_text"]
+    # 3. Salva report, report_data e summary (stato già aggiornato sopra)
+    update_fields = ["report_text", "report_data"]
     if session.final_summary:
         update_fields.append("final_summary")
     session.save(update_fields=update_fields)
@@ -111,12 +125,17 @@ def _collect_report_data(session, mod_state=None, task=None) -> dict:
             "percentage": percentage,
         })
 
+    gini_index = _compute_gini(list(turns_per_participant.values()))
+
     data = {
         "session_title": session.title,
         "duration_minutes": duration_minutes,
         "participants": participants_data,
+        "total_human_turns": total_human_turns,
+        "total_turns": total_turns,
         "ai_interventions": ai_interventions,
         "ai_intervention_percentage": ai_percentage,
+        "gini_index": round(gini_index, 4),
         "final_summary": session.final_summary or "",
     }
 

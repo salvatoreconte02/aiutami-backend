@@ -29,6 +29,7 @@ VOTI DEI PARTECIPANTI
 STATISTICHE PARTECIPAZIONE
 - Interventi per partecipante con percentuali
 - Interventi del moderatore AI con percentuale
+- Commenta il Gini index della partecipazione (0 = perfetta uguaglianza, 1 = massima disuguaglianza)
 
 RIASSUNTO DELLA DISCUSSIONE
 - Basato sul final_summary fornito, rielaboralo in modo discorsivo
