@@ -28,14 +28,17 @@ class ModerationState:
     interventions_log: list[dict]  # log di ogni intervento AI normal mode
 
     @classmethod
-    def initial(cls) -> "ModerationState":
+    def initial(
+        cls, participants: Optional[list[str]] = None
+    ) -> "ModerationState":
+        turns = {name: 0 for name in participants} if participants else {}
         return cls(
             summary=DEFAULT_SUMMARY,
             ai_interventions_count=0,
             last_ai_intervention_at=None,
             conclusion_reason=None,
             forced_conclusion_done=False,
-            turns_per_participant={},
+            turns_per_participant=turns,
             interventions_log=[],
         )
 
@@ -44,16 +47,39 @@ def _redis_key(session_id: int | str) -> str:
     return REDIS_KEY_TEMPLATE.format(session_id=session_id)
 
 
+def _fetch_participant_names(session_id: int | str) -> list[str]:
+    """
+    Legge dalla tabella session_participant i nomi dei partecipanti della
+    sessione, usando la stessa logica del turn consumer (display_name se
+    presente, altrimenti username). Ritorna lista vuota se la sessione
+    non esiste o l'accesso DB fallisce.
+    """
+    try:
+        from apps.sessions.models import SessionParticipant
+
+        participants = SessionParticipant.objects.filter(
+            session_id=session_id
+        ).select_related("user")
+        return [
+            getattr(p.user, "display_name", None) or p.user.get_username()
+            for p in participants
+        ]
+    except Exception:
+        return []
+
+
 def load_moderation_state(session_id: int | str) -> ModerationState:
     """
     Carica lo stato di moderazione da Redis.
-    Se non esiste, crea e persiste uno stato iniziale.
+    Se non esiste, crea uno stato iniziale con turns_per_participant
+    popolato con tutti i partecipanti della sessione a 0 (lookup DB).
     """
     key = _redis_key(session_id)
     data = cache.get(key)
 
     if not data:
-        state = ModerationState.initial()
+        participants = _fetch_participant_names(session_id)
+        state = ModerationState.initial(participants=participants)
         save_moderation_state(session_id, state)
         return state
 

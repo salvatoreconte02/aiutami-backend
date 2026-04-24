@@ -15,6 +15,7 @@ from .state import (
     load_moderation_state,
     save_moderation_state,
 )
+from .metrics import compute_participation_metrics
 
 from apps.tasks.base import TaskDefinition
 from apps.tasks.registry import get_task
@@ -208,6 +209,8 @@ class ModerationService:
 
         task = _resolve_task(task_key)
 
+        participation_metrics = compute_participation_metrics(turns_per_participant)
+
         llm_input = {
             "mode": mode,
             "scenario": task.llm_scenario_payload(mode),
@@ -218,8 +221,9 @@ class ModerationService:
             },
             "participants": {
                 "count": len(turns_per_participant) if turns_per_participant else 3,
-                "turns": turns_per_participant,
+                "names": list(turns_per_participant.keys()),
             },
+            "participation_metrics": participation_metrics,
             "session": {
                 "phase": session_phase,
                 "total_turns": total_turns,
@@ -585,8 +589,8 @@ NON intervenire per:
 
 ## Stile
 - Tono: gentile, indiretto, mai autoritario
-- Lunghezza: 1-2 frasi (20-30 parole max)
-- Esempi: "Lucia, tu cosa ne pensi di questo?" / "Interessante, ma tornando al tema..."
+- Lunghezza: 1-2 frasi, 30-40 parole max
+- Usa i nomi ESATTI come compaiono nel payload
 
 ## Come valutare
 
@@ -598,19 +602,25 @@ Per decidere se intervenire su questi problemi, valuta ESCLUSIVAMENTE l'ultimo t
 
 ⚠️ NON usare il `summary` per valutare questi problemi. Il summary è storico e potresti intervenire su problemi già affrontati in turni precedenti.
 
-### Problemi CUMULATIVI → guarda `participants.turns`
-Per questi problemi, valuta i contatori numerici dei turni:
-- **Monopolizzazione**: Un partecipante ha molti più turni degli altri?
-- **Esclusione**: Un partecipante ha zero o pochissimi turni?
+### Problemi CUMULATIVI → guarda `participation_metrics`
+Il backend ti fornisce `participation_metrics` pre-calcolato:
+- `over_participators`: nomi di chi ha parlato > 2× la media dei turni
+- `under_participators`: nomi di chi ha parlato < 0.5× la media dei turni
+- `min_turns_reached`: true se la discussione ha abbastanza turni
+  (>= 2 × numero partecipanti) per valutare monopolization/exclusion
 
-⚠️ Valuta questi problemi SOLO se `session.total_turns` >= 6.
-Nei primi turni della discussione è normale che la partecipazione sia sbilanciata.
-Se total_turns < 6, ignora monopolizzazione ed esclusione.
+Regole:
+- Se `min_turns_reached` è false → IGNORA monopolization ed exclusion.
+- Se entrambe le liste sono vuote → ignora monopolization/exclusion.
+- Altrimenti: nomi in `over_participators` → valuta monopolization,
+  nomi in `under_participators` → valuta exclusion.
+- Non rifare tu il calcolo sui contatori: fidati delle liste.
 
 ### A cosa serve il `summary`
-Usa il summary SOLO per:
+Usa il summary per:
 - Capire il contesto generale della discussione
 - Generare l'`updated_summary` includendo i nuovi punti emersi dall'ultimo turno
+- Costruire interventi contestuali su monopolization/exclusion (vedi sezione dedicata)
 
 ### Punteggio
 Assegna un `intervention_score` da 0 a 1:
@@ -620,6 +630,31 @@ Assegna un `intervention_score` da 0 a 1:
 - 0.9-1.0: Problema grave (insulti, off-topic totale), intervento necessario
 
 Imposta `should_ai_speak: true` SOLO se `intervention_score >= 0.7`
+
+## Come intervenire su monopolization / exclusion
+
+Principio 1: **invitare > correggere**. Coinvolgi i silenziosi invece di richiamare chi domina.
+
+Principio 2: **invito contestuale, non banale**. Usa `summary` e `last_turn` per agganciarti a un punto SPECIFICO emerso nella discussione e invita a riflettere su quello.
+
+### exclusion (`under_participators` non vuota)
+Chiama per nome una persona dalla lista e agganciala a un aspetto concreto della discussione.
+
+✅ "Anna, il gruppo ha dato priorità all'acqua — tu condividi o metteresti prima qualcos'altro?"
+✅ "Lucia, Marco ha proposto di scartare il kit medico; tu la vedi allo stesso modo?"
+❌ "Anna, tu cosa ne pensi?" (banale, non invita a riflettere su nulla)
+❌ "Anna non ha ancora parlato" (imbarazzante)
+
+### monopolization (`over_participators` non vuota, `under` vuota)
+Ringrazia brevemente chi domina e sposta la discussione su un punto specifico da lui sollevato, invitando gli altri a reagire.
+
+✅ "Grazie Marco, il punto sul segnalatore è interessante — gli altri la vedono allo stesso modo?"
+✅ "Marco ha proposto di mettere il cibo prima del razzo. Sentiamo anche gli altri su questa priorità."
+❌ "Sentiamo anche gli altri" (generico)
+❌ "Marco, stai parlando troppo" (richiamo diretto)
+
+### over + under entrambe non vuote
+Prioritizza la regola exclusion: invita una persona da `under_participators` con un aggancio contestuale. Risolvi entrambi i problemi con un intervento.
 
 ## Output
 

@@ -59,6 +59,87 @@ class ModerationStateTests(TestCase):
         loaded = load_moderation_state(session_id)
         self.assertTrue(loaded.forced_conclusion_done)
 
+    def test_initial_without_participants_has_empty_dict(self):
+        state = ModerationState.initial()
+        self.assertEqual(state.turns_per_participant, {})
+
+    def test_initial_with_participants_populates_dict_with_zeros(self):
+        state = ModerationState.initial(participants=["Marco", "Lucia", "Anna"])
+        self.assertEqual(
+            state.turns_per_participant,
+            {"Marco": 0, "Lucia": 0, "Anna": 0},
+        )
+
+
+class LoadModerationStateInitializesFromDBTests(TestCase):
+    """
+    load_moderation_state(session_id) popola turns_per_participant con tutti
+    i partecipanti della sessione a 0 quando lo state non esiste ancora.
+    """
+
+    def setUp(self):
+        cache.clear()
+        from django.contrib.auth import get_user_model
+        from apps.sessions.models import (
+            Session,
+            SessionParticipant,
+            SessionState,
+            ParticipantRole,
+        )
+
+        User = get_user_model()
+        self.user_marco = User.objects.create_user(
+            username="marco", email="marco@example.com", password="p"
+        )
+        self.user_lucia = User.objects.create_user(
+            username="lucia", email="lucia@example.com", password="p"
+        )
+        self.user_anna = User.objects.create_user(
+            username="anna", email="anna@example.com", password="p"
+        )
+        self.session = Session.objects.create(
+            title="Test",
+            context="generic",
+            state=SessionState.ACTIVE,
+            min_size=3,
+            max_size=3,
+            host=self.user_marco,
+        )
+        SessionParticipant.objects.create(
+            session=self.session, user=self.user_marco, role=ParticipantRole.HOST
+        )
+        SessionParticipant.objects.create(
+            session=self.session, user=self.user_lucia, role=ParticipantRole.PARTICIPANT
+        )
+        SessionParticipant.objects.create(
+            session=self.session, user=self.user_anna, role=ParticipantRole.PARTICIPANT
+        )
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_new_state_populated_with_all_participants_at_zero(self):
+        state = load_moderation_state(self.session.id)
+        self.assertEqual(
+            state.turns_per_participant,
+            {"marco": 0, "lucia": 0, "anna": 0},
+        )
+
+    def test_existing_state_not_overwritten_on_load(self):
+        existing = ModerationState.initial(
+            participants=["marco", "lucia", "anna"]
+        )
+        existing.turns_per_participant["marco"] = 5
+        save_moderation_state(self.session.id, existing)
+
+        loaded = load_moderation_state(self.session.id)
+        self.assertEqual(loaded.turns_per_participant["marco"], 5)
+        self.assertEqual(loaded.turns_per_participant["lucia"], 0)
+
+    def test_nonexistent_session_falls_back_to_empty_dict(self):
+        state = load_moderation_state(999999)
+        self.assertEqual(state.turns_per_participant, {})
+
 
 class TriggerEvaluationResultTests(TestCase):
     def test_trigger_result_has_should_transition_to_conclusion(self):
@@ -1255,9 +1336,8 @@ class CallLLMStructuredInputTests(TestCase):
         cache.clear()
 
     @patch.object(ModerationService, '_build_openai_client')
-    def test_call_llm_sends_structured_input_with_participants(self, mock_client):
-        """_call_llm should send structured input including participants.turns."""
-        # Setup mock
+    def test_call_llm_sends_names_and_participation_metrics(self, mock_client):
+        """_call_llm should send participants.names and participation_metrics."""
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = json.dumps({
@@ -1269,10 +1349,8 @@ class CallLLMStructuredInputTests(TestCase):
         })
         mock_client.return_value.chat.completions.create.return_value = mock_response
 
-        # Create state with turns_per_participant
         turns_per_participant = {"Mario": 5, "Lucia": 2}
 
-        # Call _call_llm with state
         ModerationService._call_llm(
             summary_in="Test summary",
             last_turn="Test turn",
@@ -1282,19 +1360,22 @@ class CallLLMStructuredInputTests(TestCase):
             turns_per_participant=turns_per_participant,
         )
 
-        # Verify the call was made
         mock_client.return_value.chat.completions.create.assert_called_once()
         call_args = mock_client.return_value.chat.completions.create.call_args
-
-        # Extract the user message content
-        messages = call_args[1]['messages']
-        user_message = messages[1]['content']
+        user_message = call_args[1]['messages'][1]['content']
         user_data = json.loads(user_message)
 
-        # Verify structured input
         self.assertIn("participants", user_data)
-        self.assertIn("turns", user_data["participants"])
-        self.assertEqual(user_data["participants"]["turns"], {"Mario": 5, "Lucia": 2})
+        self.assertIn("names", user_data["participants"])
+        self.assertEqual(set(user_data["participants"]["names"]), {"Mario", "Lucia"})
+        self.assertNotIn("turns", user_data["participants"])
+
+        self.assertIn("participation_metrics", user_data)
+        metrics = user_data["participation_metrics"]
+        self.assertIn("over_participators", metrics)
+        self.assertIn("under_participators", metrics)
+        self.assertIn("avg_turns", metrics)
+        self.assertIn("min_turns_reached", metrics)
 
     @patch.object(ModerationService, '_build_openai_client')
     def test_call_llm_uses_normal_mode_prompt(self, mock_client):
@@ -1594,8 +1675,10 @@ class LLMNormalModeIntegrationTests(TestCase):
         messages = call_args[1]['messages']
         user_message = json.loads(messages[1]['content'])
 
-        self.assertEqual(user_message["participants"]["turns"]["Mario"], 6)
-        self.assertEqual(user_message["participants"]["turns"]["Lucia"], 0)
+        self.assertIn("Mario", user_message["participants"]["names"])
+        self.assertIn("Lucia", user_message["participants"]["names"])
+        self.assertIn("participation_metrics", user_message)
+        self.assertIn("Lucia", user_message["participation_metrics"]["under_participators"])
         self.assertEqual(user_message["scenario"]["type"], "murder_mystery")
 
 class CooldownBypassTests(TestCase):

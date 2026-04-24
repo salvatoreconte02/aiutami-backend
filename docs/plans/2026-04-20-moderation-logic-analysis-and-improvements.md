@@ -251,11 +251,44 @@ l'ultima volta. Non ripetere lo stesso tipo di intervento se il problema
 
 ---
 
-### 2.5 [DA IMPLEMENTARE] Metric-informed moderation per monopolization/exclusion
+### 2.5 [COMPLETATO] Metric-informed moderation per monopolization/exclusion
 
-**Stato:** da implementare. Feedback tutor ricevuto (2026-04-21): contributo minor (non isolabile sperimentalmente con solo 2 condizioni), ma valido come buona teoria dietro il meccanismo di intervento. Tutti i parametri devono essere giustificati con citazione o motivazione solida.
+**Stato:** implementato (2026-04-24). Feedback tutor ricevuto (2026-04-21): contributo minor (non isolabile sperimentalmente con solo 2 condizioni), ma valido come buona teoria dietro il meccanismo di intervento. Tutti i parametri devono essere giustificati con citazione o motivazione solida.
 
 **Data proposta:** 2026-04-21
+**Data implementazione:** 2026-04-24
+
+**Cosa è stato fatto:**
+
+1. **`apps/moderation/metrics.py`** (nuovo) — helper puro `compute_participation_metrics(turns_per_participant, *, over_threshold=2.0, under_threshold=0.5, min_turns_factor=2)` che ritorna `{over_participators, under_participators, avg_turns, min_turns_reached}`. Nessuno state, nessun I/O. Liste ordinate deterministicamente (under: turn count ascendente = più escluso per primo; over: turn count discendente = più dominante per primo), tiebreak alfabetico.
+
+2. **`apps/moderation/state.py`** — `ModerationState.initial(participants=...)` accetta lista opzionale e popola `turns_per_participant` con tutti i nomi a 0. Nuovo helper privato `_fetch_participant_names(session_id)` fa lookup DB (`SessionParticipant.select_related("user")`) con stessa logica del turn consumer (`display_name or get_username()`). `load_moderation_state(session_id)` chiama il lookup quando crea state fresco, fallback graceful a lista vuota su errore DB.
+
+3. **`apps/moderation/service.py`** — in `_call_llm()`: import del helper, calcolo metrics prima della costruzione payload. Nuovo payload: `participants.names` (lista, non più dict), `participation_metrics` come top-level key con le 4 chiavi del helper. Rimosso `participants.turns` per evitare che l'LLM rifaccia il calcolo.
+
+4. **Prompt normal mode** (`_build_normal_mode_prompt`) riscritto:
+   - Sezione "### Problemi CUMULATIVI → guarda `participation_metrics`" sostituisce il vecchio blocco che chiedeva all'LLM di valutare i contatori grezzi. Istruzioni esplicite su `min_turns_reached` e "fidati delle liste, non rifare tu il calcolo".
+   - Nuova sezione "## Come intervenire su monopolization / exclusion" con due principi chiave: **invitare > correggere** (target dell'intervento è il sotto-partecipatore, non il dominante — rif. Hall & Watson, Heron, Srinivasan et al.) e **invito contestuale non banale** (usa summary/last_turn per agganciarsi a un punto specifico). Include esempi ✅/❌ per exclusion, monopolization, e caso misto.
+   - Lunghezza intervento alzata da 20-30 a 30-40 parole per ospitare l'aggancio contestuale.
+
+5. **Soglia `min_turns_reached` ora dinamica:** `total_turns >= 2 × N` (dove N è il numero di partecipanti) invece del vecchio hardcoded `>= 6`. Con N=3 (setup sperimentale) coincide col valore precedente, ma scala per N=2 (task generic) e N>3.
+
+6. **Test (17 nuovi, tutti verdi):**
+   - `apps/moderation/tests_metrics.py` (nuovo) — 12 test unit secchi per il helper: empty dict, all-zero, equal distribution, exclusion classica (5,1,0), mono+exclusion (9,2,1), min_turns sotto/al/sopra threshold, scaling N, ordering under ascendente/over descendente, custom thresholds, strict inequality alla soglia.
+   - `apps/moderation/tests.py` — nuovi test in `ModerationStateTests` (initial con/senza participants) e nuova classe `LoadModerationStateInitializesFromDBTests` (3 test: state nuovo popolato da DB, idempotenza su state esistente, fallback su session inesistente). 2 test esistenti aggiornati alla nuova forma payload.
+
+**Runtime flow:**
+```
+Prima chiamata load_moderation_state(session_id) → lookup DB partecipanti →
+ModerationState.initial(participants=[marco,lucia,anna]) → Redis
+Ogni turno → speaker++ in turns_per_participant
+Ogni _call_llm → compute_participation_metrics(turns) → payload enriched →
+                 LLM usa `participation_metrics` e `names` (non più `turns`)
+```
+
+**253/253 test verdi** dopo l'implementazione.
+
+**Filtro backend invariato:** `_decide_ai_intervention()` non toccato. Cooldown 60s, soglia score 0.7, bypass conflict/user_request restano identici. La feature opera a monte (input LLM), non a valle (decisione).
 
 **Motivazione:** oggi il prompt normal passa `turns_per_participant` come numeri grezzi all'LLM e gli chiede di valutare monopolizzazione ed esclusione senza soglie né metriche strutturate. Il risultato dipende dall'interpretazione del modello, non è riproducibile né calibrabile.
 
@@ -450,7 +483,7 @@ Quando si torna a questo documento per implementare:
 
 - [x] **2.1 `interventions_log` nel report** → completato 2026-04-24. `state.py`, `service.py`, `sessions/services.py`, prompt report (base + MM + NASA + Lost at Sea), `pdf_service.py`, 10 test.
 - [ ] **2.4 Last AI intervention nel payload** → estendere `ModerationState` con `last_ai_message`/`last_ai_reason`, aggiungere al payload in `_call_llm()`, aggiornare prompt in `_build_normal_mode_prompt()`.
-- [ ] **2.5 Metric-informed moderation** → modificare `_call_llm()` e `_build_normal_mode_prompt()`. Inizializzare `turns_per_participant` con tutti i partecipanti.
+- [x] **2.5 Metric-informed moderation** → completato 2026-04-24. Helper puro `metrics.py`, `ModerationState.initial(participants=...)` con lookup DB in `load_moderation_state`, payload con `participation_metrics` + `participants.names` (no più `turns` raw), prompt con nuovo blocco "CUMULATIVI" + sezione "Come intervenire" (invitare > correggere, invito contestuale, 30-40 parole). Min turns dinamico `2×N`. 17 nuovi test.
 - [ ] **2.6 Refactoring soglia** → modificare `_build_normal_mode_prompt()` (rimuovere istruzione soglia). Filtro backend invariato.
 - [ ] **2.7 Skip LLM in fase non-ACTIVE** → modificare orchestrator o `handle_human_turn_ended`. Quick win.
 - [x] **2.3 Rimozione forced_summary** → completato 2026-04-24. Rimosso completamente: costante, enum, metodi LLM dedicati, trigger, orchestrator handler, stato Redis, prompt task-specifici, ~17 test.
