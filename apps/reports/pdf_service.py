@@ -119,6 +119,12 @@ class ReportPDFService:
                 session.report_data, section_style, body_style
             ))
 
+        # Sezione interventi del moderatore
+        if session.report_data and session.report_data.get("interventions_log"):
+            story.extend(cls._build_interventions_section(
+                session.report_data, section_style, body_style
+            ))
+
         # Testo report (generato da LLM)
         if session.report_text:
             story.append(Paragraph("ANALISI DELLA SESSIONE", section_style))
@@ -148,6 +154,65 @@ class ReportPDFService:
 
         logger.info("[REPORT][PDF] Generated PDF for session %s, size: %d bytes", session.id, len(pdf_bytes))
         return pdf_bytes
+
+    @classmethod
+    def _build_interventions_section(cls, data: dict, section_style, body_style) -> list:
+        """Costruisce la sezione INTERVENTI DEL MODERATORE per il PDF."""
+        elements = []
+        log = data.get("interventions_log", [])
+        if not log:
+            return elements
+
+        elements.append(Paragraph("INTERVENTI DEL MODERATORE", section_style))
+
+        # Tabella dettaglio
+        table_data = [["#", "Timestamp", "Speaker", "Reason", "Score"]]
+        reason_counts: dict[str, int] = {}
+        for i, entry in enumerate(log, 1):
+            reason = entry.get("reason", "unknown")
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            ts = entry.get("ts", "")
+            # Mostra solo HH:MM:SS se possibile
+            if "T" in ts:
+                ts = ts.split("T")[1][:8]
+            table_data.append([
+                str(i),
+                ts,
+                entry.get("speaker", ""),
+                reason,
+                f"{entry.get('score', 0):.2f}",
+            ])
+
+        interventions_table = Table(
+            table_data,
+            colWidths=[1 * cm, 3 * cm, 4 * cm, 3.5 * cm, 2.5 * cm],
+        )
+        interventions_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2E86AB')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('ALIGN', (2, 1), (2, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#F5F5F5')),
+            ('GRID', (0, 0), (-1, -1), 1, colors.white),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('TOPPADDING', (0, 1), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+        ]))
+        elements.append(interventions_table)
+        elements.append(Spacer(1, 8))
+
+        # Riepilogo per reason
+        breakdown = ", ".join(f"{count} {reason}" for reason, count in sorted(reason_counts.items()))
+        elements.append(Paragraph(
+            f"Totale: <b>{len(log)}</b> interventi &mdash; {breakdown}",
+            body_style,
+        ))
+        elements.append(Spacer(1, 12))
+
+        return elements
 
     @classmethod
     def _build_participation_section(cls, data: dict, section_style, body_style) -> list:

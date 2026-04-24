@@ -92,34 +92,43 @@ Oltre a questo, viene buttato via: non entra in stato persistente, non finisce n
 
 ## 2. Punti di miglioramento identificati
 
-### 2.1 [DA IMPLEMENTARE] Registrare `reason` nel report finale
+### 2.1 [COMPLETATO] Registrare `interventions_log` nel report finale
 
-**Stato:** deciso, da implementare quando si passa alla fase operativa.
+**Stato:** implementato (2026-04-24). Solo `interventions_log` (normal mode), senza `forced_events_log` (concordato con utente: forced_summary verrà rimosso).
 
-**Motivazione:** oggi `reason` è solo log, sparisce alla fine della sessione. Per la valutazione empirica della tesi (NASA Moon Survival) serve sapere quanti interventi AI ci sono stati e di che tipo. Questo dato è anche utile nel PDF di session report consegnato agli utenti.
+**Motivazione:** `reason` era solo log e spariva alla fine della sessione. Per la valutazione empirica (NASA Moon + Lost at Sea) serve sapere quanti interventi AI ci sono stati e di che tipo.
 
-**Implementazione proposta:**
+**Cosa è stato fatto:**
 
-1. Estendere `ModerationState` (`apps/moderation/state.py`) con due campi:
-   ```python
-   interventions_log: list[dict] = field(default_factory=list)
-   # Ogni entry: {ts, reason, score, speaker, message}
-   forced_events_log: list[dict] = field(default_factory=list)
-   # Ogni entry: {ts, type: "forced_summary"|"forced_conclusion", correction_reason}
-   ```
+1. **`apps/moderation/state.py`** — aggiunto campo `interventions_log: list[dict]` al dataclass `ModerationState`, con serializzazione Redis (load/save). Ogni entry: `{ts, reason, score, speaker, message}`.
 
-2. In `ModerationService.handle_human_turn_ended` (`service.py:76`), dopo il filtro backend:
-   - se `ai_should_speak=True` e `mode=="normal"`: append a `interventions_log`
-   - se `mode` è forced: append a `forced_events_log`
+2. **`apps/moderation/service.py`** — in `handle_human_turn_ended()`, dopo l'incremento di `ai_interventions_count` in normal mode (riga 144), append della entry a `interventions_log` con timestamp ISO, reason, score, speaker e messaggio AI.
 
-3. In `apps/reports/` (report PDF): leggere i log da Redis (prima che la sessione venga chiusa) o persisterli su PostgreSQL alla transizione CLOSED.
+3. **`apps/sessions/services.py`** — `_collect_report_data()` legge `interventions_log` da `ModerationState` e lo include nel dict `report_data`. Finisce automaticamente in `Session.report_data` (JSONField già esistente, nessuna migration). Redis viene pulito normalmente al cleanup.
 
-4. Nel PDF produrre sezione "Statistiche di moderazione":
-   - Totale interventi AI
-   - Breakdown per reason (es: 3 off_topic, 2 user_request, 1 monopolization)
-   - Eventi forced (N forced_summary, 1 forced_conclusion)
+4. **Prompt LLM report aggiornati** in tutti e 4 i task:
+   - `apps/tasks/base.py` — prompt default
+   - `apps/tasks/murder_mystery/report.py`
+   - `apps/tasks/nasa_moon/report.py`
+   - `apps/tasks/lost_at_sea/report.py`
 
-**Considerazione tesi:** questo dato è cruciale per dimostrare empiricamente il comportamento del moderatore nella valutazione NASA Moon. Senza queste statistiche, il capitolo di valutazione manca di metriche oggettive sul moderatore stesso.
+   Tutti istruiscono l'LLM a generare una sezione "INTERVENTI DEL MODERATORE" con totale, breakdown per reason, e dettaglio per intervento.
+
+5. **`apps/reports/pdf_service.py`** — nuovo metodo `_build_interventions_section()` che genera una tabella ReportLab con colonne (#, Timestamp, Speaker, Reason, Score) + riga di riepilogo con breakdown per reason. Inserita dopo la sezione partecipazione.
+
+6. **Test (10 nuovi, tutti verdi):**
+   - `apps/moderation/tests.py` → classe `InterventionsLogTests`: stato iniziale vuoto, persistenza Redis, append in normal mode, no append se AI non parla, no append in forced_summary, struttura entry corretta.
+   - `apps/reports/tests_metrics.py` → classi `CollectReportDataInterventionsLogTests` e `ReportPDFInterventionsTests`: inclusione in report_data, log vuoto senza mod_state, PDF con e senza interventions_log.
+
+**Flusso runtime:**
+```
+Intervento AI normal mode → append a interventions_log (Redis)
+Chiusura sessione → interventions_log letto da Redis → salvato in Session.report_data (JSONField)
+                  → passato all'LLM per report text → sezione nel PDF
+                  → Redis pulito
+```
+
+**161/161 test verdi** dopo l'implementazione.
 
 ---
 
@@ -183,55 +192,249 @@ return task.periodic_summary_enabled() and (
 
 **Decisione finale:** da prendere dopo discussione con i tutor.
 
+**Nota implementativa — collasso di `evaluate_triggers_on_human_turn_end()`:**
+Se si elimina il forced_summary, la funzione `evaluate_triggers_on_human_turn_end()` in `triggers.py` perde il suo unico trigger hard — resta solo il check timer 30 min (che è anche in `evaluate_time_based_triggers`). A quel punto la funzione è quasi vuota (raccoglie solo messaggi statici come la prenotazione speaker). Valutare se collassarla nell'orchestrator o tenerla come hook per futuri trigger.
+
 ---
 
-### 2.4 [IN DISCUSSIONE] Due chiamate LLM separate: Decision + Generation
+### 2.4 [DA IMPLEMENTARE] Passare l'ultimo intervento AI all'LLM
 
-**Stato:** in discussione. Punto più interessante architetturalmente, merita approfondimento.
+**Stato:** da implementare.
 
-**Problema osservato:** l'utente ha notato che, nonostante il prompt dica esplicitamente "NON usare il summary per valutare problemi puntuali" (`service.py:792`), l'LLM continua a richiamare utenti per comportamenti già risolti in turni precedenti. Questa è **contaminazione del summary**: il modello non riesce a "spegnere" un pezzo di contesto solo perché glielo chiediamo nel prompt.
+**Data ultima revisione:** 2026-04-24
 
-**Caso concreto di fallimento:**
-- T-4: Marco alza la voce → AI interviene, calma, risolto
-- T-3, T-2, T-1: discussione civile
-- T: Marco fa un intervento neutro → l'LLM legge il summary, "sente" ancora la tensione storica, imposta `score=0.75 reason=conflict` → interviene **di nuovo** su un problema già chiuso.
+**Problema:** l'LLM non sa cosa ha detto nel suo ultimo intervento. Questo causa due problemi concreti:
 
-**Pattern proposto: due call sequenziali**
+1. **Ripetizione inutile:** AI dice "Lucia, tu cosa ne pensi?" → Lucia parla → l'LLM non sa di aver appena coinvolto Lucia → potrebbe dire di nuovo "Lucia non ha parlato"
+2. **Mancato riconoscimento della risoluzione:** AI dice "calmiamo i toni" → i turni successivi sono civili → l'LLM non sa di aver già affrontato il problema → potrebbe re-intervenire
 
-**Call 1 — DECISION (senza summary)**
-```
-Input: {last_turn, participants.turns, session.total_turns, scenario}
-Output: {should_speak: bool, reason: str, score: float}
-Scopo: decidere SE intervenire
-Summary NON viene mai mostrato → impossibile contaminazione storica
-```
+Un facilitatore umano si ricorda naturalmente cosa ha detto 2 minuti fa. Senza questa informazione il bot è "smemorato del proprio comportamento".
 
-**Call 2 — GENERATION (con summary, solo se should_speak=true)**
-```
-Input: {reason, summary, last_turn, participants.turns, scenario}
-Output: {message_to_say, updated_summary}
-Scopo: generare il messaggio e aggiornare il summary
-Qui il summary è legittimo (coerenza linguistica + aggiornamento)
-La decisione è già presa, il summary non può più influenzarla
+**Soluzioni alternative considerate e scartate:**
+
+1. **Due call LLM separate (Decision + Generation, poi Summary Update):** scartata perché aggiunge complessità e latenza per risolvere un problema (qualità del summary) che non si è osservato nei test. Il summary funziona bene con una singola call.
+
+2. **Sliding window degli ultimi 3 turni:** scartata perché il summary già copre le informazioni dei turni recenti. Aggiungere i turni raw è contesto ridondante senza beneficio chiaro. Se il summary è di qualità sufficiente (confermato dai test), i turni espliciti non aggiungono valore.
+
+**Soluzione adottata: `last_ai_message` + `last_ai_reason`**
+
+Aggiungere a `ModerationState` (`state.py`):
+```python
+last_ai_message: Optional[str] = None     # testo ultimo intervento AI (normal mode)
+last_ai_reason: Optional[str] = None      # reason ultimo intervento AI
 ```
 
-**Trade-off:**
-- **Latenza:** Call 2 scatta solo quando `should_speak=true`, tipicamente <20% dei turni. Overhead medio stimato: +100-200ms per turno.
-- **Costo token:** Call 1 è corta (no summary → prompt e input molto più piccoli). Aumento totale stimato ~1.3-1.5× rispetto a una call singola, non 2×.
-- **Complessità:** due prompt da mantenere invece di uno, ma con separation of concerns più pulita.
+Nel payload JSON mandato all'LLM:
+```json
+"last_ai_intervention": {
+    "message": "Lucia, tu cosa ne pensi di questo punto?",
+    "reason": "exclusion"
+}
+```
 
-**Rischio da valutare:** Call 1 senza summary ha abbastanza contesto per distinguere "conflict vero" vs "disaccordo civile"? Dipende da quanto bene calibriamo il prompt di Call 1 con esempi one-shot espliciti.
+Con istruzione nel prompt:
+```
+Se `last_ai_intervention` è presente, tieni conto di cosa hai detto
+l'ultima volta. Non ripetere lo stesso tipo di intervento se il problema
+è stato affrontato nei turni successivi.
+```
+
+**Implementazione:**
+1. Estendere `ModerationState` con i due campi
+2. In `handle_human_turn_ended`, dopo un intervento AI in normal mode, salvare `last_ai_message` e `last_ai_reason` nello stato
+3. In `_call_llm()`, aggiungere `last_ai_intervention` al payload JSON
+4. In `_build_normal_mode_prompt()`, aggiungere l'istruzione nel prompt
+
+**Impatto architetturale:**
+- **Latenza:** zero overhead (stessa singola call LLM, ~20 token in più nel payload)
+- **Codice:** modifiche minime a `state.py`, `service.py` (payload + prompt), serializzazione Redis
+
+---
+
+### 2.5 [DA IMPLEMENTARE] Metric-informed moderation per monopolization/exclusion
+
+**Stato:** da implementare. Feedback tutor ricevuto (2026-04-21): contributo minor (non isolabile sperimentalmente con solo 2 condizioni), ma valido come buona teoria dietro il meccanismo di intervento. Tutti i parametri devono essere giustificati con citazione o motivazione solida.
+
+**Data proposta:** 2026-04-21
+
+**Motivazione:** oggi il prompt normal passa `turns_per_participant` come numeri grezzi all'LLM e gli chiede di valutare monopolizzazione ed esclusione senza soglie né metriche strutturate. Il risultato dipende dall'interpretazione del modello, non è riproducibile né calibrabile.
+
+I dati per una valutazione quantitativa sono già disponibili ad ogni turno (il dict `turns_per_participant` è in `ModerationState`). L'idea è **pre-calcolare metriche di partecipazione nel backend e passarle all'LLM** come dato strutturato, con regole esplicite nel prompt.
+
+**Approccio: soglie 2×/0.5× media (real-time) + Gini index (report)**
+
+Due livelli distinti:
+
+1. **Nel prompt LLM (real-time):** il backend calcola e passa all'LLM solo le soglie over/under-participator. Il Gini **non** entra nel prompt — non serve una soglia Gini per la decisione, e il suo valore varia con il numero di partecipanti rendendo difficile giustificare un threshold fisso.
+
+2. **Nel report finale (post-sessione):** il Gini index resta come metrica descrittiva dell'equità complessiva. Non ha bisogno di una soglia giustificata — è un numero che si riporta e si commenta nel report.
+
+**Payload aggiunto al JSON mandato all'LLM** (calcolato in `_call_llm()`):
+
+```json
+"participation_metrics": {
+    "over_participators": ["Marco"],
+    "under_participators": ["Lucia"],
+    "avg_turns": 4.0
+}
+```
+
+Dove:
+- **over_participators**: chi ha parlato > 2× la media dei turni
+- **under_participators**: chi ha parlato < 0.5× la media dei turni
+- **avg_turns**: media turni per partecipante
+
+**Regole nel prompt LLM (sezione aggiuntiva):**
+
+```
+### Metriche di partecipazione (pre-calcolate)
+Il sistema ti fornisce `participation_metrics`:
+- `over_participators`: partecipanti con turni > 2× la media
+- `under_participators`: partecipanti con turni < 0.5× la media
+
+Regole:
+- Se ci sono nomi in `over_participators` → valuta monopolization
+- Se ci sono nomi in `under_participators` → valuta exclusion
+- Queste soglie si applicano solo se total_turns >= 6
+- Se entrambe le liste sono vuote → ignora monopolization/exclusion
+```
+
+**Esempio con 3 partecipanti (setup sperimentale):**
+
+| Scenario | Turni (A, B, C) | Media | Over (>2×) | Under (<0.5×) | Risultato |
+|---|---|---|---|---|---|
+| Equilibrato | 4, 3, 2 | 3.0 | nessuno (>6) | nessuno (<1.5) | Nessun flag |
+| Esclusione | 5, 5, 1 | 3.7 | nessuno (>7.3) | C (<1.8) | Flag exclusion su C |
+| Monopolizzazione + esclusione | 9, 2, 1 | 4.0 | A (>8) | C (<2) | Flag mono su A + exclusion su C |
+| Troppo presto (turno 4) | 3, 1, 0 | 1.3 | A (>2.7) | C (<0.7) | **Nessun flag** (total_turns < 6) |
+
+**Soglie e parametri con giustificazioni:**
+
+| Parametro | Valore | Giustificazione |
+|-----------|--------|----------------|
+| Over-participator | > 2× media | Soglia usata in *"Observe, Ask, Intervene"* (Srinivasan et al., CHI 2025, arXiv:2501.10553) per rilevare partecipanti dominanti in meeting virtuali con AI agent |
+| Under-participator | < 0.5× media | Soglia simmetrica dallo stesso paper per rilevare partecipanti sotto-rappresentati |
+| Turni minimi | >= 6 | Con N=3 partecipanti (setup sperimentale), 6 turni = 2× N, ovvero almeno 2 opportunità di parola a testa in media. Sotto questa soglia la distribuzione è statisticamente non significativa |
+| Cooldown | 60s (globale) | Principio di *minimum intervention* nella facilitazione: il facilitatore non reagisce a singoli eventi ma attende un pattern (Heron, 1999, *The Complete Facilitator's Handbook*). 60s con turni medi di ~10-15s = circa 4-6 turni tra un intervento e l'altro. Il cooldown è **globale** (ultimo intervento AI, qualsiasi reason) perché lo scopo è limitare la frequenza complessiva delle interruzioni, non la frequenza per-topic. Bypass per `conflict` e `user_request` (urgenza/esplicita richiesta) |
+| Score >= 0.7 | 0.7 | Soglia conservativa che favorisce precision over recall: meglio un falso negativo (non intervenire quando serviva) che un falso positivo (interrompere la discussione inutilmente). Coerente con il principio di minimo intervento |
+
+**Riferimento bibliografico principale:**
+- Srinivasan et al. (2025), *"Observe, Ask, Intervene: Designing AI Agents for More Inclusive Meetings"*, CHI 2025 (arXiv:2501.10553) — usa soglie 2×/0.5× della media per rilevare squilibri di partecipazione in meeting virtuali con AI agent. Il nostro contesto è diverso (moderazione vocale multiparty con AI) ma il principio è lo stesso.
+
+**Riferimenti complementari:**
+- DiMicco & Bender (2007), *"Second Messenger"* — mostra che rendere visibile lo sbilanciamento partecipativo influenza il comportamento. Nel nostro caso il "destinatario" delle metriche è l'LLM moderatore.
+- Jayagopi et al. (2012), *"Estimating Conversational Dominance in Multiparty Interaction"* — dominance come costrutto multi-dimensionale (sequenziale, partecipativo, quantitativo).
+- Samrose et al. (2021), *"MeetingCoach"*, CHI 2021 — dashboard AI che monitora partecipazione e fornisce feedback post-meeting per migliorare inclusività.
+- Heron (1999), *The Complete Facilitator's Handbook* — principio di minimo intervento e dimensione "confronting" (intervento immediato solo quando c'è danno al gruppo).
+
+**Impatto architetturale:**
+- **Latenza:** zero overhead. Stessa singola call LLM, payload leggermente più ricco.
+- **Codice:** modifica a `_call_llm()` (calcolo metriche) e `_build_normal_mode_prompt()` (sezione prompt).
+- **Filtro backend:** invariato. Cooldown 60s, soglia score 0.7, bypass per conflict/user_request restano identici.
+
+**Note implementative (da affrontare in fase di sviluppo):**
+
+1. **Inizializzare `turns_per_participant` con tutti i partecipanti della sessione.**
+   Oggi il dict parte vuoto e si popola man mano che i partecipanti parlano. Un partecipante che non ha mai parlato non è nel dict — questo causa due problemi:
+   - Le soglie over/under si calcolano su N-1 partecipanti invece di N (media falsata)
+   - `under_participators` non include chi ha 0 turni (il caso più grave di esclusione)
+
+   **Soluzione:** all'inizio della sessione (o al primo turno), popolare il dict con tutti i partecipanti dalla sessione DB con valore 0. Così le soglie e il Gini lavorano sempre sul numero reale di partecipanti. Verificare che non crei side-effect nei prompt e nei filtri esistenti (es. il prompt oggi vede solo chi ha parlato — con questa modifica vedrebbe anche chi ha 0 turni, il che è un vantaggio per la detection di exclusion).
+
+2. **Ipotesi futura: usare speaking time invece dei conteggi turni.**
+   Attualmente `turns_per_participant` conta il numero di turni, non la durata. Ma un turno di 5 secondi e uno di 60 secondi pesano uguale, il che non riflette la reale distribuzione della partecipazione. Il paper "Observe, Ask, Intervene" (CHI 2025) usa proprio lo speaking time come metrica base.
+
+   **Possibile evoluzione:** tracciare `speaking_time_per_participant` (in secondi) accanto a `turns_per_participant`. Il dato è già disponibile nel backend: il push-to-talk ha timestamp di inizio e fine turno (`TurnManager.start_speak` / `end_speak`). Basta calcolare la differenza e accumularla in `ModerationState`.
+
+   Il Gini e le soglie over/under-participator verrebbero calcolati sullo speaking time anziché sui turni, dando una misura più fedele. I turni resterebbero come metrica complementare (un partecipante con pochi turni ma lunghi vs uno con molti turni ma brevissimi sono pattern diversi).
+
+   **Stato:** ipotesi da valutare. Se i test con i conteggi turni danno risultati soddisfacenti, non è necessario. Da implementare solo se si osserva che il conteggio turni non cattura bene gli squilibri reali.
 
 **Valore per la tesi:**
-Questa è una **novità architetturale** che la letteratura multiparty+AI moderation non copre. Si può formulare come contributo esplicito:
 
-> *We propose a two-stage moderation pipeline: a decision stage that evaluates intervention need on immediate turn data only (avoiding historical context bias), and a generation stage that produces contextually-coherent messages using the accumulated summary. This separation addresses a common failure mode where moderators re-address already-resolved issues due to context contamination.*
+1. **Contributo minor:** *metric-informed moderation* — il moderatore AI non opera solo su intuizione linguistica ma su dati quantitativi pre-calcolati. Separazione tra rilevamento quantitativo (deterministico, riproducibile) e formulazione qualitativa (delegata all'LLM). Non isolabile sperimentalmente, ma buona teoria dietro il meccanismo.
 
-Valutazione empirica fattibile: baseline (single call) vs treatment (two-stage), metrica = tasso di falsi positivi (interventi su problemi già risolti). Con 10-20 sessioni NASA Moon è un esperimento realistico.
+2. **Valutazione descrittiva:** il Gini index a fine sessione è una metrica oggettiva riportata nel report. Permette di descrivere l'equità della partecipazione nelle sessioni sperimentali.
 
-**Punti ancora da chiarire nella discussione:**
-- L'utente ha dubbi concreti, da approfondire in conversazione prima di definire l'implementazione.
-- Decidere se la soglia `0.7` e il cooldown `60s` vanno ricalibrati nel nuovo regime.
+3. **Riproducibilità:** soglie trasparenti, documentate e citate, a differenza dell'approccio "black box" dove l'LLM decide tutto da solo.
+
+---
+
+### 2.6 [DA IMPLEMENTARE] Refactoring soglia intervention_score: separare valutazione LLM da filtro backend
+
+**Stato:** da implementare.
+
+**Data proposta:** 2026-04-22
+
+**Problema osservato:** oggi la soglia `intervention_score >= 0.7` è applicata **due volte**, in modo ridondante e controproducente:
+
+1. **Nel prompt LLM** (`_build_normal_mode_prompt`, service.py:815): *"Imposta should_ai_speak: true SOLO se intervention_score >= 0.7"*
+2. **Nel filtro backend** (`_decide_ai_intervention`, service.py:401): `if llm_score < 0.7: return False`
+
+Se l'LLM segue le istruzioni, il check backend è ridondante (l'LLM ha già filtrato). Se non le segue (incoerenza interna score/should_speak), il backend fa da safety net — ma è un caso marginale.
+
+**Il vero problema:** chiedere all'LLM di auto-filtrarsi con una soglia **distorce lo score**. L'LLM, dovendo decidere "parlo solo se >= 0.7", tende a gonfiare il punteggio per giustificare interventi che ritiene necessari, o a evitare di proporsi per situazioni borderline (0.5-0.6) dove un intervento leggero sarebbe utile. Il risultato è uno score binario (0.2-0.3 o 0.8-0.9) invece di una distribuzione calibrata.
+
+Questo è confermato dalla letteratura sulla calibrazione degli LLM: quando si chiede a un modello di emettere una confidence verbale, lo score si ammassa nel range 80-100% indipendentemente dall'accuratezza reale (ECE > 0.377 per GPT-3/3.5/Vicuna). Il fenomeno è documentato come *overconfidence* nei self-reported scores.
+
+**Soluzione proposta: separazione valutazione ↔ decisione**
+
+1. **Togliere la soglia dal prompt.** L'LLM valuta liberamente e assegna un `intervention_score` onesto:
+   ```
+   Assegna un intervention_score da 0 a 1 che rifletta la gravità del problema:
+   - 0.0-0.3: Nessun problema rilevante
+   - 0.4-0.6: Situazione da monitorare ma non critica
+   - 0.7-0.8: Problema evidente che richiede intervento
+   - 0.9-1.0: Problema grave (insulti, off-topic totale)
+
+   Imposta should_ai_speak: true se ritieni utile un intervento,
+   indipendentemente dallo score.
+   ```
+
+2. **Il backend decide** con la soglia 0.7 se effettivamente far parlare il moderatore:
+   ```python
+   # _decide_ai_intervention() — filtro invariato
+   if llm_score is not None and llm_score < 0.7:
+       return False, None
+   ```
+
+**Vantaggi:**
+- **Score più calibrato:** l'LLM non ha incentivo a gonfiare — può dare 0.5 a una situazione borderline senza auto-censura
+- **Dato più utile per il report:** lo score riflette la valutazione genuina del modello, non un valore binario forzato
+- **Soglia tarabile:** parametro backend che si può cambiare senza toccare il prompt
+- **Separation of concerns:** LLM = valutazione qualitativa, backend = policy enforcement
+
+**Giustificazioni e riferimenti:**
+
+| Aspetto | Giustificazione |
+|---------|----------------|
+| Overconfidence LLM negli score verbali | Xiong et al. (2024), *"Can LLMs Express Their Uncertainty? An Empirical Evaluation of Confidence Elicitation in LLMs"*, ICLR 2024 — ECE > 0.377 per verbalized confidence; score ammassati in 80-100%. Tian et al. (2025), *"Mind the Confidence Gap: Overconfidence, Calibration, and Distractor Effects in LLMs"* — conferma il bias di overconfidence nei self-reported scores |
+| Soglia conservativa (precision > recall) | Lee et al. (2023), *"To Err is AI: Imperfect Interventions and Repair in a Conversational Agent Facilitating Group Chat Discussions"*, CSCW 2023 — i false positive (interventi non necessari) in un CA facilitatore danneggiano fiducia e qualità della discussione più dei false negative. Giustifica una soglia backend che favorisce precision (non intervenire per errore) over recall (non perdere un intervento utile) |
+| Separazione valutazione/decisione | Pattern generale in AI-assisted decision making: il modello fornisce una valutazione, il sistema applica la policy. Analogo al pattern "model proposes, human disposes" in AI-augmented moderation (Gorwa et al., 2020) |
+
+**Impatto architetturale:**
+- **Codice:** modificare `_build_normal_mode_prompt()` (rimuovere istruzione soglia), nessuna modifica a `_decide_ai_intervention()` (il filtro backend resta identico)
+- **Latenza:** zero
+- **Rischio:** minimo. Nel caso peggiore l'LLM propone più interventi (should_ai_speak=true con score basso), ma il filtro backend li blocca comunque
+
+---
+
+### 2.7 [DA IMPLEMENTARE] Skip chiamata LLM in fase non-ACTIVE
+
+**Stato:** da implementare (quick win).
+
+**Data proposta:** 2026-04-22
+
+**Problema:** quando `session_phase != "ACTIVE"` (es. CONCLUSION), la chiamata LLM avviene comunque ma il filtro backend in `_decide_ai_intervention()` (service.py:413) ritorna sempre `False`. Si paga latenza e token per una risposta che sarà scartata.
+
+**Soluzione:** nell'orchestrator (o all'inizio di `handle_human_turn_ended`), se `session_phase != "ACTIVE"` e `hard_action == NONE`:
+- Aggiornare il summary con un append locale (senza LLM): `state.summary += " " + last_turn`
+- Salvare lo stato
+- Ritornare `ai_should_speak=False`
+
+Il forced_conclusion ha il suo path dedicato (`call_llm_for_conclusion`) e non passa da qui, quindi non è impattato.
+
+**Impatto:** risparmio di ~200-500ms e ~500 token per ogni turno in fase CONCLUSION. Minor ma gratuito.
 
 ---
 
@@ -245,7 +448,10 @@ Valutazione empirica fattibile: baseline (single call) vs treatment (two-stage),
 
 Quando si torna a questo documento per implementare:
 
-- [ ] **2.1 Reason nel report** → stato attuale del codice: da modificare `state.py`, `service.py:76`, `apps/reports/`. Nessun blocker.
-- [ ] **2.4 Double-call** → prima decidere definitivamente col tutor, poi progettare prompt Call 1 + Call 2.
-- [ ] **2.3 Task-specific forced_summary** → dopo prima round di test NASA Moon, decidere tra eliminazione totale o capability.
+- [x] **2.1 `interventions_log` nel report** → completato 2026-04-24. `state.py`, `service.py`, `sessions/services.py`, prompt report (base + MM + NASA + Lost at Sea), `pdf_service.py`, 10 test.
+- [ ] **2.4 Last AI intervention nel payload** → estendere `ModerationState` con `last_ai_message`/`last_ai_reason`, aggiungere al payload in `_call_llm()`, aggiornare prompt in `_build_normal_mode_prompt()`.
+- [ ] **2.5 Metric-informed moderation** → modificare `_call_llm()` e `_build_normal_mode_prompt()`. Inizializzare `turns_per_participant` con tutti i partecipanti.
+- [ ] **2.6 Refactoring soglia** → modificare `_build_normal_mode_prompt()` (rimuovere istruzione soglia). Filtro backend invariato.
+- [ ] **2.7 Skip LLM in fase non-ACTIVE** → modificare orchestrator o `handle_human_turn_ended`. Quick win.
+- [ ] **2.3 Eliminazione/task-specific forced_summary** → da decidere con tutor. Se eliminato, valutare collasso di `evaluate_triggers_on_human_turn_end()`.
 - [ ] **2.2 Tono per reason** → solo se test utente mostra messaggi troppo omogenei.

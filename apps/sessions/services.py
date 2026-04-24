@@ -139,6 +139,12 @@ def _collect_report_data(session, mod_state=None, task=None) -> dict:
         "final_summary": session.final_summary or "",
     }
 
+    # Log interventi AI (normal mode)
+    if mod_state and hasattr(mod_state, 'interventions_log'):
+        data["interventions_log"] = mod_state.interventions_log
+    else:
+        data["interventions_log"] = []
+
     # Mergia dati task-specifici (per MM: votes, guilty, success_rate)
     if task is not None:
         data.update(task.collect_report_context(session))

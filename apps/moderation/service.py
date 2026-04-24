@@ -139,11 +139,18 @@ class ModerationService:
             mode=mode,
         )
 
-        # 5) Se l'AI parlerà in normal mode, aggiornare contatori
+        # 5) Se l'AI parlerà in normal mode, aggiornare contatori e log
         # (forced_summary e forced_conclusion non consumano il budget interventi)
         if ai_should_speak and mode == "normal":
             state.ai_interventions_count += 1
             state.last_ai_intervention_at = datetime.utcnow()
+            state.interventions_log.append({
+                "ts": datetime.utcnow().isoformat(),
+                "reason": llm_output.get("reason", "unknown"),
+                "score": llm_output.get("intervention_score", 0.0),
+                "speaker": speaker_name,
+                "message": ai_message,
+            })
 
         # 6) Se forced_conclusion e AI ha parlato, setta il flag
         if mode == "forced_conclusion" and ai_should_speak:

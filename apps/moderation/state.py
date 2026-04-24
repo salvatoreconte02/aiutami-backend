@@ -26,6 +26,7 @@ class ModerationState:
     conclusion_reason: Optional[str]  # "timer_expired" or "all_participants_ready"
     forced_conclusion_done: bool  # True dopo il primo FORCED_CONCLUSION
     turns_per_participant: dict[str, int]  # {"speaker_name": count}
+    interventions_log: list[dict]  # log di ogni intervento AI normal mode
 
     @classmethod
     def initial(cls) -> "ModerationState":
@@ -37,6 +38,7 @@ class ModerationState:
             conclusion_reason=None,
             forced_conclusion_done=False,
             turns_per_participant={},
+            interventions_log=[],
         )
 
 
@@ -67,6 +69,7 @@ def load_moderation_state(session_id: int | str) -> ModerationState:
         conclusion_reason=data.get("conclusion_reason"),
         forced_conclusion_done=data.get("forced_conclusion_done", False),
         turns_per_participant=data.get("turns_per_participant", {}),
+        interventions_log=data.get("interventions_log", []),
     )
 
 
@@ -85,6 +88,7 @@ def save_moderation_state(session_id: int | str, state: ModerationState) -> None
             "conclusion_reason": state.conclusion_reason,
             "forced_conclusion_done": state.forced_conclusion_done,
             "turns_per_participant": state.turns_per_participant,
+            "interventions_log": state.interventions_log,
         },
-        timeout=None,  
+        timeout=None,
     )

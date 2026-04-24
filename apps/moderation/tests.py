@@ -2258,6 +2258,144 @@ class CooldownBypassTests(TestCase):
         self.assertTrue(result.ai_should_speak)
 
 
+class InterventionsLogTests(TestCase):
+    """Test per il campo interventions_log in ModerationState."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_initial_state_has_empty_interventions_log(self):
+        state = ModerationState.initial()
+        self.assertEqual(state.interventions_log, [])
+
+    def test_interventions_log_persists_after_save_and_load(self):
+        session_id = "test-log-persist"
+        state = ModerationState.initial()
+        state.interventions_log = [
+            {"ts": "2026-04-24T14:30:00", "reason": "monopolization",
+             "score": 0.85, "speaker": "Marco", "message": "Lucia, tu cosa..."},
+        ]
+        save_moderation_state(session_id, state)
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(len(loaded.interventions_log), 1)
+        self.assertEqual(loaded.interventions_log[0]["reason"], "monopolization")
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_normal_mode_intervention_appends_to_log(self, mock_llm):
+        """Normal mode AI intervention should append to interventions_log."""
+        session_id = "test-log-normal"
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Lucia, tu cosa ne pensi?",
+            "reason": "exclusion",
+            "intervention_score": 0.8,
+        }
+        state = ModerationState.initial()
+        save_moderation_state(session_id, state)
+
+        ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Bla bla",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Marco",
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(len(loaded.interventions_log), 1)
+        entry = loaded.interventions_log[0]
+        self.assertEqual(entry["reason"], "exclusion")
+        self.assertAlmostEqual(entry["score"], 0.8, places=1)
+        self.assertEqual(entry["speaker"], "Marco")
+        self.assertEqual(entry["message"], "Lucia, tu cosa ne pensi?")
+        self.assertIn("T", entry["ts"])  # ISO format
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_no_intervention_does_not_append_to_log(self, mock_llm):
+        """When AI does not speak, interventions_log should stay empty."""
+        session_id = "test-log-no-speak"
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": False,
+            "message_to_say": None,
+            "reason": "all_ok",
+            "intervention_score": 0.2,
+        }
+        state = ModerationState.initial()
+        save_moderation_state(session_id, state)
+
+        ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Bla bla",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Marco",
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(len(loaded.interventions_log), 0)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_forced_summary_does_not_append_to_log(self, mock_llm):
+        """Forced summary interventions should NOT go into interventions_log."""
+        session_id = "test-log-forced-summary"
+        mock_llm.return_value = {
+            "updated_summary": "Summary",
+            "should_ai_speak": True,
+            "message_to_say": "Ricapitolando...",
+            "reason": "forced_summary",
+            "intervention_score": 1.0,
+        }
+        state = ModerationState.initial()
+        save_moderation_state(session_id, state)
+
+        ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Bla bla",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.FORCED_SUMMARY,
+            speaker_name="Marco",
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(len(loaded.interventions_log), 0)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_log_entry_structure(self, mock_llm):
+        """Each log entry must have ts, reason, score, speaker, message."""
+        session_id = "test-log-structure"
+        mock_llm.return_value = {
+            "updated_summary": "Summary",
+            "should_ai_speak": True,
+            "message_to_say": "Torniamo al tema",
+            "reason": "off_topic",
+            "intervention_score": 0.9,
+        }
+        state = ModerationState.initial()
+        save_moderation_state(session_id, state)
+
+        ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Parliamo di calcio",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Luigi",
+        )
+
+        loaded = load_moderation_state(session_id)
+        entry = loaded.interventions_log[0]
+        expected_keys = {"ts", "reason", "score", "speaker", "message"}
+        self.assertEqual(set(entry.keys()), expected_keys)
+
+
 class SomeoneIsSpeakingDuringIntroTests(TestCase):
     def setUp(self):
         cache.clear()

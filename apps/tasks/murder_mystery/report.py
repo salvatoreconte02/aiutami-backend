@@ -31,6 +31,12 @@ STATISTICHE PARTECIPAZIONE
 - Interventi del moderatore AI con percentuale
 - Commenta il Gini index della partecipazione (0 = perfetta uguaglianza, 1 = massima disuguaglianza)
 
+INTERVENTI DEL MODERATORE
+Se presente `interventions_log`, includi:
+- Numero totale di interventi AI
+- Breakdown per reason (es: "3 off_topic, 2 monopolization, 1 user_request")
+- Per ogni intervento: timestamp, reason, speaker che aveva parlato
+
 RIASSUNTO DELLA DISCUSSIONE
 - Basato sul final_summary fornito, rielaboralo in modo discorsivo
 
