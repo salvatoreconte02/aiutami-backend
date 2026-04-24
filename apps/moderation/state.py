@@ -20,7 +20,6 @@ class ModerationState:
     Vive in Redis e viene aggiornato ad ogni turno umano.
     """
     summary: str
-    human_turns_since_last_summary: int
     ai_interventions_count: int
     last_ai_intervention_at: Optional[datetime]
     conclusion_reason: Optional[str]  # "timer_expired" or "all_participants_ready"
@@ -32,7 +31,6 @@ class ModerationState:
     def initial(cls) -> "ModerationState":
         return cls(
             summary=DEFAULT_SUMMARY,
-            human_turns_since_last_summary=0,
             ai_interventions_count=0,
             last_ai_intervention_at=None,
             conclusion_reason=None,
@@ -61,9 +59,6 @@ def load_moderation_state(session_id: int | str) -> ModerationState:
 
     return ModerationState(
         summary=data.get("summary", DEFAULT_SUMMARY),
-        human_turns_since_last_summary=data.get(
-            "human_turns_since_last_summary", 0
-        ),
         ai_interventions_count=data.get("ai_interventions_count", 0),
         last_ai_intervention_at=data.get("last_ai_intervention_at"),
         conclusion_reason=data.get("conclusion_reason"),
@@ -82,7 +77,6 @@ def save_moderation_state(session_id: int | str, state: ModerationState) -> None
         key,
         {
             "summary": state.summary,
-            "human_turns_since_last_summary": state.human_turns_since_last_summary,
             "ai_interventions_count": state.ai_interventions_count,
             "last_ai_intervention_at": state.last_ai_intervention_at,
             "conclusion_reason": state.conclusion_reason,

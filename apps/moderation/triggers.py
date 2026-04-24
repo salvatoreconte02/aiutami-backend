@@ -8,7 +8,7 @@ from django.core.cache import cache
 from apps.tasks.base import TaskDefinition
 
 from .state import ModerationState
-from .service import HardModerationAction, SUMMARY_TURNS_INTERVAL
+from .service import HardModerationAction
 
 
 NO_PUSH_MESSAGES = [
@@ -138,10 +138,6 @@ def evaluate_triggers_on_human_turn_end(
     static_messages: list[StaticMessage] = []
     should_transition_to_conclusion = False
 
-    # 1) Trigger hard: riassunto ogni N turni umani (FORCED_SUMMARY)
-    if _should_force_summary(moderation_state):
-        hard_action = HardModerationAction.FORCED_SUMMARY
-
     # NOTE: Trigger FORCED_CONCLUSION rimosso - ora eseguito immediatamente alla
     # transizione di sessione via _execute_forced_conclusion() in ws_consumer.py
 
@@ -215,15 +211,6 @@ def evaluate_time_based_triggers(
         static_messages_to_speak=static_messages,
         should_transition_to_conclusion=should_transition,
     )
-
-
-def _should_force_summary(state: ModerationState) -> bool:
-    """
-    Determina se scatta il trigger hard di riassunto intermedio.
-    Dal punto di vista del trigger, il controllo è banale:
-    si usa il contatore dei turni umani dall'ultimo riassunto.
-    """
-    return state.human_turns_since_last_summary + 1 >= SUMMARY_TURNS_INTERVAL
 
 
 def _collect_static_messages_for_current_state(

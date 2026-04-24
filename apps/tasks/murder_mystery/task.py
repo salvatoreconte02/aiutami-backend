@@ -56,7 +56,6 @@ class MurderMysteryTask(TaskDefinition):
     def task_context_block(self, mode: str) -> str:
         return {
             "normal": mm_prompts.SCENARIO_BLOCK_NORMAL,
-            "forced_summary": mm_prompts.SCENARIO_BLOCK_FORCED_SUMMARY,
             "forced_conclusion": mm_prompts.SCENARIO_BLOCK_FORCED_CONCLUSION,
         }.get(mode, "")
 
@@ -66,11 +65,6 @@ class MurderMysteryTask(TaskDefinition):
                 "type": "murder_mystery",
                 "vote_action": "selezionare il colpevole",
                 "vote_outcome": "scoprirete se avete indovinato l'assassino",
-            }
-        if mode == "forced_summary":
-            return {
-                "type": "murder_mystery",
-                "objective": "Scoprire chi è l'assassino tra i sospettati",
             }
         # normal
         return {

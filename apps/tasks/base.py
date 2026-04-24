@@ -77,7 +77,7 @@ class TaskDefinition(ABC):
         Ritorna il blocco di testo task-specifico da iniettare nello scheletro
         del system prompt del moderatore.
 
-        `mode` è uno di: "normal", "forced_summary", "forced_conclusion".
+        `mode` è uno di: "normal", "forced_conclusion".
         Stringa vuota = task completamente generico (nessuno scenario specifico).
         """
         return ""

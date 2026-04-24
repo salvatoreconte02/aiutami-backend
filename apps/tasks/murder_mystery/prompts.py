@@ -14,11 +14,6 @@ SCENARIO_BLOCK_NORMAL = """## Scenario
 I partecipanti stanno giocando a un murder mystery. Il loro obiettivo è discutere gli indizi e scoprire chi è l'assassino."""
 
 
-# Usato dal prompt `forced_summary` (ricapitolazione intermedia periodica).
-SCENARIO_BLOCK_FORCED_SUMMARY = """## Scenario
-I partecipanti stanno giocando a un murder mystery. Devono discutere gli indizi e scoprire chi è l'assassino."""
-
-
 # Usato dal prompt `forced_conclusion` (messaggio finale di chiusura).
 # Istruisce l'LLM sull'azione finale richiesta ai partecipanti (voto colpevole).
 SCENARIO_BLOCK_FORCED_CONCLUSION = """## Scenario

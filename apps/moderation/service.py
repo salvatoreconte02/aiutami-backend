@@ -43,14 +43,12 @@ def _resolve_task(task_key: Optional[str], session_id: Optional[str | int] = Non
 # Parametri configurabili (in seguito si possono spostare in settings)
 AI_INTERVENTION_COOLDOWN = timedelta(seconds=60)
 COOLDOWN_BYPASS_REASONS = {"conflict", "user_request"}
-SUMMARY_TURNS_INTERVAL = 6  # Riassunto ogni 6 turni umani
 
 class HardModerationAction(str, Enum):
     """
     Azione di moderazione "hard" decisa dal motore trigger PRIMA della chiamata LLM.
     """
     NONE = "none"
-    FORCED_SUMMARY = "forced_summary"
     FORCED_CONCLUSION = "forced_conclusion"
 
 
@@ -92,7 +90,6 @@ class ModerationService:
 
         `hard_action` indica se questo turno scatena:
         - nessun intervento LLM obbligatorio (NONE),
-        - un riassunto intermedio obbligatorio (FORCED_SUMMARY),
         - una conclusione obbligatoria (FORCED_CONCLUSION).
         """
         state = load_moderation_state(session_id)
@@ -120,14 +117,6 @@ class ModerationService:
         # 3) Aggiornare il riassunto in ogni caso
         state.summary = llm_output["updated_summary"]
 
-        # Gestione contatore turni dall'ultimo riassunto intermedio
-        if mode == "forced_summary":
-            state.human_turns_since_last_summary = 0
-        else:
-            # Il motore trigger esterno userà questo contatore per decidere
-            # quando impostare hard_action = FORCED_SUMMARY
-            state.human_turns_since_last_summary += 1
-
         # 4) Decidere se l'AI deve parlare davvero (regole backend + hard/soft)
         ai_should_speak, ai_message = cls._decide_ai_intervention(
             state=state,
@@ -140,7 +129,7 @@ class ModerationService:
         )
 
         # 5) Se l'AI parlerà in normal mode, aggiornare contatori e log
-        # (forced_summary e forced_conclusion non consumano il budget interventi)
+        # (forced_conclusion non consuma il budget interventi)
         if ai_should_speak and mode == "normal":
             state.ai_interventions_count += 1
             state.last_ai_intervention_at = datetime.utcnow()
@@ -174,8 +163,6 @@ class ModerationService:
         """
         Traduce l'azione hard in una modalità per il prompt LLM.
         """
-        if hard_action == HardModerationAction.FORCED_SUMMARY:
-            return "forced_summary"
         if hard_action == HardModerationAction.FORCED_CONCLUSION:
             return "forced_conclusion"
         return "normal"
@@ -335,15 +322,6 @@ class ModerationService:
         """
         logger.warning("[MODERATION][LLM][FALLBACK] mode=%s (using local fallback)", mode)
 
-        if mode == "forced_summary":
-            return {
-                "updated_summary": base_updated_summary,
-                "should_ai_speak": True,
-                "message_to_say": f"Ricapitolando finora: {base_updated_summary}",
-                "reason": "summary_fallback",
-                "intervention_score": 1.0,
-            }
-
         if mode == "forced_conclusion":
             if task is None:
                 task = _resolve_task(None)
@@ -383,14 +361,14 @@ class ModerationService:
 
         Casi:
 
-        - mode == "forced_summary" / "forced_conclusion":
+        - mode == "forced_conclusion":
           intervento obbligatorio, si salta il filtro di cooldown/limiti.
 
         - mode == "normal":
           si usano cooldown, max interventi, eventuale soglia su llm_score.
         """
 
-        if mode in ("forced_summary", "forced_conclusion"):
+        if mode == "forced_conclusion":
             # Se il modello non ha fornito un messaggio esplicito,
             # si usa come fallback il riassunto attuale dello stato.
             if not llm_message:
@@ -577,184 +555,6 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
         }
 
     @classmethod
-    def call_llm_for_summary(
-        cls,
-        *,
-        summary_in: str,
-        last_turn_text: str,
-        last_turn_speaker: Optional[str],
-        participants_turns: dict[str, int],
-        total_turns: int,
-        task_key: Optional[str] = None,
-    ) -> dict:
-        """
-        Chiamata LLM dedicata per FORCED_SUMMARY.
-
-        A differenza di _call_llm(), usa un prompt specifico che combina:
-        1. Valutazione problemi (monopolizzazione, esclusione, off-topic, conflitto)
-        2. Ricapitolazione periodica della discussione
-
-        Returns dict with:
-        - updated_summary
-        - message_to_say
-        - correction_reason (monopolization|exclusion|off_topic|conflict|null)
-        """
-        logger.info(
-            "[MODERATION][LLM][SUMMARY_REQUEST] speaker=%s total_turns=%d",
-            last_turn_speaker,
-            total_turns,
-        )
-
-        task = _resolve_task(task_key)
-
-        llm_input = {
-            "mode": "forced_summary",
-            "summary_in": summary_in,
-            "last_turn": {
-                "speaker": last_turn_speaker,
-                "text": last_turn_text,
-            },
-            "participants": {
-                "count": len(participants_turns),
-                "names": list(participants_turns.keys()),
-                "turns": participants_turns,
-            },
-            "session": {
-                "total_turns": total_turns,
-            },
-            "scenario": task.llm_scenario_payload("forced_summary"),
-            "language": "it",
-        }
-
-        try:
-            client = cls._build_openai_client()
-
-            system_prompt = cls._build_forced_summary_system_prompt(task=task)
-
-            response = client.chat.completions.create(
-                model=settings.OPENAI_LLM_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": json.dumps(llm_input, ensure_ascii=False)},
-                ],
-                temperature=0.4,
-                max_tokens=512,
-                response_format={"type": "json_object"},
-            )
-
-            raw_output = response.choices[0].message.content
-            if isinstance(raw_output, list):
-                raw_output = "".join(part.get("text", "") for part in raw_output)
-
-        except Exception as e:
-            logger.warning("[MODERATION][LLM][SUMMARY_ERROR] error=%s", str(e))
-            return cls._fallback_forced_summary(summary_in, last_turn_text)
-
-        try:
-            parsed = json.loads(raw_output)
-        except Exception as e:
-            logger.warning(
-                "[MODERATION][LLM][SUMMARY_PARSE_ERROR] raw=%r error=%s",
-                raw_output, str(e)
-            )
-            return cls._fallback_forced_summary(summary_in, last_turn_text)
-
-        logger.info(
-            "[MODERATION][LLM][SUMMARY_RESPONSE] correction=%s message=%r",
-            parsed.get("correction_reason"),
-            (parsed.get("message_to_say", "") or "")[:50],
-        )
-
-        return {
-            "updated_summary": parsed.get("updated_summary", summary_in),
-            "message_to_say": parsed.get("message_to_say"),
-            "correction_reason": parsed.get("correction_reason"),
-        }
-
-    @classmethod
-    def _fallback_forced_summary(cls, summary_in: str, last_turn_text: str) -> dict:
-        """
-        Comportamento di riserva se la chiamata LLM per summary fallisce.
-        """
-        combined = f"{summary_in} {last_turn_text}".strip()
-
-        return {
-            "updated_summary": combined,
-            "message_to_say": (
-                "Facciamo il punto della situazione. "
-                f"{combined} "
-                "Ci sono aspetti che volete approfondire?"
-            ),
-            "correction_reason": None,
-        }
-
-    @classmethod
-    def _build_forced_summary_system_prompt(
-        cls, task: Optional[TaskDefinition] = None
-    ) -> str:
-        """System prompt dedicato per FORCED_SUMMARY con comportamento ibrido."""
-        if task is None:
-            task = _resolve_task(None)
-        scenario_block = task.task_context_block("forced_summary")
-
-        template = """Sei il moderatore AI di AIutami, una piattaforma per discussioni di gruppo.
-
-## Contesto importante
-
-Ti sei GIÀ PRESENTATO all'inizio della sessione. Questo è un intervento INTERMEDIO durante una discussione in corso.
-
-**NON usare mai:**
-- Saluti ("Ciao", "Ciao a tutti", "Buongiorno", "Salve")
-- Presentazioni ("Sono il moderatore", "Mi presento")
-- Formule di apertura generiche ("Benvenuti", "È un piacere")
-
-**Inizia invece con una connessione al flusso della discussione:**
-- "Finora è emerso che..."
-- "Abbiamo sentito diversi punti di vista..."
-- "La discussione ha toccato..."
-- "Vediamo a che punto siamo..."
-
-__SCENARIO_BLOCK__
-
-## Il tuo compito
-
-Genera un messaggio di ricapitolazione periodica. Parla in modo naturale e coinvolgente, come un facilitatore esperto che interviene a metà discussione.
-
-### Struttura del messaggio
-
-1. **[Solo se necessario] Correzione gentile** - Se rilevi un problema nell'ultimo turno, inizia con un invito delicato a riequilibrare
-2. **Ricapitolazione fluida** - Riassumi in modo discorsivo i punti emersi finora, menzionando chi ha sollevato cosa
-3. **Apertura sul contenuto** - Concludi invitando ad approfondire un aspetto non ancora esplorato
-
-## Criteri per la correzione
-
-Includi una correzione SOLO se rilevi un problema nell'ultimo turno (`last_turn.text`):
-- **Off-topic**: L'ultimo turno è fuori tema rispetto allo scenario?
-- **Conflitto**: L'ultimo turno contiene toni aggressivi?
-
-⚠️ NON usare il summary per valutare questi problemi. Il summary è storico e potresti correggere problemi già affrontati in turni precedenti.
-
-Se l'ultimo turno non presenta problemi, vai diretto alla ricapitolazione senza correzione.
-
-## Tono e stile
-- Caldo e naturale, come un facilitatore esperto
-- Fluido e discorsivo, non a elenco
-- Lunghezza: 60-100 parole (30-45 secondi di parlato)
-
-## Output
-
-Rispondi SOLO con un JSON valido:
-
-{
-    "updated_summary": "Riassunto aggiornato includendo l'ultimo turno",
-    "message_to_say": "Il messaggio vocale completo",
-    "correction_reason": "off_topic | conflict | null"
-}
-
-IMPORTANTE: `correction_reason` indica il tipo di problema rilevato. Se non c'è problema, usa null."""
-        return template.replace("__SCENARIO_BLOCK__", scenario_block)
-
-    @classmethod
     def _build_normal_mode_prompt(
         cls, task: Optional[TaskDefinition] = None
     ) -> str:
@@ -842,7 +642,7 @@ Rispondi SEMPRE con un JSON valido:
         Costruisce il system prompt appropriato in base alla modalità.
 
         Args:
-            mode: "normal", "forced_summary", o "forced_conclusion"
+            mode: "normal" o "forced_conclusion"
             task: TaskDefinition da cui estrarre il blocco scenario.
 
         Returns:
@@ -850,7 +650,5 @@ Rispondi SEMPRE con un JSON valido:
         """
         if mode == "forced_conclusion":
             return cls._build_forced_conclusion_system_prompt(task=task)
-        if mode == "forced_summary":
-            return cls._build_forced_summary_system_prompt(task=task)
         # normal e qualsiasi modalità sconosciuta → normal mode
         return cls._build_normal_mode_prompt(task=task)

@@ -47,7 +47,6 @@ class NasaMoonTask(TaskDefinition):
     def task_context_block(self, mode: str) -> str:
         return {
             "normal": nasa_prompts.SCENARIO_BLOCK_NORMAL,
-            "forced_summary": nasa_prompts.SCENARIO_BLOCK_FORCED_SUMMARY,
             "forced_conclusion": nasa_prompts.SCENARIO_BLOCK_FORCED_CONCLUSION,
         }.get(mode, "")
 
@@ -57,11 +56,6 @@ class NasaMoonTask(TaskDefinition):
                 "type": "nasa_moon_survival",
                 "submission_action": "confermare il ranking finale dei 15 oggetti",
                 "submission_outcome": "il ranking verra confrontato con quello degli esperti NASA",
-            }
-        if mode == "forced_summary":
-            return {
-                "type": "nasa_moon_survival",
-                "objective": "Classificare 15 oggetti per la sopravvivenza sulla Luna",
             }
         # normal
         return {

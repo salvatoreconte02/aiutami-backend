@@ -47,7 +47,6 @@ class LostAtSeaTask(TaskDefinition):
     def task_context_block(self, mode: str) -> str:
         return {
             "normal": sea_prompts.SCENARIO_BLOCK_NORMAL,
-            "forced_summary": sea_prompts.SCENARIO_BLOCK_FORCED_SUMMARY,
             "forced_conclusion": sea_prompts.SCENARIO_BLOCK_FORCED_CONCLUSION,
         }.get(mode, "")
 
@@ -57,11 +56,6 @@ class LostAtSeaTask(TaskDefinition):
                 "type": "lost_at_sea",
                 "submission_action": "confermare il ranking finale dei 15 oggetti",
                 "submission_outcome": "il ranking verra confrontato con quello degli esperti della US Coast Guard",
-            }
-        if mode == "forced_summary":
-            return {
-                "type": "lost_at_sea",
-                "objective": "Classificare 15 oggetti per la sopravvivenza in mare aperto",
             }
         # normal
         return {

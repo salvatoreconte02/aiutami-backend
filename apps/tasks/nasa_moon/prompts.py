@@ -24,13 +24,5 @@ Il moderatore deve incoraggiare il rispetto di queste regole durante la discussi
 {GROUND_RULES}"""
 
 
-SCENARIO_BLOCK_FORCED_SUMMARY = f"""## Scenario
-I partecipanti stanno affrontando la NASA Moon Survival Challenge: devono classificare 15 oggetti per la sopravvivenza sulla Luna e raggiungere un consenso di gruppo.
-
-## Regole procedurali
-Nella ricapitolazione, evidenzia se il gruppo sta rispettando le regole di consenso:
-{GROUND_RULES}"""
-
-
 SCENARIO_BLOCK_FORCED_CONCLUSION = """## Scenario
 I partecipanti hanno affrontato la NASA Moon Survival Challenge. Al termine della sessione l'host deve confermare il ranking finale dei 15 oggetti nell'interfaccia. Il ranking deve riflettere il consenso raggiunto dal gruppo durante la discussione."""

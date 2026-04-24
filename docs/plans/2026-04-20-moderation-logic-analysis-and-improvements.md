@@ -155,9 +155,9 @@ Se reason == user_request: rispondi direttamente alla richiesta
 
 ---
 
-### 2.3 [FUTURE WORK] Rendere `forced_summary` una capability task-specific (o eliminarlo del tutto)
+### 2.3 [COMPLETATO] Rimozione completa di `forced_summary`
 
-**Stato:** future work. Il problema osservato è reale ma la decisione richiede test A/B o discussione tutor.
+**Stato:** implementato (2026-04-24). Rimosso completamente il meccanismo di ricapitolazione periodica ogni 6 turni.
 
 **Motivazione:** la ricapitolazione periodica ogni 6 turni toglie naturalezza alla discussione, soprattutto su NASA Moon Survival dove il ragionamento è continuo e il momentum è importante. Originariamente introdotta per "dare freschezza mentale" al gruppo, ma nei test percepita come meccanica.
 
@@ -453,5 +453,5 @@ Quando si torna a questo documento per implementare:
 - [ ] **2.5 Metric-informed moderation** → modificare `_call_llm()` e `_build_normal_mode_prompt()`. Inizializzare `turns_per_participant` con tutti i partecipanti.
 - [ ] **2.6 Refactoring soglia** → modificare `_build_normal_mode_prompt()` (rimuovere istruzione soglia). Filtro backend invariato.
 - [ ] **2.7 Skip LLM in fase non-ACTIVE** → modificare orchestrator o `handle_human_turn_ended`. Quick win.
-- [ ] **2.3 Eliminazione/task-specific forced_summary** → da decidere con tutor. Se eliminato, valutare collasso di `evaluate_triggers_on_human_turn_end()`.
+- [x] **2.3 Rimozione forced_summary** → completato 2026-04-24. Rimosso completamente: costante, enum, metodi LLM dedicati, trigger, orchestrator handler, stato Redis, prompt task-specifici, ~17 test.
 - [ ] **2.2 Tono per reason** → solo se test utente mostra messaggi troppo omogenei.

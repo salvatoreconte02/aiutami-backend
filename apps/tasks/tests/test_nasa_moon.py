@@ -110,7 +110,7 @@ class NasaMoonPromptTests(SimpleTestCase):
         self.task = get_task("nasa_moon_survival")
 
     def test_task_context_block_not_empty(self) -> None:
-        for mode in ("normal", "forced_summary", "forced_conclusion"):
+        for mode in ("normal", "forced_conclusion"):
             block = self.task.task_context_block(mode)
             self.assertTrue(len(block) > 0, f"Block for {mode} is empty")
 

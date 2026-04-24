@@ -47,7 +47,7 @@ class GenericPromptTests(SimpleTestCase):
         self.task = get_task("generic")
 
     def test_task_context_block_empty(self) -> None:
-        for mode in ("normal", "forced_summary", "forced_conclusion"):
+        for mode in ("normal", "forced_conclusion"):
             self.assertEqual(self.task.task_context_block(mode), "")
 
     def test_llm_scenario_payload_empty(self) -> None:
