@@ -104,11 +104,29 @@ class ModerationService:
         """
         state = load_moderation_state(session_id)
 
-        # Incrementa contatore turni per lo speaker
-        if speaker_name:
-            state.turns_per_participant[speaker_name] = (
-                state.turns_per_participant.get(speaker_name, 0) + 1
-            )
+        # Accumula speaking time del turno appena chiuso, se abbiamo un
+        # timestamp di inizio (settato da record_human_turn_start).
+        # Se manca (es. reconnection mid-turn, test che chiamano direttamente),
+        # il delta è 0 e non aggiorniamo lo state.
+        if speaker_name and state.current_turn_started_at is not None:
+            delta_seconds = (
+                datetime.utcnow() - state.current_turn_started_at
+            ).total_seconds()
+            if delta_seconds > 0:
+                state.speaking_time_per_participant[speaker_name] = (
+                    state.speaking_time_per_participant.get(speaker_name, 0.0)
+                    + delta_seconds
+                )
+            state.current_turn_started_at = None
+
+        # Elapsed seconds dalla sessione (per min_time_reached). Default a 0
+        # se session_started_at non è ancora stato settato (sessione inattiva
+        # o test diretti).
+        elapsed_seconds = 0.0
+        if state.session_started_at is not None:
+            elapsed_seconds = (
+                datetime.utcnow() - state.session_started_at
+            ).total_seconds()
 
         # 1) Determinare la modalità di chiamata LLM in base a hard_action
         mode = cls._decide_llm_mode(hard_action, session_phase)
@@ -120,7 +138,8 @@ class ModerationService:
             mode=mode,
             session_phase=session_phase,
             speaker_name=speaker_name,
-            turns_per_participant=state.turns_per_participant,
+            speaking_time_per_participant=state.speaking_time_per_participant,
+            elapsed_seconds=elapsed_seconds,
             interventions_log=state.interventions_log,
             task_key=task_key,
         )
@@ -164,6 +183,24 @@ class ModerationService:
             ai_message=ai_message,
             updated_state=state,
         )
+
+    @classmethod
+    def record_human_turn_start(
+        cls,
+        *,
+        session_id: int | str,
+        speaker_name: Optional[str],
+    ) -> None:
+        """
+        Registra l'istante di inizio di un turno umano. Chiamato dal turn
+        consumer quando state transita a HUMAN_SPEAKING. Il delta verrà
+        accumulato in speaking_time_per_participant in handle_human_turn_ended.
+        """
+        if not speaker_name:
+            return
+        state = load_moderation_state(session_id)
+        state.current_turn_started_at = datetime.utcnow()
+        save_moderation_state(session_id, state)
 
     @classmethod
     def _decide_llm_mode(
@@ -218,7 +255,8 @@ class ModerationService:
         mode: str,
         session_phase: str,
         speaker_name: Optional[str] = None,
-        turns_per_participant: Optional[dict[str, int]] = None,
+        speaking_time_per_participant: Optional[dict[str, float]] = None,
+        elapsed_seconds: float = 0.0,
         interventions_log: Optional[list[dict]] = None,
         task_key: Optional[str] = None,
     ) -> dict:
@@ -237,16 +275,23 @@ class ModerationService:
         base_updated_summary = (summary_in + " " + last_turn).strip()
 
         # 1) Preparazione input strutturato per il modello
-        if turns_per_participant is None:
-            turns_per_participant = {}
+        if speaking_time_per_participant is None:
+            speaking_time_per_participant = {}
         if interventions_log is None:
             interventions_log = []
 
-        total_turns = sum(turns_per_participant.values()) if turns_per_participant else 0
+        total_speaking_time_s = (
+            sum(speaking_time_per_participant.values())
+            if speaking_time_per_participant
+            else 0.0
+        )
 
         task = _resolve_task(task_key)
 
-        participation_metrics = compute_participation_metrics(turns_per_participant)
+        participation_metrics = compute_participation_metrics(
+            speaking_time_per_participant,
+            elapsed_seconds=elapsed_seconds,
+        )
         last_by_reason = cls._extract_last_interventions_by_reason(interventions_log)
 
         llm_input = {
@@ -258,14 +303,19 @@ class ModerationService:
                 "last_speaker": speaker_name,
             },
             "participants": {
-                "count": len(turns_per_participant) if turns_per_participant else 3,
-                "names": list(turns_per_participant.keys()),
+                "count": (
+                    len(speaking_time_per_participant)
+                    if speaking_time_per_participant
+                    else 3
+                ),
+                "names": list(speaking_time_per_participant.keys()),
             },
             "participation_metrics": participation_metrics,
             "last_interventions_by_reason": last_by_reason,
             "session": {
                 "phase": session_phase,
-                "total_turns": total_turns,
+                "elapsed_seconds": round(elapsed_seconds, 1),
+                "total_speaking_time_s": round(total_speaking_time_s, 1),
             },
             "language": "it",
         }
@@ -649,18 +699,19 @@ Per decidere se intervenire su questi problemi, valuta ESCLUSIVAMENTE l'ultimo t
 ⚠️ NON usare il `summary` per valutare questi problemi. Il summary è storico e potresti intervenire su problemi già affrontati in turni precedenti.
 
 ### Problemi CUMULATIVI → guarda `participation_metrics`
-Il backend ti fornisce `participation_metrics` pre-calcolato:
-- `over_participators`: nomi di chi ha parlato > 2× la media dei turni
-- `under_participators`: nomi di chi ha parlato < 0.5× la media dei turni
-- `min_turns_reached`: true se la discussione ha abbastanza turni
-  (>= 2 × numero partecipanti) per valutare monopolization/exclusion
+Il backend ti fornisce `participation_metrics` pre-calcolato sullo SPEAKING TIME (secondi cumulativi parlati per partecipante):
+- `over_participators`: nomi di chi ha parlato > 2× la media dei secondi
+- `under_participators`: nomi di chi ha parlato < 0.5× la media dei secondi
+- `avg_speaking_time_s`: media in secondi
+- `min_time_reached`: true se sono passati abbastanza minuti dall'inizio
+  della sessione (>= 8 minuti) per valutare monopolization/exclusion
 
 Regole:
-- Se `min_turns_reached` è false → IGNORA monopolization ed exclusion.
+- Se `min_time_reached` è false → IGNORA monopolization ed exclusion.
 - Se entrambe le liste sono vuote → ignora monopolization/exclusion.
 - Altrimenti: nomi in `over_participators` → valuta monopolization,
   nomi in `under_participators` → valuta exclusion.
-- Non rifare tu il calcolo sui contatori: fidati delle liste.
+- Non rifare tu il calcolo sui secondi: fidati delle liste.
 
 ### A cosa serve il `summary`
 Usa il summary per:

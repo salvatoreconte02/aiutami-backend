@@ -61,13 +61,13 @@ class ModerationStateTests(TestCase):
 
     def test_initial_without_participants_has_empty_dict(self):
         state = ModerationState.initial()
-        self.assertEqual(state.turns_per_participant, {})
+        self.assertEqual(state.speaking_time_per_participant, {})
 
     def test_initial_with_participants_populates_dict_with_zeros(self):
         state = ModerationState.initial(participants=["Marco", "Lucia", "Anna"])
         self.assertEqual(
-            state.turns_per_participant,
-            {"Marco": 0, "Lucia": 0, "Anna": 0},
+            state.speaking_time_per_participant,
+            {"Marco": 0.0, "Lucia": 0.0, "Anna": 0.0},
         )
 
 
@@ -140,8 +140,8 @@ class LastInterventionForReasonTests(TestCase):
 
 class LoadModerationStateInitializesFromDBTests(TestCase):
     """
-    load_moderation_state(session_id) popola turns_per_participant con tutti
-    i partecipanti della sessione a 0 quando lo state non esiste ancora.
+    load_moderation_state(session_id) popola speaking_time_per_participant
+    con tutti i partecipanti della sessione a 0.0 quando lo state non esiste ancora.
     """
 
     def setUp(self):
@@ -188,24 +188,24 @@ class LoadModerationStateInitializesFromDBTests(TestCase):
     def test_new_state_populated_with_all_participants_at_zero(self):
         state = load_moderation_state(self.session.id)
         self.assertEqual(
-            state.turns_per_participant,
-            {"marco": 0, "lucia": 0, "anna": 0},
+            state.speaking_time_per_participant,
+            {"marco": 0.0, "lucia": 0.0, "anna": 0.0},
         )
 
     def test_existing_state_not_overwritten_on_load(self):
         existing = ModerationState.initial(
             participants=["marco", "lucia", "anna"]
         )
-        existing.turns_per_participant["marco"] = 5
+        existing.speaking_time_per_participant["marco"] = 50.0
         save_moderation_state(self.session.id, existing)
 
         loaded = load_moderation_state(self.session.id)
-        self.assertEqual(loaded.turns_per_participant["marco"], 5)
-        self.assertEqual(loaded.turns_per_participant["lucia"], 0)
+        self.assertEqual(loaded.speaking_time_per_participant["marco"], 50.0)
+        self.assertEqual(loaded.speaking_time_per_participant["lucia"], 0.0)
 
     def test_nonexistent_session_falls_back_to_empty_dict(self):
         state = load_moderation_state(999999)
-        self.assertEqual(state.turns_per_participant, {})
+        self.assertEqual(state.speaking_time_per_participant, {})
 
 
 class TriggerEvaluationResultTests(TestCase):
@@ -1163,36 +1163,38 @@ class ModerationStateTurnsPerParticipantTests(TestCase):
     def tearDown(self):
         cache.clear()
 
-    def test_initial_state_has_empty_turns_per_participant(self):
-        """Initial ModerationState should have empty turns_per_participant dict."""
+    def test_initial_state_has_empty_speaking_time_per_participant(self):
         state = ModerationState.initial()
-        self.assertEqual(state.turns_per_participant, {})
+        self.assertEqual(state.speaking_time_per_participant, {})
 
-    def test_turns_per_participant_persists_after_save_and_load(self):
-        """turns_per_participant should be saved to and loaded from Redis."""
+    def test_speaking_time_per_participant_persists_after_save_and_load(self):
         session_id = "test-session-tpp-1"
 
         state = ModerationState.initial()
-        state.turns_per_participant = {"Mario": 3, "Lucia": 1}
+        state.speaking_time_per_participant = {"Mario": 30.5, "Lucia": 12.0}
         save_moderation_state(session_id, state)
 
         loaded = load_moderation_state(session_id)
-        self.assertEqual(loaded.turns_per_participant, {"Mario": 3, "Lucia": 1})
+        self.assertEqual(
+            loaded.speaking_time_per_participant,
+            {"Mario": 30.5, "Lucia": 12.0},
+        )
 
 
-class TurnsPerParticipantIncrementTests(TestCase):
+class SpeakingTimeAccumulationTests(TestCase):
+    """
+    handle_human_turn_ended deve accumulare il delta seconds tra
+    current_turn_started_at e ora nel speaking_time_per_participant.
+    """
+
     def setUp(self):
         cache.clear()
 
     def tearDown(self):
         cache.clear()
 
-    @patch.object(ModerationService, '_call_llm')
-    def test_turns_per_participant_incremented_on_turn_end(self, mock_llm):
-        """handle_human_turn_ended should increment turns_per_participant for speaker."""
-        session_id = "test-tpp-increment-1"
-
-        mock_llm.return_value = {
+    def _mock_llm_no_speak(self):
+        return {
             "updated_summary": "Test summary",
             "should_ai_speak": False,
             "message_to_say": None,
@@ -1200,38 +1202,14 @@ class TurnsPerParticipantIncrementTests(TestCase):
             "intervention_score": 0.2,
         }
 
-        # Initial state with no turns
-        state = ModerationState.initial()
-        save_moderation_state(session_id, state)
-
-        # First turn from Mario
-        ModerationService.handle_human_turn_ended(
-            session_id=session_id,
-            user_id=1,
-            last_turn_text="Test turn",
-            session_phase="ACTIVE",
-            hard_action=HardModerationAction.NONE,
-            speaker_name="Mario",
-        )
-
-        loaded = load_moderation_state(session_id)
-        self.assertEqual(loaded.turns_per_participant.get("Mario"), 1)
-
     @patch.object(ModerationService, '_call_llm')
-    def test_turns_per_participant_accumulates(self, mock_llm):
-        """Multiple turns from same speaker should accumulate."""
-        session_id = "test-tpp-increment-2"
-
-        mock_llm.return_value = {
-            "updated_summary": "Test summary",
-            "should_ai_speak": False,
-            "message_to_say": None,
-            "reason": "all_ok",
-            "intervention_score": 0.2,
-        }
+    def test_speaking_time_accumulated_on_turn_end(self, mock_llm):
+        """Con current_turn_started_at settato a ~5s fa, accumula ~5s."""
+        session_id = "test-st-accum-1"
+        mock_llm.return_value = self._mock_llm_no_speak()
 
         state = ModerationState.initial()
-        state.turns_per_participant = {"Mario": 2}
+        state.current_turn_started_at = datetime.utcnow() - timedelta(seconds=5)
         save_moderation_state(session_id, state)
 
         ModerationService.handle_human_turn_ended(
@@ -1244,22 +1222,21 @@ class TurnsPerParticipantIncrementTests(TestCase):
         )
 
         loaded = load_moderation_state(session_id)
-        self.assertEqual(loaded.turns_per_participant.get("Mario"), 3)
+        accumulated = loaded.speaking_time_per_participant.get("Mario", 0.0)
+        self.assertGreaterEqual(accumulated, 4.5)
+        self.assertLessEqual(accumulated, 6.5)
+        # Il timer corrente deve essere clearato
+        self.assertIsNone(loaded.current_turn_started_at)
 
     @patch.object(ModerationService, '_call_llm')
-    def test_turns_per_participant_not_incremented_without_speaker_name(self, mock_llm):
-        """If speaker_name is None, turns_per_participant should not change."""
-        session_id = "test-tpp-no-name"
-
-        mock_llm.return_value = {
-            "updated_summary": "Test summary",
-            "should_ai_speak": False,
-            "message_to_say": None,
-            "reason": "all_ok",
-            "intervention_score": 0.2,
-        }
+    def test_speaking_time_accumulates_across_turns(self, mock_llm):
+        """Turni successivi sommano i secondi al cumulativo."""
+        session_id = "test-st-accum-2"
+        mock_llm.return_value = self._mock_llm_no_speak()
 
         state = ModerationState.initial()
+        state.speaking_time_per_participant = {"Mario": 20.0}
+        state.current_turn_started_at = datetime.utcnow() - timedelta(seconds=10)
         save_moderation_state(session_id, state)
 
         ModerationService.handle_human_turn_ended(
@@ -1268,11 +1245,80 @@ class TurnsPerParticipantIncrementTests(TestCase):
             last_turn_text="Test turn",
             session_phase="ACTIVE",
             hard_action=HardModerationAction.NONE,
-            speaker_name=None,  # No speaker name
+            speaker_name="Mario",
         )
 
         loaded = load_moderation_state(session_id)
-        self.assertEqual(loaded.turns_per_participant, {})
+        # 20.0 baseline + ~10s accumulated
+        self.assertGreaterEqual(loaded.speaking_time_per_participant["Mario"], 29.5)
+        self.assertLessEqual(loaded.speaking_time_per_participant["Mario"], 31.0)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_no_accumulation_without_speaker_name(self, mock_llm):
+        session_id = "test-st-no-name"
+        mock_llm.return_value = self._mock_llm_no_speak()
+
+        state = ModerationState.initial()
+        state.current_turn_started_at = datetime.utcnow() - timedelta(seconds=5)
+        save_moderation_state(session_id, state)
+
+        ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name=None,
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(loaded.speaking_time_per_participant, {})
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_no_accumulation_without_current_turn_started_at(self, mock_llm):
+        """Se current_turn_started_at è None (es. reconnect), non accumula."""
+        session_id = "test-st-no-timer"
+        mock_llm.return_value = self._mock_llm_no_speak()
+
+        state = ModerationState.initial()
+        state.current_turn_started_at = None
+        save_moderation_state(session_id, state)
+
+        ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(loaded.speaking_time_per_participant, {})
+
+    def test_record_human_turn_start_sets_timestamp(self):
+        session_id = "test-record-start"
+        state = ModerationState.initial(participants=["Mario"])
+        save_moderation_state(session_id, state)
+
+        ModerationService.record_human_turn_start(
+            session_id=session_id, speaker_name="Mario"
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertIsNotNone(loaded.current_turn_started_at)
+
+    def test_record_human_turn_start_skipped_if_no_speaker(self):
+        session_id = "test-record-no-speaker"
+        state = ModerationState.initial()
+        save_moderation_state(session_id, state)
+
+        ModerationService.record_human_turn_start(
+            session_id=session_id, speaker_name=None
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertIsNone(loaded.current_turn_started_at)
 
 
 class AIInterventionCountModeTests(TestCase):
@@ -1416,7 +1462,7 @@ class CallLLMStructuredInputTests(TestCase):
         })
         mock_client.return_value.chat.completions.create.return_value = mock_response
 
-        turns_per_participant = {"Mario": 5, "Lucia": 2}
+        speaking_time = {"Mario": 50.0, "Lucia": 20.0}
 
         ModerationService._call_llm(
             summary_in="Test summary",
@@ -1424,7 +1470,8 @@ class CallLLMStructuredInputTests(TestCase):
             mode="normal",
             session_phase="ACTIVE",
             speaker_name="Mario",
-            turns_per_participant=turns_per_participant,
+            speaking_time_per_participant=speaking_time,
+            elapsed_seconds=600.0,
         )
 
         mock_client.return_value.chat.completions.create.assert_called_once()
@@ -1441,8 +1488,12 @@ class CallLLMStructuredInputTests(TestCase):
         metrics = user_data["participation_metrics"]
         self.assertIn("over_participators", metrics)
         self.assertIn("under_participators", metrics)
-        self.assertIn("avg_turns", metrics)
-        self.assertIn("min_turns_reached", metrics)
+        self.assertIn("avg_speaking_time_s", metrics)
+        self.assertIn("min_time_reached", metrics)
+
+        # session ora include elapsed_seconds e total_speaking_time_s
+        self.assertIn("elapsed_seconds", user_data["session"])
+        self.assertIn("total_speaking_time_s", user_data["session"])
 
     @patch.object(ModerationService, '_build_openai_client')
     def test_call_llm_empty_log_yields_empty_last_interventions_by_reason(
@@ -1460,7 +1511,7 @@ class CallLLMStructuredInputTests(TestCase):
         ModerationService._call_llm(
             summary_in="x", last_turn="x", mode="normal",
             session_phase="ACTIVE", speaker_name="Mario",
-            turns_per_participant={"Mario": 1},
+            speaking_time_per_participant={"Mario": 1.0},
             interventions_log=[],
         )
 
@@ -1491,7 +1542,7 @@ class CallLLMStructuredInputTests(TestCase):
         ModerationService._call_llm(
             summary_in="x", last_turn="x", mode="normal",
             session_phase="ACTIVE", speaker_name="Mario",
-            turns_per_participant={"Mario": 1},
+            speaking_time_per_participant={"Mario": 1.0},
             interventions_log=log,
         )
 
@@ -1532,7 +1583,7 @@ class CallLLMStructuredInputTests(TestCase):
         ModerationService._call_llm(
             summary_in="x", last_turn="x", mode="normal",
             session_phase="ACTIVE", speaker_name="Mario",
-            turns_per_participant={"Mario": 1},
+            speaking_time_per_participant={"Mario": 1.0},
             interventions_log=log,
         )
 
@@ -1563,7 +1614,7 @@ class CallLLMStructuredInputTests(TestCase):
             mode="normal",
             session_phase="ACTIVE",
             speaker_name="Mario",
-            turns_per_participant={},
+            speaking_time_per_participant={},
         )
 
         call_args = mock_client.return_value.chat.completions.create.call_args
@@ -1583,8 +1634,8 @@ class HandleHumanTurnPassesStateTests(TestCase):
         cache.clear()
 
     @patch.object(ModerationService, '_call_llm')
-    def test_handle_human_turn_passes_turns_per_participant_to_llm(self, mock_llm):
-        """handle_human_turn_ended should pass turns_per_participant to _call_llm."""
+    def test_handle_human_turn_passes_speaking_time_to_llm(self, mock_llm):
+        """handle_human_turn_ended should pass speaking_time_per_participant to _call_llm."""
         session_id = "test-pass-state-1"
 
         mock_llm.return_value = {
@@ -1595,9 +1646,10 @@ class HandleHumanTurnPassesStateTests(TestCase):
             "intervention_score": 0.2,
         }
 
-        # Setup state with existing turns
+        # Setup state with existing speaking time + current_turn_started_at 5s ago
         state = ModerationState.initial()
-        state.turns_per_participant = {"Mario": 3, "Lucia": 1}
+        state.speaking_time_per_participant = {"Mario": 30.0, "Lucia": 10.0}
+        state.current_turn_started_at = datetime.utcnow() - timedelta(seconds=5)
         save_moderation_state(session_id, state)
 
         ModerationService.handle_human_turn_ended(
@@ -1609,14 +1661,16 @@ class HandleHumanTurnPassesStateTests(TestCase):
             speaker_name="Mario",
         )
 
-        # Verify _call_llm was called with turns_per_participant
         mock_llm.assert_called_once()
         call_kwargs = mock_llm.call_args[1]
 
-        # After increment, Mario should have 4 turns
-        self.assertIn("turns_per_participant", call_kwargs)
-        self.assertEqual(call_kwargs["turns_per_participant"]["Mario"], 4)
-        self.assertEqual(call_kwargs["turns_per_participant"]["Lucia"], 1)
+        # After accumulation, Mario should have ~35s (30 baseline + ~5s)
+        self.assertIn("speaking_time_per_participant", call_kwargs)
+        self.assertGreaterEqual(call_kwargs["speaking_time_per_participant"]["Mario"], 34.5)
+        self.assertLessEqual(call_kwargs["speaking_time_per_participant"]["Mario"], 36.0)
+        self.assertEqual(call_kwargs["speaking_time_per_participant"]["Lucia"], 10.0)
+        # elapsed_seconds passed too
+        self.assertIn("elapsed_seconds", call_kwargs)
 
 
 class ModerationStateConclusionReasonTests(TestCase):
@@ -1812,12 +1866,13 @@ class LLMNormalModeIntegrationTests(TestCase):
         })
         mock_client.return_value.chat.completions.create.return_value = mock_response
 
-        # Setup: Mario has spoken 5 times, Lucia 0 times
+        # Setup: Mario has spoken 200s, Lucia 0s, current turn ~10s for Mario
         state = ModerationState.initial()
-        state.turns_per_participant = {"Mario": 5, "Lucia": 0}
+        state.speaking_time_per_participant = {"Mario": 200.0, "Lucia": 0.0}
+        state.current_turn_started_at = datetime.utcnow() - timedelta(seconds=10)
         save_moderation_state(session_id, state)
 
-        # Mario speaks again (6th turn)
+        # Mario speaks again
         result = ModerationService.handle_human_turn_ended(
             session_id=session_id,
             user_id=1,
@@ -1831,9 +1886,9 @@ class LLMNormalModeIntegrationTests(TestCase):
         self.assertTrue(result.ai_should_speak)
         self.assertEqual(result.ai_message, "Lucia, tu cosa ne pensi?")
 
-        # Verify state was updated
+        # Verify state was updated (Mario now ~210s)
         loaded_state = load_moderation_state(session_id)
-        self.assertEqual(loaded_state.turns_per_participant["Mario"], 6)
+        self.assertGreaterEqual(loaded_state.speaking_time_per_participant["Mario"], 209.5)
         self.assertEqual(loaded_state.ai_interventions_count, 1)
 
         # Verify LLM received structured input

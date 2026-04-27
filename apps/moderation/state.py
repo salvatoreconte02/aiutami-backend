@@ -2,9 +2,9 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 
-from django.core.cache import cache  
+from django.core.cache import cache
 
 
 REDIS_KEY_TEMPLATE = "moderation:{session_id}"
@@ -24,22 +24,30 @@ class ModerationState:
     last_ai_intervention_at: Optional[datetime]
     conclusion_reason: Optional[str]  # "timer_expired" or "all_participants_ready"
     forced_conclusion_done: bool  # True dopo il primo FORCED_CONCLUSION
-    turns_per_participant: dict[str, int]  # {"speaker_name": count}
+    speaking_time_per_participant: dict[str, float]  # {"name": cumulative_seconds}
     interventions_log: list[dict]  # log di ogni intervento AI normal mode
+    session_started_at: Optional[datetime]  # per calcolo elapsed_seconds
+    current_turn_started_at: Optional[datetime]  # timestamp inizio turno corrente
 
     @classmethod
     def initial(
-        cls, participants: Optional[list[str]] = None
+        cls,
+        participants: Optional[list[str]] = None,
+        session_started_at: Optional[datetime] = None,
     ) -> "ModerationState":
-        turns = {name: 0 for name in participants} if participants else {}
+        speaking_time = (
+            {name: 0.0 for name in participants} if participants else {}
+        )
         return cls(
             summary=DEFAULT_SUMMARY,
             ai_interventions_count=0,
             last_ai_intervention_at=None,
             conclusion_reason=None,
             forced_conclusion_done=False,
-            turns_per_participant=turns,
+            speaking_time_per_participant=speaking_time,
             interventions_log=[],
+            session_started_at=session_started_at,
+            current_turn_started_at=None,
         )
 
 
@@ -60,39 +68,45 @@ def last_intervention_for_reason(
     return None
 
 
-def _fetch_participant_names(session_id: int | str) -> list[str]:
+def _fetch_session_meta(
+    session_id: int | str,
+) -> Tuple[list[str], Optional[datetime]]:
     """
-    Legge dalla tabella session_participant i nomi dei partecipanti della
-    sessione, usando la stessa logica del turn consumer (display_name se
-    presente, altrimenti username). Ritorna lista vuota se la sessione
-    non esiste o l'accesso DB fallisce.
+    Legge dalla DB sessione e partecipanti. Ritorna (names, started_at).
+    Usa display_name se presente, altrimenti username (stessa logica del
+    turn consumer). Fallback graceful a ([], None) se l'accesso fallisce.
     """
     try:
-        from apps.sessions.models import SessionParticipant
+        from apps.sessions.models import Session, SessionParticipant
 
+        session = Session.objects.only("started_at").get(id=session_id)
         participants = SessionParticipant.objects.filter(
             session_id=session_id
         ).select_related("user")
-        return [
+        names = [
             getattr(p.user, "display_name", None) or p.user.get_username()
             for p in participants
         ]
+        return names, session.started_at
     except Exception:
-        return []
+        return [], None
 
 
 def load_moderation_state(session_id: int | str) -> ModerationState:
     """
     Carica lo stato di moderazione da Redis.
-    Se non esiste, crea uno stato iniziale con turns_per_participant
-    popolato con tutti i partecipanti della sessione a 0 (lookup DB).
+    Se non esiste, crea uno stato iniziale con speaking_time_per_participant
+    popolato con tutti i partecipanti della sessione a 0 (lookup DB) e
+    session_started_at impostato dal Session model.
     """
     key = _redis_key(session_id)
     data = cache.get(key)
 
     if not data:
-        participants = _fetch_participant_names(session_id)
-        state = ModerationState.initial(participants=participants)
+        names, started_at = _fetch_session_meta(session_id)
+        state = ModerationState.initial(
+            participants=names, session_started_at=started_at
+        )
         save_moderation_state(session_id, state)
         return state
 
@@ -102,8 +116,12 @@ def load_moderation_state(session_id: int | str) -> ModerationState:
         last_ai_intervention_at=data.get("last_ai_intervention_at"),
         conclusion_reason=data.get("conclusion_reason"),
         forced_conclusion_done=data.get("forced_conclusion_done", False),
-        turns_per_participant=data.get("turns_per_participant", {}),
+        speaking_time_per_participant=data.get(
+            "speaking_time_per_participant", {}
+        ),
         interventions_log=data.get("interventions_log", []),
+        session_started_at=data.get("session_started_at"),
+        current_turn_started_at=data.get("current_turn_started_at"),
     )
 
 
@@ -120,8 +138,10 @@ def save_moderation_state(session_id: int | str, state: ModerationState) -> None
             "last_ai_intervention_at": state.last_ai_intervention_at,
             "conclusion_reason": state.conclusion_reason,
             "forced_conclusion_done": state.forced_conclusion_done,
-            "turns_per_participant": state.turns_per_participant,
+            "speaking_time_per_participant": state.speaking_time_per_participant,
             "interventions_log": state.interventions_log,
+            "session_started_at": state.session_started_at,
+            "current_turn_started_at": state.current_turn_started_at,
         },
         timeout=None,
     )

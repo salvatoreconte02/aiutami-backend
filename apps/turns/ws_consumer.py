@@ -236,6 +236,14 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         if result.success:
             await self._mark_any_activity()
             await self._mark_user_spoke(user.id)
+            # Registra l'inizio del turno per il calcolo dello speaking time
+            speaker_name = (
+                getattr(user, "display_name", None) or user.get_username()
+            )
+            from apps.moderation.service import ModerationService
+            await database_sync_to_async(
+                ModerationService.record_human_turn_start
+            )(session_id=self.session_id, speaker_name=speaker_name)
 
         # Broadcast degli eventi (HUMAN_STARTED, eventuale RESERVATION_EXPIRED, ecc.)
         await self._broadcast_events(result.events)

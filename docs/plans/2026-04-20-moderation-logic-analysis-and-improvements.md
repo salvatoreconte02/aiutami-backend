@@ -392,14 +392,8 @@ Regole:
 
    **Soluzione:** all'inizio della sessione (o al primo turno), popolare il dict con tutti i partecipanti dalla sessione DB con valore 0. Così le soglie e il Gini lavorano sempre sul numero reale di partecipanti. Verificare che non crei side-effect nei prompt e nei filtri esistenti (es. il prompt oggi vede solo chi ha parlato — con questa modifica vedrebbe anche chi ha 0 turni, il che è un vantaggio per la detection di exclusion).
 
-2. **Ipotesi futura: usare speaking time invece dei conteggi turni.**
-   Attualmente `turns_per_participant` conta il numero di turni, non la durata. Ma un turno di 5 secondi e uno di 60 secondi pesano uguale, il che non riflette la reale distribuzione della partecipazione. Il paper "Observe, Ask, Intervene" (CHI 2025) usa proprio lo speaking time come metrica base.
-
-   **Possibile evoluzione:** tracciare `speaking_time_per_participant` (in secondi) accanto a `turns_per_participant`. Il dato è già disponibile nel backend: il push-to-talk ha timestamp di inizio e fine turno (`TurnManager.start_speak` / `end_speak`). Basta calcolare la differenza e accumularla in `ModerationState`.
-
-   Il Gini e le soglie over/under-participator verrebbero calcolati sullo speaking time anziché sui turni, dando una misura più fedele. I turni resterebbero come metrica complementare (un partecipante con pochi turni ma lunghi vs uno con molti turni ma brevissimi sono pattern diversi).
-
-   **Stato:** ipotesi da valutare. Se i test con i conteggi turni danno risultati soddisfacenti, non è necessario. Da implementare solo se si osserva che il conteggio turni non cattura bene gli squilibri reali.
+2. **Speaking time invece dei conteggi turni — IMPLEMENTATO 2026-04-27 (vedi 2.8).**
+   Switch completo da turn count a speaking time cumulativo (secondi PTT-held per partecipante). Vedi sezione 2.8 per dettagli implementativi e giustificazioni.
 
 **Valore per la tesi:**
 
@@ -489,6 +483,64 @@ Il forced_conclusion ha il suo path dedicato (`call_llm_for_conclusion`) e non p
 
 ---
 
+### 2.8 [COMPLETATO] Speaking time come metrica di partecipazione
+
+**Stato:** implementato (2026-04-27).
+
+**Data implementazione:** 2026-04-27
+
+**Motivazione:** il paper di riferimento Srinivasan et al. (CHI 2025, arXiv:2501.10553) usa `cumulative speaking time at 1-second intervals` (§4.1), non turn count. La nostra implementazione iniziale (Feature 2.5) usava turn count come approssimazione. Problema osservato: un turno di 60s e uno di 5s pesano uguale → un partecipante che fa pochi turni ma lunghi non viene flaggato come monopolizzatore, e uno che fa molti turni brevissimi sembra ben rappresentato anche se è marginale. Lo speaking time cattura la dinamica reale.
+
+**Decisioni di scope (concordate con utente):**
+
+1. **Sostituzione totale di turn count con speaking time** (no doppio binario). Codice più pulito, una sola sorgente di verità.
+2. **Min threshold elapsed clock time, allineato al paper:** `session_elapsed_seconds >= 480` (8 min). Le nostre sessioni sono ~30 min come quelle del paper, quindi 8/30 ≈ 27% del meeting. Argomentazione tesi diretta: "stesso setup, stessa soglia".
+3. **Soglia under conservativa:** mantenuto `< 0.5 × media` invece di allineare al paper (`< media`). Argomentazione: il paper fa intervento one-shot, noi moderazione continua → precision over recall, evitiamo false positive su persone marginalmente sotto media. Documentato come deviazione motivata.
+
+**Cosa è stato fatto:**
+
+1. **`apps/moderation/metrics.py`** — `compute_participation_metrics()` riscritto:
+   - Input: dict `{nome: secondi_cumulativi}` e `elapsed_seconds`
+   - Output: chiavi rinominate `avg_speaking_time_s`, `min_time_reached`
+   - Default `min_elapsed_seconds=480.0` (8 min, paper)
+   - Soglie `over=2×`, `under=0.5×` invariate
+   - Helper agnostic ai numeri (accetta int o float)
+
+2. **`apps/moderation/state.py`**:
+   - `turns_per_participant: dict[str,int]` → `speaking_time_per_participant: dict[str,float]`
+   - Nuovi campi `session_started_at: Optional[datetime]` (per elapsed) e `current_turn_started_at: Optional[datetime]` (timer del turno corrente)
+   - `_fetch_participant_names` → `_fetch_session_meta(session_id) -> (names, started_at)` con un solo lookup DB
+   - Save/load Redis aggiornati
+
+3. **`apps/moderation/service.py`**:
+   - Nuovo classmethod `record_human_turn_start(session_id, speaker_name)`: stamping `current_turn_started_at = utcnow()`
+   - `handle_human_turn_ended()`: legge `current_turn_started_at`, calcola `delta = now - start`, accumula in `speaking_time_per_participant[speaker]`, clear timer
+   - Calcolo `elapsed_seconds = now - session_started_at` passato a `_call_llm`
+   - Payload arricchito: `session.elapsed_seconds`, `session.total_speaking_time_s`, `participation_metrics` su speaking time
+   - Prompt aggiornato: "speaking time" e "secondi" invece di "turni", `min_time_reached` invece di `min_turns_reached`
+
+4. **`apps/turns/ws_consumer.py`**:
+   - In `_handle_request_speak`, dopo success, chiama `ModerationService.record_human_turn_start()`
+   - Nessuna modifica a `TurnManager` (timing tracciato interamente dal modulo moderation)
+
+5. **Test (14 nuovi/aggiornati, tutti verdi):**
+   - `tests_metrics.py`: 10 test riscritti per `elapsed_seconds`, nuove key, test 8-min threshold default, test backward compat con int input
+   - Nuova classe `SpeakingTimeAccumulationTests` (6 test): accumulo singolo turno, accumulo cross-turno, no-speaker-name, no-timer (reconnection edge case), `record_human_turn_start` setta timer, skip se no speaker
+   - Aggiornati i test che assumevano `turns_per_participant` o `min_turns_reached`
+
+**Limiti dichiarati onestamente:**
+
+Misuriamo speaking time come **PTT-held duration** (mic-open time), non come reale voice activity (VAD). In un sistema PTT disciplinato il bias è ~10-20% per turno (lag press/release) e approssimativamente uniforme tra utenti, quindi per soglie threshold-based (over/under rispetto alla media) l'errore raramente flippa la decisione. L'approccio comparable nel paper (DOM-based VAD da Zoom) è anch'esso un proxy con bias propri. VAD events da OpenAI Realtime resta come future work.
+
+**Impatto runtime:**
+- Nessun overhead: latency invariata, payload ~30 token in più (elapsed + speaking_time fields)
+- Nessuna migration DB
+- Backwards compat: state Redis esistenti pre-deploy si caricano graceful (campo nuovo default `{}`/`None`); le sessioni in corso al momento del deploy partono da speaking_time vuoto fino al prossimo turno
+
+**267/267 test verdi** dopo l'implementazione.
+
+---
+
 ## 3. Punti scartati
 
 - **Race condition su `moderation_in_progress`:** in push-to-talk stretto (un solo utente parla alla volta) non si verifica. Gli unici residui teorici sono double-tap del bottone end_speak o retransmit WS, ma sono problemi lato frontend, non di design backend. Non vale la pena menzionarlo neanche nei limitations della tesi.
@@ -505,4 +557,5 @@ Quando si torna a questo documento per implementare:
 - [ ] **2.6 Refactoring soglia** → modificare `_build_normal_mode_prompt()` (rimuovere istruzione soglia). Filtro backend invariato.
 - [ ] **2.7 Skip LLM in fase non-ACTIVE** → modificare orchestrator o `handle_human_turn_ended`. Quick win.
 - [x] **2.3 Rimozione forced_summary** → completato 2026-04-24. Rimosso completamente: costante, enum, metodi LLM dedicati, trigger, orchestrator handler, stato Redis, prompt task-specifici, ~17 test.
+- [x] **2.8 Speaking time** → completato 2026-04-27. Switch da turn count a speaking time (secondi PTT-held). Min threshold dinamico → fisso 8 min (paper). State con `speaking_time_per_participant`, `session_started_at`, `current_turn_started_at`. Nuovo `record_human_turn_start` chiamato dal consumer in request_speak. Soglie 2× / 0.5× invariate (deviazione motivata vs paper). 14 test, 267 totali.
 - [ ] **2.2 Tono per reason** → solo se test utente mostra messaggi troppo omogenei.
