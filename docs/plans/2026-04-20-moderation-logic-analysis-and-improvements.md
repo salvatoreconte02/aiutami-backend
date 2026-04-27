@@ -197,57 +197,75 @@ Se si elimina il forced_summary, la funzione `evaluate_triggers_on_human_turn_en
 
 ---
 
-### 2.4 [DA IMPLEMENTARE] Passare l'ultimo intervento AI all'LLM
+### 2.4 [COMPLETATO] Memoria interventi recenti per-reason + cooldown differenziato
 
-**Stato:** da implementare.
+**Stato:** implementato (2026-04-27).
 
-**Data ultima revisione:** 2026-04-24
+**Data proposta:** 2026-04-24
+**Data implementazione:** 2026-04-27
 
-**Problema:** l'LLM non sa cosa ha detto nel suo ultimo intervento. Questo causa due problemi concreti:
+**Problema originale:** l'LLM non sa cosa ha detto nel suo ultimo intervento → ripetizione inutile e mancato riconoscimento della risoluzione.
 
-1. **Ripetizione inutile:** AI dice "Lucia, tu cosa ne pensi?" → Lucia parla → l'LLM non sa di aver appena coinvolto Lucia → potrebbe dire di nuovo "Lucia non ha parlato"
-2. **Mancato riconoscimento della risoluzione:** AI dice "calmiamo i toni" → i turni successivi sono civili → l'LLM non sa di aver già affrontato il problema → potrebbe re-intervenire
+**Evoluzione del design** (discutendo con il tutor sul rischio di "moderator nags every 60s" con metriche cumulative): la versione iniziale prevedeva un singolo `last_ai_message` + `last_ai_reason`. Ma se l'ultimo intervento è di tipo X (es. off_topic) e la situazione su Y (es. monopolization) persiste, la memoria globale **perde il contesto del reason precedente**. Per i reason cumulativi (mono/excl), il cumulativo decade lentamente → il sistema riprodurrebbe lo stesso intervento ogni 60s.
 
-Un facilitatore umano si ricorda naturalmente cosa ha detto 2 minuti fa. Senza questa informazione il bot è "smemorato del proprio comportamento".
+**Soluzione adottata: memoria per-reason via `interventions_log` + cooldown differenziato.**
 
-**Soluzioni alternative considerate e scartate:**
+Insight chiave: `interventions_log` (Feature 2.1) **già contiene** tutti gli interventi con `{ts, reason, message, score, speaker}`. Non serve una nuova struttura, basta interrogarla per `reason`.
 
-1. **Due call LLM separate (Decision + Generation, poi Summary Update):** scartata perché aggiunge complessità e latenza per risolvere un problema (qualità del summary) che non si è osservato nei test. Il summary funziona bene con una singola call.
+**Cosa è stato fatto:**
 
-2. **Sliding window degli ultimi 3 turni:** scartata perché il summary già copre le informazioni dei turni recenti. Aggiungere i turni raw è contesto ridondante senza beneficio chiaro. Se il summary è di qualità sufficiente (confermato dai test), i turni espliciti non aggiungono valore.
+1. **`apps/moderation/state.py`** — nuovo helper puro `last_intervention_for_reason(state, reason) -> dict | None`. Scan reverse del log, ritorna la entry più recente con il reason richiesto.
 
-**Soluzione adottata: `last_ai_message` + `last_ai_reason`**
+2. **`apps/moderation/service.py`** — costanti per cooldown per-reason:
+   ```python
+   COOLDOWN_OVERRIDES = {
+       "monopolization": timedelta(minutes=3),  # cumulative, slow to resolve
+       "exclusion": timedelta(minutes=2),       # dai tempo all'invitato
+   }
+   AI_INTERVENTION_COOLDOWN = timedelta(seconds=60)  # default off_topic/altri
+   COOLDOWN_BYPASS_REASONS = {"conflict", "user_request"}  # invariato
+   ```
+   Giustificazione: Heron (1999), minimum intervention principle. Reason puntuali (off_topic) restano a 60s.
 
-Aggiungere a `ModerationState` (`state.py`):
-```python
-last_ai_message: Optional[str] = None     # testo ultimo intervento AI (normal mode)
-last_ai_reason: Optional[str] = None      # reason ultimo intervento AI
+3. **`_decide_ai_intervention()`** — riscritto: il cooldown ora confronta col l'ultimo intervento dello **STESSO reason** (via helper), non più globalmente. Backend filter come rete di sicurezza: anche se l'LLM ignora le istruzioni, il cooldown per-reason blocca la ripetizione.
+
+4. **`_call_llm()`** — accetta `interventions_log` come kwarg. Nuovo metodo `_extract_last_interventions_by_reason()` produce per il payload solo le voci sui reason **cumulativi** (monopolization, exclusion). Off_topic/conflict/user_request sono puntuali e non hanno bisogno di memoria storica.
+
+   Payload nuovo campo:
+   ```json
+   "last_interventions_by_reason": {
+       "monopolization": {
+           "message": "Sentiamo gli altri.",
+           "minutes_ago": 1.5
+       }
+   }
+   ```
+
+5. **Prompt normal mode** — nuova sezione "Memoria interventi recenti (cumulative reasons)" che istruisce l'LLM:
+   - monopolization entro 3 min → NON ri-flaggare a meno che la situazione sia drasticamente peggiorata
+   - exclusion entro 2 min → NON ri-flaggare sulla stessa persona, dai tempo al gruppo
+
+6. **`last_ai_intervention_at`** — campo lasciato in `ModerationState` ma non più usato per le decisioni di cooldown. Ancora settato a ogni intervento per backward compat e telemetria. Cleanup in futuro.
+
+7. **Test (13 nuovi):**
+   - `LastInterventionForReasonTests` (5): empty log, log con reason, multipli reason, senza reason, duplicati.
+   - `PerReasonCooldownTests` (8): mono blocked sotto 3min / speak dopo, excl blocked sotto 2min / speak dopo, off_topic blocked sotto 60s / speak dopo, cooldown indipendente tra reason diversi, no-prior-intervention parla.
+   - `CooldownBypassTests` aggiornato (setup ora usa `interventions_log` invece di `last_ai_intervention_at`).
+   - `CallLLMStructuredInputTests` esteso (3 nuovi): empty log → `{}`, mono recente → entry in payload, reason puntuali esclusi.
+
+**Runtime flow:**
+```
+AI interviene su monopolization → entry in interventions_log (Redis)
+Turno successivo:
+  _call_llm payload include last_interventions_by_reason.monopolization
+  LLM legge "minutes_ago: 0.5" e l'istruzione → non ri-flagga
+  Se LLM ignorasse → backend filter blocca (cooldown 3min per reason)
+Off_topic concorrente → cooldown indipendente (default 60s), orologio separato
 ```
 
-Nel payload JSON mandato all'LLM:
-```json
-"last_ai_intervention": {
-    "message": "Lucia, tu cosa ne pensi di questo punto?",
-    "reason": "exclusion"
-}
-```
+**266/266 test verdi** dopo l'implementazione.
 
-Con istruzione nel prompt:
-```
-Se `last_ai_intervention` è presente, tieni conto di cosa hai detto
-l'ultima volta. Non ripetere lo stesso tipo di intervento se il problema
-è stato affrontato nei turni successivi.
-```
-
-**Implementazione:**
-1. Estendere `ModerationState` con i due campi
-2. In `handle_human_turn_ended`, dopo un intervento AI in normal mode, salvare `last_ai_message` e `last_ai_reason` nello stato
-3. In `_call_llm()`, aggiungere `last_ai_intervention` al payload JSON
-4. In `_build_normal_mode_prompt()`, aggiungere l'istruzione nel prompt
-
-**Impatto architetturale:**
-- **Latenza:** zero overhead (stessa singola call LLM, ~20 token in più nel payload)
-- **Codice:** modifiche minime a `state.py`, `service.py` (payload + prompt), serializzazione Redis
+**Impatto architetturale:** zero overhead latency (~30-50 token in più nel payload solo se ci sono interventi cumulative recenti). Nessuna nuova migration DB, nessuna struttura Redis aggiuntiva.
 
 ---
 
@@ -482,7 +500,7 @@ Il forced_conclusion ha il suo path dedicato (`call_llm_for_conclusion`) e non p
 Quando si torna a questo documento per implementare:
 
 - [x] **2.1 `interventions_log` nel report** → completato 2026-04-24. `state.py`, `service.py`, `sessions/services.py`, prompt report (base + MM + NASA + Lost at Sea), `pdf_service.py`, 10 test.
-- [ ] **2.4 Last AI intervention nel payload** → estendere `ModerationState` con `last_ai_message`/`last_ai_reason`, aggiungere al payload in `_call_llm()`, aggiornare prompt in `_build_normal_mode_prompt()`.
+- [x] **2.4 Memoria per-reason + cooldown differenziato** → completato 2026-04-27. Helper `last_intervention_for_reason` su `interventions_log` (no nuova struttura), cooldown per-reason (mono 3min, excl 2min, default 60s), payload `last_interventions_by_reason` solo per reason cumulativi, sezione prompt "Memoria interventi recenti". 13 nuovi test.
 - [x] **2.5 Metric-informed moderation** → completato 2026-04-24. Helper puro `metrics.py`, `ModerationState.initial(participants=...)` con lookup DB in `load_moderation_state`, payload con `participation_metrics` + `participants.names` (no più `turns` raw), prompt con nuovo blocco "CUMULATIVI" + sezione "Come intervenire" (invitare > correggere, invito contestuale, 30-40 parole). Min turns dinamico `2×N`. 17 nuovi test.
 - [ ] **2.6 Refactoring soglia** → modificare `_build_normal_mode_prompt()` (rimuovere istruzione soglia). Filtro backend invariato.
 - [ ] **2.7 Skip LLM in fase non-ACTIVE** → modificare orchestrator o `handle_human_turn_ended`. Quick win.

@@ -71,6 +71,73 @@ class ModerationStateTests(TestCase):
         )
 
 
+class LastInterventionForReasonTests(TestCase):
+    """
+    Helper puro: cerca nel interventions_log l'ultimo entry con un dato reason.
+    """
+
+    def test_empty_log_returns_none(self):
+        from apps.moderation.state import last_intervention_for_reason
+        state = ModerationState.initial()
+        self.assertIsNone(last_intervention_for_reason(state, "monopolization"))
+
+    def test_log_with_matching_reason_returns_entry(self):
+        from apps.moderation.state import last_intervention_for_reason
+        state = ModerationState.initial()
+        state.interventions_log = [
+            {
+                "ts": "2026-04-27T10:00:00",
+                "reason": "monopolization",
+                "score": 0.8,
+                "speaker": "Marco",
+                "message": "Sentiamo gli altri.",
+            }
+        ]
+        result = last_intervention_for_reason(state, "monopolization")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["reason"], "monopolization")
+        self.assertEqual(result["message"], "Sentiamo gli altri.")
+
+    def test_log_with_multiple_reasons_returns_correct_one(self):
+        from apps.moderation.state import last_intervention_for_reason
+        state = ModerationState.initial()
+        state.interventions_log = [
+            {"ts": "2026-04-27T10:00:00", "reason": "monopolization",
+             "score": 0.8, "speaker": "Marco", "message": "msg1"},
+            {"ts": "2026-04-27T10:01:00", "reason": "exclusion",
+             "score": 0.7, "speaker": "Lucia", "message": "msg2"},
+            {"ts": "2026-04-27T10:02:00", "reason": "off_topic",
+             "score": 0.9, "speaker": "Anna", "message": "msg3"},
+        ]
+        excl = last_intervention_for_reason(state, "exclusion")
+        self.assertEqual(excl["message"], "msg2")
+        mono = last_intervention_for_reason(state, "monopolization")
+        self.assertEqual(mono["message"], "msg1")
+
+    def test_log_without_reason_returns_none(self):
+        from apps.moderation.state import last_intervention_for_reason
+        state = ModerationState.initial()
+        state.interventions_log = [
+            {"ts": "2026-04-27T10:00:00", "reason": "off_topic",
+             "score": 0.8, "speaker": "Marco", "message": "msg1"}
+        ]
+        self.assertIsNone(last_intervention_for_reason(state, "monopolization"))
+
+    def test_log_with_duplicate_reason_returns_most_recent(self):
+        from apps.moderation.state import last_intervention_for_reason
+        state = ModerationState.initial()
+        state.interventions_log = [
+            {"ts": "2026-04-27T10:00:00", "reason": "monopolization",
+             "score": 0.8, "speaker": "Marco", "message": "first"},
+            {"ts": "2026-04-27T10:05:00", "reason": "exclusion",
+             "score": 0.7, "speaker": "Lucia", "message": "middle"},
+            {"ts": "2026-04-27T10:10:00", "reason": "monopolization",
+             "score": 0.9, "speaker": "Marco", "message": "second"},
+        ]
+        result = last_intervention_for_reason(state, "monopolization")
+        self.assertEqual(result["message"], "second")
+
+
 class LoadModerationStateInitializesFromDBTests(TestCase):
     """
     load_moderation_state(session_id) popola turns_per_participant con tutti
@@ -1378,6 +1445,105 @@ class CallLLMStructuredInputTests(TestCase):
         self.assertIn("min_turns_reached", metrics)
 
     @patch.object(ModerationService, '_build_openai_client')
+    def test_call_llm_empty_log_yields_empty_last_interventions_by_reason(
+        self, mock_client
+    ):
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "updated_summary": "x", "should_ai_speak": False,
+            "message_to_say": None, "reason": "all_ok",
+            "intervention_score": 0.1,
+        })
+        mock_client.return_value.chat.completions.create.return_value = mock_response
+
+        ModerationService._call_llm(
+            summary_in="x", last_turn="x", mode="normal",
+            session_phase="ACTIVE", speaker_name="Mario",
+            turns_per_participant={"Mario": 1},
+            interventions_log=[],
+        )
+
+        user_data = json.loads(
+            mock_client.return_value.chat.completions.create.call_args[1]
+            ['messages'][1]['content']
+        )
+        self.assertIn("last_interventions_by_reason", user_data)
+        self.assertEqual(user_data["last_interventions_by_reason"], {})
+
+    @patch.object(ModerationService, '_build_openai_client')
+    def test_call_llm_includes_recent_monopolization_in_payload(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "updated_summary": "x", "should_ai_speak": False,
+            "message_to_say": None, "reason": "all_ok",
+            "intervention_score": 0.1,
+        })
+        mock_client.return_value.chat.completions.create.return_value = mock_response
+
+        log = [{
+            "ts": (datetime.utcnow() - timedelta(seconds=90)).isoformat(),
+            "reason": "monopolization", "score": 0.8,
+            "speaker": "Marco", "message": "Sentiamo gli altri.",
+        }]
+
+        ModerationService._call_llm(
+            summary_in="x", last_turn="x", mode="normal",
+            session_phase="ACTIVE", speaker_name="Mario",
+            turns_per_participant={"Mario": 1},
+            interventions_log=log,
+        )
+
+        user_data = json.loads(
+            mock_client.return_value.chat.completions.create.call_args[1]
+            ['messages'][1]['content']
+        )
+        last_by_reason = user_data["last_interventions_by_reason"]
+        self.assertIn("monopolization", last_by_reason)
+        self.assertEqual(last_by_reason["monopolization"]["message"], "Sentiamo gli altri.")
+        self.assertGreaterEqual(last_by_reason["monopolization"]["minutes_ago"], 1.4)
+        self.assertLessEqual(last_by_reason["monopolization"]["minutes_ago"], 1.6)
+        # exclusion non c'è nel log → non deve essere in payload
+        self.assertNotIn("exclusion", last_by_reason)
+
+    @patch.object(ModerationService, '_build_openai_client')
+    def test_call_llm_excludes_punctual_reasons_from_payload(self, mock_client):
+        """off_topic, conflict, user_request non finiscono in last_interventions_by_reason."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "updated_summary": "x", "should_ai_speak": False,
+            "message_to_say": None, "reason": "all_ok",
+            "intervention_score": 0.1,
+        })
+        mock_client.return_value.chat.completions.create.return_value = mock_response
+
+        ts = lambda s: (datetime.utcnow() - timedelta(seconds=s)).isoformat()
+        log = [
+            {"ts": ts(60), "reason": "off_topic", "score": 0.8,
+             "speaker": "A", "message": "stay on topic"},
+            {"ts": ts(40), "reason": "conflict", "score": 0.9,
+             "speaker": "B", "message": "calm down"},
+            {"ts": ts(20), "reason": "user_request", "score": 0.9,
+             "speaker": "C", "message": "answer"},
+        ]
+
+        ModerationService._call_llm(
+            summary_in="x", last_turn="x", mode="normal",
+            session_phase="ACTIVE", speaker_name="Mario",
+            turns_per_participant={"Mario": 1},
+            interventions_log=log,
+        )
+
+        user_data = json.loads(
+            mock_client.return_value.chat.completions.create.call_args[1]
+            ['messages'][1]['content']
+        )
+        # Solo monopolization/exclusion possono apparire
+        self.assertEqual(user_data["last_interventions_by_reason"], {})
+
+    @patch.object(ModerationService, '_build_openai_client')
     def test_call_llm_uses_normal_mode_prompt(self, mock_client):
         """_call_llm in normal mode should use _build_normal_mode_prompt."""
         mock_response = MagicMock()
@@ -1681,8 +1847,19 @@ class LLMNormalModeIntegrationTests(TestCase):
         self.assertIn("Lucia", user_message["participation_metrics"]["under_participators"])
         self.assertEqual(user_message["scenario"]["type"], "murder_mystery")
 
+def _make_intervention_entry(*, reason, seconds_ago, speaker="Mario", message="msg"):
+    """Helper per costruire un entry interventions_log con timestamp relativo."""
+    return {
+        "ts": (datetime.utcnow() - timedelta(seconds=seconds_ago)).isoformat(),
+        "reason": reason,
+        "score": 0.8,
+        "speaker": speaker,
+        "message": message,
+    }
+
+
 class CooldownBypassTests(TestCase):
-    """Tests for differentiated cooldown behavior based on intervention reason."""
+    """Tests per il bypass del cooldown su reason 'conflict' e 'user_request'."""
 
     def setUp(self):
         cache.clear()
@@ -1692,7 +1869,7 @@ class CooldownBypassTests(TestCase):
 
     @patch.object(ModerationService, '_call_llm')
     def test_conflict_bypasses_cooldown(self, mock_llm):
-        """Intervento 'conflict' deve bypassare il cooldown."""
+        """Intervento 'conflict' deve bypassare il cooldown anche se c'è un conflict recente."""
         session_id = "test-cooldown-bypass-1"
 
         mock_llm.return_value = {
@@ -1703,9 +1880,10 @@ class CooldownBypassTests(TestCase):
             "intervention_score": 0.9,
         }
 
-        # Set up state with a recent AI intervention
         state = ModerationState.initial()
-        state.last_ai_intervention_at = datetime.utcnow() - timedelta(seconds=10)  # 10s ago
+        state.interventions_log = [
+            _make_intervention_entry(reason="conflict", seconds_ago=10)
+        ]
         save_moderation_state(session_id, state)
 
         result = ModerationService.handle_human_turn_ended(
@@ -1717,7 +1895,6 @@ class CooldownBypassTests(TestCase):
             speaker_name="Mario",
         )
 
-        # Should speak despite being within cooldown
         self.assertTrue(result.ai_should_speak)
         self.assertIn("conflitto", result.ai_message)
 
@@ -1734,9 +1911,10 @@ class CooldownBypassTests(TestCase):
             "intervention_score": 0.9,
         }
 
-        # Set up state with a recent AI intervention
         state = ModerationState.initial()
-        state.last_ai_intervention_at = datetime.utcnow() - timedelta(seconds=10)  # 10s ago
+        state.interventions_log = [
+            _make_intervention_entry(reason="user_request", seconds_ago=10)
+        ]
         save_moderation_state(session_id, state)
 
         result = ModerationService.handle_human_turn_ended(
@@ -1748,98 +1926,108 @@ class CooldownBypassTests(TestCase):
             speaker_name="Mario",
         )
 
-        # Should speak despite being within cooldown
         self.assertTrue(result.ai_should_speak)
         self.assertIn("richiesta", result.ai_message)
 
-    @patch.object(ModerationService, '_call_llm')
-    def test_monopolization_respects_cooldown(self, mock_llm):
-        """Intervento 'monopolization' deve rispettare il cooldown di 60s."""
-        session_id = "test-cooldown-respect-1"
 
-        mock_llm.return_value = {
-            "updated_summary": "Test summary",
-            "should_ai_speak": True,
-            "message_to_say": "Diamo spazio agli altri",
-            "reason": "monopolization",
-            "intervention_score": 0.9,
-        }
+class PerReasonCooldownTests(TestCase):
+    """
+    Test del cooldown per-reason: ogni reason ha un proprio orologio
+    che si confronta solo con l'ultimo intervento dello STESSO reason.
+    """
 
-        # Set up state with a recent AI intervention (30s ago, within 60s cooldown)
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def _run_handle(self, session_id, *, reason, message="msg"):
+        """Simula la chiamata LLM e ritorna il risultato handle_human_turn_ended."""
+        with patch.object(ModerationService, '_call_llm') as mock_llm:
+            mock_llm.return_value = {
+                "updated_summary": "Test summary",
+                "should_ai_speak": True,
+                "message_to_say": message,
+                "reason": reason,
+                "intervention_score": 0.9,
+            }
+            return ModerationService.handle_human_turn_ended(
+                session_id=session_id,
+                user_id=1,
+                last_turn_text="Test turn",
+                session_phase="ACTIVE",
+                hard_action=HardModerationAction.NONE,
+                speaker_name="Mario",
+            )
+
+    def _setup_state(self, session_id, log_entries):
         state = ModerationState.initial()
-        state.last_ai_intervention_at = datetime.utcnow() - timedelta(seconds=30)
+        state.interventions_log = log_entries
         save_moderation_state(session_id, state)
 
-        result = ModerationService.handle_human_turn_ended(
-            session_id=session_id,
-            user_id=1,
-            last_turn_text="Test turn",
-            session_phase="ACTIVE",
-            hard_action=HardModerationAction.NONE,
-            speaker_name="Mario",
-        )
-
-        # Should NOT speak because cooldown (60s) not expired
+    def test_monopolization_blocked_under_3min(self):
+        sid = "test-mono-blocked"
+        self._setup_state(sid, [
+            _make_intervention_entry(reason="monopolization", seconds_ago=120)
+        ])
+        result = self._run_handle(sid, reason="monopolization")
         self.assertFalse(result.ai_should_speak)
 
-    @patch.object(ModerationService, '_call_llm')
-    def test_exclusion_respects_cooldown(self, mock_llm):
-        """Intervento 'exclusion' deve rispettare il cooldown di 60s."""
-        session_id = "test-cooldown-respect-2"
+    def test_monopolization_speaks_after_3min(self):
+        sid = "test-mono-speak"
+        self._setup_state(sid, [
+            _make_intervention_entry(reason="monopolization", seconds_ago=200)
+        ])
+        result = self._run_handle(sid, reason="monopolization")
+        self.assertTrue(result.ai_should_speak)
 
-        mock_llm.return_value = {
-            "updated_summary": "Test summary",
-            "should_ai_speak": True,
-            "message_to_say": "Coinvolgiamo anche Luigi",
-            "reason": "exclusion",
-            "intervention_score": 0.9,
-        }
-
-        # Set up state with a recent AI intervention (30s ago, within 60s cooldown)
-        state = ModerationState.initial()
-        state.last_ai_intervention_at = datetime.utcnow() - timedelta(seconds=30)
-        save_moderation_state(session_id, state)
-
-        result = ModerationService.handle_human_turn_ended(
-            session_id=session_id,
-            user_id=1,
-            last_turn_text="Test turn",
-            session_phase="ACTIVE",
-            hard_action=HardModerationAction.NONE,
-            speaker_name="Mario",
-        )
-
-        # Should NOT speak because cooldown (60s) not expired
+    def test_exclusion_blocked_under_2min(self):
+        sid = "test-excl-blocked"
+        self._setup_state(sid, [
+            _make_intervention_entry(reason="exclusion", seconds_ago=60)
+        ])
+        result = self._run_handle(sid, reason="exclusion")
         self.assertFalse(result.ai_should_speak)
 
-    @patch.object(ModerationService, '_call_llm')
-    def test_monopolization_speaks_after_cooldown_expired(self, mock_llm):
-        """Intervento 'monopolization' deve parlare se il cooldown è scaduto."""
-        session_id = "test-cooldown-expired-1"
+    def test_exclusion_speaks_after_2min(self):
+        sid = "test-excl-speak"
+        self._setup_state(sid, [
+            _make_intervention_entry(reason="exclusion", seconds_ago=130)
+        ])
+        result = self._run_handle(sid, reason="exclusion")
+        self.assertTrue(result.ai_should_speak)
 
-        mock_llm.return_value = {
-            "updated_summary": "Test summary",
-            "should_ai_speak": True,
-            "message_to_say": "Diamo spazio agli altri",
-            "reason": "monopolization",
-            "intervention_score": 0.9,
-        }
+    def test_off_topic_blocked_under_60s(self):
+        sid = "test-off-blocked"
+        self._setup_state(sid, [
+            _make_intervention_entry(reason="off_topic", seconds_ago=30)
+        ])
+        result = self._run_handle(sid, reason="off_topic")
+        self.assertFalse(result.ai_should_speak)
 
-        # Set up state with an old AI intervention (70s ago, beyond 60s cooldown)
-        state = ModerationState.initial()
-        state.last_ai_intervention_at = datetime.utcnow() - timedelta(seconds=70)
-        save_moderation_state(session_id, state)
+    def test_off_topic_speaks_after_60s(self):
+        sid = "test-off-speak"
+        self._setup_state(sid, [
+            _make_intervention_entry(reason="off_topic", seconds_ago=65)
+        ])
+        result = self._run_handle(sid, reason="off_topic")
+        self.assertTrue(result.ai_should_speak)
 
-        result = ModerationService.handle_human_turn_ended(
-            session_id=session_id,
-            user_id=1,
-            last_turn_text="Test turn",
-            session_phase="ACTIVE",
-            hard_action=HardModerationAction.NONE,
-            speaker_name="Mario",
-        )
+    def test_different_reasons_dont_share_cooldown(self):
+        """Cooldown è per-reason: un mono recente non blocca un excl proposto."""
+        sid = "test-different-reasons"
+        self._setup_state(sid, [
+            _make_intervention_entry(reason="monopolization", seconds_ago=30)
+        ])
+        result = self._run_handle(sid, reason="exclusion")
+        self.assertTrue(result.ai_should_speak)
 
-        # Should speak because cooldown (60s) has expired
+    def test_no_prior_intervention_speaks(self):
+        """Se non c'è mai stato un intervento di questo reason, parla."""
+        sid = "test-no-prior"
+        self._setup_state(sid, [])
+        result = self._run_handle(sid, reason="monopolization")
         self.assertTrue(result.ai_should_speak)
 
 

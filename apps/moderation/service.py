@@ -14,6 +14,7 @@ from .state import (
     ModerationState,
     load_moderation_state,
     save_moderation_state,
+    last_intervention_for_reason,
 )
 from .metrics import compute_participation_metrics
 
@@ -44,6 +45,14 @@ def _resolve_task(task_key: Optional[str], session_id: Optional[str | int] = Non
 # Parametri configurabili (in seguito si possono spostare in settings)
 AI_INTERVENTION_COOLDOWN = timedelta(seconds=60)
 COOLDOWN_BYPASS_REASONS = {"conflict", "user_request"}
+
+# Cooldown per-reason: i reason cumulativi richiedono attese più lunghe
+# perché il fenomeno (turn count / speaking time) decade lentamente.
+# Heron (1999): minimum intervention principle.
+COOLDOWN_OVERRIDES = {
+    "monopolization": timedelta(minutes=3),
+    "exclusion": timedelta(minutes=2),
+}
 
 class HardModerationAction(str, Enum):
     """
@@ -112,6 +121,7 @@ class ModerationService:
             session_phase=session_phase,
             speaker_name=speaker_name,
             turns_per_participant=state.turns_per_participant,
+            interventions_log=state.interventions_log,
             task_key=task_key,
         )
 
@@ -168,6 +178,30 @@ class ModerationService:
             return "forced_conclusion"
         return "normal"
 
+    @staticmethod
+    def _extract_last_interventions_by_reason(
+        interventions_log: list[dict],
+    ) -> dict[str, dict]:
+        """
+        Per i reason cumulativi (monopolization, exclusion), estrae l'ultimo
+        intervento dal log con `message` e `minutes_ago`. Ritorna {} se nessuno.
+        Off_topic/conflict/user_request sono puntuali e non vanno in memoria.
+        """
+        cumulative_reasons = ("monopolization", "exclusion")
+        result: dict[str, dict] = {}
+        now = datetime.utcnow()
+        for reason in cumulative_reasons:
+            for entry in reversed(interventions_log):
+                if entry.get("reason") == reason:
+                    last_ts = datetime.fromisoformat(entry["ts"])
+                    minutes_ago = (now - last_ts).total_seconds() / 60.0
+                    result[reason] = {
+                        "message": entry.get("message", ""),
+                        "minutes_ago": round(minutes_ago, 1),
+                    }
+                    break
+        return result
+
     @classmethod
     def _build_openai_client(cls) -> OpenAI:
         """
@@ -185,6 +219,7 @@ class ModerationService:
         session_phase: str,
         speaker_name: Optional[str] = None,
         turns_per_participant: Optional[dict[str, int]] = None,
+        interventions_log: Optional[list[dict]] = None,
         task_key: Optional[str] = None,
     ) -> dict:
         """
@@ -204,12 +239,15 @@ class ModerationService:
         # 1) Preparazione input strutturato per il modello
         if turns_per_participant is None:
             turns_per_participant = {}
+        if interventions_log is None:
+            interventions_log = []
 
         total_turns = sum(turns_per_participant.values()) if turns_per_participant else 0
 
         task = _resolve_task(task_key)
 
         participation_metrics = compute_participation_metrics(turns_per_participant)
+        last_by_reason = cls._extract_last_interventions_by_reason(interventions_log)
 
         llm_input = {
             "mode": mode,
@@ -224,6 +262,7 @@ class ModerationService:
                 "names": list(turns_per_participant.keys()),
             },
             "participation_metrics": participation_metrics,
+            "last_interventions_by_reason": last_by_reason,
             "session": {
                 "phase": session_phase,
                 "total_turns": total_turns,
@@ -391,11 +430,18 @@ class ModerationService:
             # soglia esemplificativa, da tarare
             return False, None
 
-        # 3) Cooldown minimo tra interventi (bypass per conflict/user_request)
+        # 3) Cooldown per-reason: confronta col l'ultimo intervento dello
+        # STESSO reason (tramite interventions_log). Bypass per conflict
+        # e user_request. Reason cumulativi (mono/excl) hanno cooldown più
+        # lungo da COOLDOWN_OVERRIDES.
         if llm_reason not in COOLDOWN_BYPASS_REASONS:
-            if state.last_ai_intervention_at is not None:
-                now = datetime.utcnow()
-                if now - state.last_ai_intervention_at < AI_INTERVENTION_COOLDOWN:
+            last_for_reason = last_intervention_for_reason(state, llm_reason)
+            if last_for_reason is not None:
+                last_ts = datetime.fromisoformat(last_for_reason["ts"])
+                cooldown = COOLDOWN_OVERRIDES.get(
+                    llm_reason, AI_INTERVENTION_COOLDOWN
+                )
+                if datetime.utcnow() - last_ts < cooldown:
                     return False, None
 
         # 4) Regole legate alla fase della sessione
@@ -655,6 +701,23 @@ Ringrazia brevemente chi domina e sposta la discussione su un punto specifico da
 
 ### over + under entrambe non vuote
 Prioritizza la regola exclusion: invita una persona da `under_participators` con un aggancio contestuale. Risolvi entrambi i problemi con un intervento.
+
+## Memoria interventi recenti (cumulative reasons)
+
+Il payload può contenere `last_interventions_by_reason`:
+- `monopolization`: ultimo intervento di monopolization e da quanti minuti
+- `exclusion`: ultimo intervento di exclusion e da quanti minuti
+
+Se è presente una entry recente:
+- **monopolization** entro 3 minuti → NON ri-flaggare monopolization a meno
+  che la situazione sia drasticamente peggiorata (es. il rapporto rispetto
+  alla soglia è cresciuto significativamente). Le metriche cumulative
+  scendono lentamente: aspetta che si normalizzino naturalmente.
+- **exclusion** entro 2 minuti → NON ri-flaggare exclusion sulla stessa
+  persona. Dai tempo al gruppo di rispondere all'invito.
+
+Questa memoria si applica SOLO a monopolization e exclusion. Per off_topic,
+conflict, user_request valuta `last_turn` come al solito.
 
 ## Output
 

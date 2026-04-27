@@ -47,6 +47,19 @@ def _redis_key(session_id: int | str) -> str:
     return REDIS_KEY_TEMPLATE.format(session_id=session_id)
 
 
+def last_intervention_for_reason(
+    state: ModerationState, reason: str
+) -> Optional[dict]:
+    """
+    Scansiona interventions_log all'indietro e ritorna la prima entry
+    con reason matching, oppure None. Le entry hanno campo `ts` ISO string.
+    """
+    for entry in reversed(state.interventions_log):
+        if entry.get("reason") == reason:
+            return entry
+    return None
+
+
 def _fetch_participant_names(session_id: int | str) -> list[str]:
     """
     Legge dalla tabella session_participant i nomi dei partecipanti della
