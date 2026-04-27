@@ -662,6 +662,7 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
         if task is None:
             task = _resolve_task(None)
         scenario_block = task.task_context_block("normal")
+        enforces_gr = task.enforces_ground_rules()
 
         template = """Sei il moderatore AI di una discussione di gruppo su AIutami.
 
@@ -677,7 +678,7 @@ Intervieni SOLO se:
 3. **Off-topic evidente**: La discussione deraglia completamente rispetto allo scenario
 4. **Conflitto**: Toni aggressivi, insulti, attacchi personali
 5. **Richiesta diretta**: Qualcuno chiede esplicitamente aiuto al moderatore
-
+__GR_QUANDO_BULLET__
 NON intervenire per:
 - Off-topic parziali (aspetta che il gruppo si auto-corregga)
 - Silenzi brevi o pause naturali
@@ -712,7 +713,7 @@ Regole:
 - Altrimenti: nomi in `over_participators` → valuta monopolization,
   nomi in `under_participators` → valuta exclusion.
 - Non rifare tu il calcolo sui secondi: fidati delle liste.
-
+__GR_VALUTAZIONE_SECTION__
 ### A cosa serve il `summary`
 Usa il summary per:
 - Capire il contesto generale della discussione
@@ -752,7 +753,7 @@ Ringrazia brevemente chi domina e sposta la discussione su un punto specifico da
 
 ### over + under entrambe non vuote
 Prioritizza la regola exclusion: invita una persona da `under_participators` con un aggancio contestuale. Risolvi entrambi i problemi con un intervento.
-
+__GR_INTERVENTO_SECTION__
 ## Memoria interventi recenti (cumulative reasons)
 
 Il payload può contenere `last_interventions_by_reason`:
@@ -770,6 +771,16 @@ Se è presente una entry recente:
 Questa memoria si applica SOLO a monopolization e exclusion. Per off_topic,
 conflict, user_request valuta `last_turn` come al solito.
 
+## Priorità tra reason
+
+Se più reason sembrano applicabili allo stesso `last_turn`, scegli quello più alto in questo ordine:
+1. `conflict` (toni aggressivi, urgenza)
+2. `user_request` (richiesta esplicita al moderatore)
+__GR_PRIORITY_LINE__
+3. `off_topic` (deraglia generico)
+4. `monopolization` / `exclusion` (problemi cumulativi)
+5. `all_ok` (nessun problema)
+
 ## Output
 
 Rispondi SEMPRE con un JSON valido:
@@ -778,10 +789,77 @@ Rispondi SEMPRE con un JSON valido:
   "updated_summary": "Riassunto aggiornato includendo l'ultimo turno",
   "should_ai_speak": true/false,
   "message_to_say": "Il messaggio da dire (null se should_ai_speak=false)",
-  "reason": "monopolization | exclusion | off_topic | conflict | user_request | all_ok",
+  "reason": "__REASON_ENUM__",
   "intervention_score": 0.0-1.0
 }"""
-        return template.replace("__SCENARIO_BLOCK__", scenario_block)
+
+        # Sezioni condizionali per ground_rule_violation (solo task con
+        # enforces_ground_rules()=True, es. NASA Moon e Lost at Sea).
+        if enforces_gr:
+            gr_quando_bullet = (
+                "6. **Violazione ground rules**: un partecipante viola una "
+                "delle regole di discussione presentate nello scenario block "
+                "(specificamente: ultimatum \"io-vinco/tu-perdi\", proposta "
+                "di voto/media/compromesso, lamentele sulla discussione "
+                "stessa come \"non ci accordiamo, è inutile\")\n"
+            )
+            gr_valutazione = """
+### Violazione ground rules → guarda SOLO `last_turn`
+Le 6 ground rules sono nel blocco scenario all'inizio di questo prompt. Devi detectare violazioni SOLO di queste 3 (le altre richiedono contesto storico che il summary non preserva — ignorale a runtime):
+
+**Rule 2 — "io vinco/tu perdi" (impasse):**
+Marker: "o fate come dico io o niente", "altrimenti chiudiamo qui", "se non accettate non se ne fa nulla", linguaggio ultimatum.
+✅ "Marco e Lucia, o accettate il mio ranking o non se ne fa nulla."
+❌ "Marco insiste sulla sua posizione." (è rule 1, NON enforced)
+
+**Rule 4 — voto/media/compromesso:**
+Marker: "votiamo", "facciamo media", "spacchiamo a metà", "compromesso", "lanciamo una moneta", qualsiasi proposta di consenso meccanico.
+✅ "Visto che non concordiamo, facciamo la media tra le tre proposte."
+✅ "Votiamo a maggioranza così chiudiamo."
+
+**Rule 5 — frustrazione su discussione (differenze come ostacolo):**
+Marker: "non riusciamo ad accordarci, è inutile", "stiamo perdendo tempo a discutere", "tanto non si arriva a niente".
+✅ "Non possiamo metterci d'accordo, è inutile continuare."
+
+⚠️ Threshold conservativo: intervieni SOLO se la violazione è EVIDENTE. Se ambigua, lascia passare. Score 0.7+ solo per violazioni chiare.
+"""
+            gr_intervento = """
+### ground_rule_violation
+Cita la regola **per concetto**, non per numero. Tono: gentile reminder, non lezione. Reindirizza alla discussione costruttiva.
+
+✅ Rule 4: "Aspettate, votare a maggioranza spegne la discussione. Qual è davvero la differenza di prospettiva tra di voi?"
+✅ Rule 2: "Marco, l'ultimatum non aiuta — proviamo a trovare un'alternativa che convinca anche te?"
+✅ Rule 5: "I disaccordi non sono un ostacolo — sono il segnale che qualcuno ha informazioni utili. Cosa state vedendo di diverso?"
+
+❌ "Stai violando la regola 4 della procedura" (lettura formale)
+❌ "Marco, smetti di insistere" (richiamo diretto)
+
+Formato: 1-2 frasi, 30-40 parole.
+"""
+            gr_priority_line = "3. `ground_rule_violation` (violazione di una delle ground rules del task)\n"
+            reason_enum = (
+                "monopolization | exclusion | off_topic | conflict | "
+                "user_request | ground_rule_violation | all_ok"
+            )
+        else:
+            gr_quando_bullet = ""
+            gr_valutazione = ""
+            gr_intervento = ""
+            gr_priority_line = ""
+            reason_enum = (
+                "monopolization | exclusion | off_topic | conflict | "
+                "user_request | all_ok"
+            )
+
+        return (
+            template
+            .replace("__SCENARIO_BLOCK__", scenario_block)
+            .replace("__GR_QUANDO_BULLET__", gr_quando_bullet)
+            .replace("__GR_VALUTAZIONE_SECTION__", gr_valutazione)
+            .replace("__GR_INTERVENTO_SECTION__", gr_intervento)
+            .replace("__GR_PRIORITY_LINE__", gr_priority_line)
+            .replace("__REASON_ENUM__", reason_enum)
+        )
 
     @classmethod
     def _build_system_prompt(

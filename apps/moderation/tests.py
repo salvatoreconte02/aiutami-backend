@@ -2216,3 +2216,141 @@ class SomeoneIsSpeakingDuringIntroTests(TestCase):
         result = _someone_is_currently_speaking(session_id)
 
         self.assertTrue(result)
+
+
+class EnforcesGroundRulesTests(TestCase):
+    """
+    enforces_ground_rules() ritorna True solo per task che applicano
+    le ground rules di Hall & Watson (NASA Moon, Lost at Sea).
+    """
+
+    def test_nasa_moon_enforces_ground_rules(self):
+        from apps.tasks.registry import get_task
+        self.assertTrue(get_task("nasa_moon_survival").enforces_ground_rules())
+
+    def test_lost_at_sea_enforces_ground_rules(self):
+        from apps.tasks.registry import get_task
+        self.assertTrue(get_task("lost_at_sea").enforces_ground_rules())
+
+    def test_murder_mystery_does_not_enforce(self):
+        from apps.tasks.registry import get_task
+        self.assertFalse(get_task("murder_mystery").enforces_ground_rules())
+
+    def test_generic_does_not_enforce(self):
+        from apps.tasks.registry import get_task
+        self.assertFalse(get_task("generic").enforces_ground_rules())
+
+
+class GroundRuleViolationPromptTests(TestCase):
+    """
+    Il prompt normal mode include la sezione ground_rule_violation
+    e il reason nell'enum SOLO per task che fanno enforces_ground_rules().
+    """
+
+    def _prompt_for(self, task_key: str) -> str:
+        from apps.tasks.registry import get_task
+        return ModerationService._build_normal_mode_prompt(task=get_task(task_key))
+
+    def test_prompt_for_nasa_moon_contains_ground_rule_violation(self):
+        prompt = self._prompt_for("nasa_moon_survival")
+        self.assertIn("ground_rule_violation", prompt)
+        self.assertIn("Violazione ground rules", prompt)
+
+    def test_prompt_for_lost_at_sea_contains_ground_rule_violation(self):
+        prompt = self._prompt_for("lost_at_sea")
+        self.assertIn("ground_rule_violation", prompt)
+        self.assertIn("Violazione ground rules", prompt)
+
+    def test_prompt_for_murder_mystery_excludes_ground_rule_violation(self):
+        prompt = self._prompt_for("murder_mystery")
+        self.assertNotIn("ground_rule_violation", prompt)
+        self.assertNotIn("Violazione ground rules", prompt)
+
+    def test_prompt_for_generic_excludes_ground_rule_violation(self):
+        prompt = self._prompt_for("generic")
+        self.assertNotIn("ground_rule_violation", prompt)
+        self.assertNotIn("Violazione ground rules", prompt)
+
+    def test_prompt_lists_only_rules_2_4_5_for_runtime_detection(self):
+        """Le rules enforced sono 2 (impasse), 4 (voto/media), 5 (frustrazione)."""
+        prompt = self._prompt_for("nasa_moon_survival")
+        # Marker espliciti delle 3 rules enforced
+        self.assertIn("Rule 2", prompt)
+        self.assertIn("Rule 4", prompt)
+        self.assertIn("Rule 5", prompt)
+        # Cita marker linguistici riconoscibili
+        self.assertIn("ultimatum", prompt.lower())
+        self.assertTrue("votiamo" in prompt.lower() or "voto" in prompt.lower())
+
+    def test_prompt_includes_priority_section_for_all_tasks(self):
+        """La sezione 'Priorità tra reason' è sempre presente."""
+        for task_key in ("nasa_moon_survival", "lost_at_sea", "murder_mystery", "generic"):
+            prompt = self._prompt_for(task_key)
+            self.assertIn("Priorità tra reason", prompt, f"Missing in {task_key}")
+
+
+class GroundRuleViolationCooldownTests(TestCase):
+    """
+    ground_rule_violation usa il cooldown default 60s (non in OVERRIDES,
+    non in BYPASS), come gli altri reason puntuali.
+    """
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def _setup_log(self, session_id, seconds_ago):
+        state = ModerationState.initial()
+        state.interventions_log = [{
+            "ts": (datetime.utcnow() - timedelta(seconds=seconds_ago)).isoformat(),
+            "reason": "ground_rule_violation",
+            "score": 0.8,
+            "speaker": "Marco",
+            "message": "Aspettate, votare a maggioranza spegne la discussione.",
+        }]
+        save_moderation_state(session_id, state)
+
+    def _run_handle(self, session_id, *, reason="ground_rule_violation"):
+        with patch.object(ModerationService, '_call_llm') as mock_llm:
+            mock_llm.return_value = {
+                "updated_summary": "x",
+                "should_ai_speak": True,
+                "message_to_say": "Reminder ground rule.",
+                "reason": reason,
+                "intervention_score": 0.9,
+            }
+            return ModerationService.handle_human_turn_ended(
+                session_id=session_id,
+                user_id=1,
+                last_turn_text="x",
+                session_phase="ACTIVE",
+                hard_action=HardModerationAction.NONE,
+                speaker_name="Mario",
+            )
+
+    def test_blocked_under_60s(self):
+        sid = "test-grv-blocked"
+        self._setup_log(sid, seconds_ago=30)
+        result = self._run_handle(sid)
+        self.assertFalse(result.ai_should_speak)
+
+    def test_speaks_after_60s(self):
+        sid = "test-grv-speak"
+        self._setup_log(sid, seconds_ago=70)
+        result = self._run_handle(sid)
+        self.assertTrue(result.ai_should_speak)
+
+    def test_not_in_cumulative_payload(self):
+        """ground_rule_violation NON deve apparire in last_interventions_by_reason."""
+        log = [{
+            "ts": (datetime.utcnow() - timedelta(seconds=30)).isoformat(),
+            "reason": "ground_rule_violation",
+            "score": 0.8,
+            "speaker": "Marco",
+            "message": "msg",
+        }]
+        result = ModerationService._extract_last_interventions_by_reason(log)
+        self.assertNotIn("ground_rule_violation", result)
+        self.assertEqual(result, {})

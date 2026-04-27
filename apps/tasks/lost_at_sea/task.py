@@ -64,6 +64,9 @@ class LostAtSeaTask(TaskDefinition):
             "items_count": len(LOST_AT_SEA_ITEMS),
         }
 
+    def enforces_ground_rules(self) -> bool:
+        return True
+
     def intro_message_tail(self) -> str:
         rules_text = sea_prompts.GROUND_RULES
         return (

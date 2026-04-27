@@ -541,6 +541,65 @@ Misuriamo speaking time come **PTT-held duration** (mic-open time), non come rea
 
 ---
 
+### 2.9 [COMPLETATO] Ground rule violation enforcement (runtime)
+
+**Stato:** implementato (2026-04-27).
+
+**Data implementazione:** 2026-04-27
+
+**Motivazione (parte della RQ tesi):** confronto sessioni con moderatore vs sessioni senza moderatore. Questa feature aggiunge al moderatore "acceso" il compito di **far rispettare a runtime** le 6 ground rules di Hall & Watson (1970), oltre alle reasons già coperte. Prima: le 6 rules erano comunicate ai partecipanti nell'intro TTS e iniettate nel system prompt LLM come testo informativo, ma il moderatore non agiva su di esse.
+
+**Decisione cruciale: enforcement parziale per onestà metodologica.** Delle 6 rules originali, **enforciamo a runtime solo le 3 con marker linguistici puntuali** rilevabili da `last_turn`:
+- ✅ **Rule 2** — "io vinco/tu perdi" (impasse): ultimatum espliciti
+- ✅ **Rule 4** — voto/media/compromesso: keyword chiari ("votiamo", "media", "spacchiamo")
+- ✅ **Rule 5** — frustrazione su discussione (differenze come ostacolo)
+- ❌ **Rules 1, 3, 6** — richiedono storico turni (ripetizione, transizione di posizione, esplorazione precedente). Il `summary` è una sintesi narrativa compressa del *contenuto*, non un log *comportamentale*. Forzare detection produrrebbe falsi positivi.
+
+Le rules 1/3/6 **restano nell'intro TTS ai partecipanti** (informazione completa, niente cambia) **e nel system prompt LLM** come parte di SCENARIO_BLOCK, ma non vengono enforced a runtime.
+
+**Decisioni di design (concordate con utente):**
+1. Reason singolo `ground_rule_violation` (copre tutte e 3 le rules enforced)
+2. Tasks scope: **NASA Moon + Lost at Sea** (entrambe usano Hall & Watson, identicamente). Murder Mystery e Generic non toccati.
+3. Memoria payload: **puntuale**, niente entry in `last_interventions_by_reason`. Cooldown standard 60s (default).
+4. Priorità reason in caso di overlap: `conflict > user_request > ground_rule_violation > off_topic > monopolization/exclusion > all_ok`.
+5. Stile intervento: cita la rule **per concetto** (non per numero), 1-2 frasi, 30-40 parole, gentile reminder.
+
+**Cosa è stato fatto:**
+
+1. **`apps/tasks/base.py`** — nuovo metodo `enforces_ground_rules() -> bool` (default `False`).
+
+2. **`apps/tasks/nasa_moon/task.py` e `apps/tasks/lost_at_sea/task.py`** — override a `True`.
+
+3. **`apps/moderation/service.py::_build_normal_mode_prompt(task)`** — usa `task.enforces_ground_rules()` per riempire 5 placeholder condizionali:
+   - `__GR_QUANDO_BULLET__`: bullet 6 in "## Quando intervenire"
+   - `__GR_VALUTAZIONE_SECTION__`: subsection con detection per rules 2/4/5 + marker linguistici + esempi ✅/❌
+   - `__GR_INTERVENTO_SECTION__`: subsection con esempi di intervento contestuali (cita la rule per concetto)
+   - `__GR_PRIORITY_LINE__`: ground_rule_violation in priorità tra reason
+   - `__REASON_ENUM__`: enum dinamico (con o senza `ground_rule_violation`)
+   
+   Sezione "## Priorità tra reason" sempre presente (anche per task senza enforcement, ma senza la riga ground_rule_violation).
+
+4. **Filtro backend `_decide_ai_intervention`** — invariato. `ground_rule_violation` non in `COOLDOWN_BYPASS_REASONS` né in `COOLDOWN_OVERRIDES`, quindi cooldown default 60s. `_extract_last_interventions_by_reason` invariato (resta solo mono/excl).
+
+5. **`apps/moderation/intro.py`, `nasa_moon/prompts.py`, `lost_at_sea/prompts.py`** — invariati. I partecipanti continuano a sentire tutte e 6 le rules nell'intro TTS.
+
+6. **Test (13 nuovi):**
+   - `EnforcesGroundRulesTests` (4): nasa_moon True, lost_at_sea True, murder_mystery False, generic False
+   - `GroundRuleViolationPromptTests` (6): presenza/assenza condizionale di sezione e reason nell'enum, marker linguistici espliciti per rules 2/4/5, "Priorità tra reason" presente per tutti i task
+   - `GroundRuleViolationCooldownTests` (3): blocked sotto 60s, speak dopo 60s, NON in cumulative payload
+
+**Argomentazione tesi:**
+> *"We operationalize runtime enforcement on rules 2, 4, 5 — those whose violations have unambiguous linguistic markers in the current turn. Rules 1, 3, 6 require multi-turn conversational history that the running summary representation does not preserve, and are therefore left to future work with extended context. Notably, rule 4 (avoidance of majority voting / averaging / compromise) is the most diagnostic of the Hall & Watson framework — Hall & Watson designed the original 1970 NASA task explicitly to test resistance to majority voting as the central failure mode."*
+
+**Impatto runtime:**
+- Zero overhead per task senza ground rules (Murder Mystery, Generic): prompt invariato
+- Token aggiuntivi solo per NASA Moon e Lost at Sea (~250 token in più nel system prompt per le sezioni condizionali)
+- Nessuna migration DB, nessuna struttura Redis nuova
+
+**280/280 test verdi** dopo l'implementazione.
+
+---
+
 ## 3. Punti scartati
 
 - **Race condition su `moderation_in_progress`:** in push-to-talk stretto (un solo utente parla alla volta) non si verifica. Gli unici residui teorici sono double-tap del bottone end_speak o retransmit WS, ma sono problemi lato frontend, non di design backend. Non vale la pena menzionarlo neanche nei limitations della tesi.
@@ -558,4 +617,5 @@ Quando si torna a questo documento per implementare:
 - [ ] **2.7 Skip LLM in fase non-ACTIVE** → modificare orchestrator o `handle_human_turn_ended`. Quick win.
 - [x] **2.3 Rimozione forced_summary** → completato 2026-04-24. Rimosso completamente: costante, enum, metodi LLM dedicati, trigger, orchestrator handler, stato Redis, prompt task-specifici, ~17 test.
 - [x] **2.8 Speaking time** → completato 2026-04-27. Switch da turn count a speaking time (secondi PTT-held). Min threshold dinamico → fisso 8 min (paper). State con `speaking_time_per_participant`, `session_started_at`, `current_turn_started_at`. Nuovo `record_human_turn_start` chiamato dal consumer in request_speak. Soglie 2× / 0.5× invariate (deviazione motivata vs paper). 14 test, 267 totali.
+- [x] **2.9 Ground rule violation enforcement** → completato 2026-04-27. Nuovo reason `ground_rule_violation` per i task con `enforces_ground_rules()=True` (NASA Moon + Lost at Sea). Enforcement runtime solo di rules 2/4/5 (puntuali, marker linguistici robusti); rules 1/3/6 lasciate come informazione (richiedono storico). Cooldown default 60s. Sezione prompt condizionale + sezione "Priorità tra reason". 13 test, 280 totali.
 - [ ] **2.2 Tono per reason** → solo se test utente mostra messaggi troppo omogenei.

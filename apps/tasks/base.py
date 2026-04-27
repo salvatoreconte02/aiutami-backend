@@ -90,6 +90,14 @@ class TaskDefinition(ABC):
         """
         return {}
 
+    def enforces_ground_rules(self) -> bool:
+        """
+        True se il task usa le ground rules di Hall & Watson (1970) e vuole
+        che il moderatore AI le faccia rispettare a runtime tramite reason
+        `ground_rule_violation`. Default False (task senza ground rules).
+        """
+        return False
+
     def intro_message_tail(self) -> str:
         """
         Frase finale task-specifica iniettata nel template intro prima del
