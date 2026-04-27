@@ -2021,34 +2021,34 @@ class PerReasonCooldownTests(TestCase):
         state.interventions_log = log_entries
         save_moderation_state(session_id, state)
 
-    def test_monopolization_blocked_under_3min(self):
+    def test_monopolization_blocked_under_4min(self):
         sid = "test-mono-blocked"
-        self._setup_state(sid, [
-            _make_intervention_entry(reason="monopolization", seconds_ago=120)
-        ])
-        result = self._run_handle(sid, reason="monopolization")
-        self.assertFalse(result.ai_should_speak)
-
-    def test_monopolization_speaks_after_3min(self):
-        sid = "test-mono-speak"
         self._setup_state(sid, [
             _make_intervention_entry(reason="monopolization", seconds_ago=200)
         ])
         result = self._run_handle(sid, reason="monopolization")
+        self.assertFalse(result.ai_should_speak)
+
+    def test_monopolization_speaks_after_4min(self):
+        sid = "test-mono-speak"
+        self._setup_state(sid, [
+            _make_intervention_entry(reason="monopolization", seconds_ago=250)
+        ])
+        result = self._run_handle(sid, reason="monopolization")
         self.assertTrue(result.ai_should_speak)
 
-    def test_exclusion_blocked_under_2min(self):
+    def test_exclusion_blocked_under_4min(self):
         sid = "test-excl-blocked"
         self._setup_state(sid, [
-            _make_intervention_entry(reason="exclusion", seconds_ago=60)
+            _make_intervention_entry(reason="exclusion", seconds_ago=200)
         ])
         result = self._run_handle(sid, reason="exclusion")
         self.assertFalse(result.ai_should_speak)
 
-    def test_exclusion_speaks_after_2min(self):
+    def test_exclusion_speaks_after_4min(self):
         sid = "test-excl-speak"
         self._setup_state(sid, [
-            _make_intervention_entry(reason="exclusion", seconds_ago=130)
+            _make_intervention_entry(reason="exclusion", seconds_ago=250)
         ])
         result = self._run_handle(sid, reason="exclusion")
         self.assertTrue(result.ai_should_speak)

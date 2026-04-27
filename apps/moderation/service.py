@@ -50,8 +50,8 @@ COOLDOWN_BYPASS_REASONS = {"conflict", "user_request"}
 # perché il fenomeno (turn count / speaking time) decade lentamente.
 # Heron (1999): minimum intervention principle.
 COOLDOWN_OVERRIDES = {
-    "monopolization": timedelta(minutes=3),
-    "exclusion": timedelta(minutes=2),
+    "monopolization": timedelta(minutes=4),
+    "exclusion": timedelta(minutes=4),
 }
 
 class HardModerationAction(str, Enum):
@@ -713,12 +713,30 @@ Regole:
 - Altrimenti: nomi in `over_participators` → valuta monopolization,
   nomi in `under_participators` → valuta exclusion.
 - Non rifare tu il calcolo sui secondi: fidati delle liste.
+
+**Cooldown cumulative:** se `last_interventions_by_reason` contiene `monopolization` o `exclusion` con `minutes_ago < 4`, NON proporre quel reason. Aspetta che il cooldown passi e nel frattempo valuta altri tipi di problema (off_topic, conflict, ecc.).
 __GR_VALUTAZIONE_SECTION__
-### A cosa serve il `summary`
-Usa il summary per:
-- Capire il contesto generale della discussione
-- Generare l'`updated_summary` includendo i nuovi punti emersi dall'ultimo turno
-- Costruire interventi contestuali su monopolization/exclusion (vedi sezione dedicata)
+### Come generare l'`updated_summary`
+
+L'`updated_summary` è il riassunto running della discussione, riusato nei turni successivi come `summary` in input. Scrivilo pensando che sarai TU stesso a leggerlo al prossimo turno: deve essere utile per le tue decisioni successive E come base per il report finale della sessione.
+
+**Cosa includere:**
+- Posizioni dei partecipanti su scelte/ranking
+- Argomenti chiave emersi (perché certi oggetti sono prioritari)
+- Decisioni o accordi raggiunti dal gruppo
+- Cambi di posizione significativi
+- Stato corrente della discussione
+
+**Cosa NON includere:**
+- Convenevoli, saluti, frasi di transizione
+- Turn-by-turn play-by-play
+- Dettagli che non influenzano il consenso
+
+**Stile:** terza persona neutrale, factual, no opinioni del moderatore.
+
+**Continuità:** parti sempre dal `summary` precedente e integra i contributi del `last_turn`. Non reinventare da zero. Mantieni informazioni rilevanti dei turni precedenti che non sono state aggiornate.
+
+**Densità:** sii il più conciso possibile preservando però tutte le posizioni dei partecipanti e gli argomenti chiave. Se il summary diventa molto lungo (sessione avanzata, molte decisioni accumulate), comprimi i punti più vecchi che sono stati superati o non più rilevanti — ma non tagliare info ancora attiva.
 
 ### Punteggio
 Assegna un `intervention_score` da 0 a 1:
@@ -754,23 +772,6 @@ Ringrazia brevemente chi domina e sposta la discussione su un punto specifico da
 ### over + under entrambe non vuote
 Prioritizza la regola exclusion: invita una persona da `under_participators` con un aggancio contestuale. Risolvi entrambi i problemi con un intervento.
 __GR_INTERVENTO_SECTION__
-## Memoria interventi recenti (cumulative reasons)
-
-Il payload può contenere `last_interventions_by_reason`:
-- `monopolization`: ultimo intervento di monopolization e da quanti minuti
-- `exclusion`: ultimo intervento di exclusion e da quanti minuti
-
-Se è presente una entry recente:
-- **monopolization** entro 3 minuti → NON ri-flaggare monopolization a meno
-  che la situazione sia drasticamente peggiorata (es. il rapporto rispetto
-  alla soglia è cresciuto significativamente). Le metriche cumulative
-  scendono lentamente: aspetta che si normalizzino naturalmente.
-- **exclusion** entro 2 minuti → NON ri-flaggare exclusion sulla stessa
-  persona. Dai tempo al gruppo di rispondere all'invito.
-
-Questa memoria si applica SOLO a monopolization e exclusion. Per off_topic,
-conflict, user_request valuta `last_turn` come al solito.
-
 ## Priorità tra reason
 
 Se più reason sembrano applicabili allo stesso `last_turn`, scegli quello più alto in questo ordine:
