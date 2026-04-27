@@ -774,12 +774,7 @@ conflict, user_request valuta `last_turn` come al solito.
 ## Priorità tra reason
 
 Se più reason sembrano applicabili allo stesso `last_turn`, scegli quello più alto in questo ordine:
-1. `conflict` (toni aggressivi, urgenza)
-2. `user_request` (richiesta esplicita al moderatore)
-__GR_PRIORITY_LINE__
-3. `off_topic` (deraglia generico)
-4. `monopolization` / `exclusion` (problemi cumulativi)
-5. `all_ok` (nessun problema)
+__GR_PRIORITY_LIST__
 
 ## Output
 
@@ -805,7 +800,7 @@ Rispondi SEMPRE con un JSON valido:
             )
             gr_valutazione = """
 ### Violazione ground rules → guarda SOLO `last_turn`
-Le 6 ground rules sono nel blocco scenario all'inizio di questo prompt. Devi detectare violazioni SOLO di queste 3 (le altre richiedono contesto storico che il summary non preserva — ignorale a runtime):
+Le 3 ground rules che il moderatore enforces sono nel blocco scenario all'inizio di questo prompt (numerazione originale Hall & Watson 1970). Detectale così:
 
 **Rule 2 — "io vinco/tu perdi" (impasse):**
 Marker: "o fate come dico io o niente", "altrimenti chiudiamo qui", "se non accettate non se ne fa nulla", linguaggio ultimatum.
@@ -836,7 +831,14 @@ Cita la regola **per concetto**, non per numero. Tono: gentile reminder, non lez
 
 Formato: 1-2 frasi, 30-40 parole.
 """
-            gr_priority_line = "3. `ground_rule_violation` (violazione di una delle ground rules del task)\n"
+            gr_priority_list = (
+                "1. `conflict` (toni aggressivi, urgenza)\n"
+                "2. `user_request` (richiesta esplicita al moderatore)\n"
+                "3. `ground_rule_violation` (violazione di una delle ground rules del task)\n"
+                "4. `off_topic` (deraglia generico)\n"
+                "5. `monopolization` / `exclusion` (problemi cumulativi)\n"
+                "6. `all_ok` (nessun problema)"
+            )
             reason_enum = (
                 "monopolization | exclusion | off_topic | conflict | "
                 "user_request | ground_rule_violation | all_ok"
@@ -845,7 +847,13 @@ Formato: 1-2 frasi, 30-40 parole.
             gr_quando_bullet = ""
             gr_valutazione = ""
             gr_intervento = ""
-            gr_priority_line = ""
+            gr_priority_list = (
+                "1. `conflict` (toni aggressivi, urgenza)\n"
+                "2. `user_request` (richiesta esplicita al moderatore)\n"
+                "3. `off_topic` (deraglia generico)\n"
+                "4. `monopolization` / `exclusion` (problemi cumulativi)\n"
+                "5. `all_ok` (nessun problema)"
+            )
             reason_enum = (
                 "monopolization | exclusion | off_topic | conflict | "
                 "user_request | all_ok"
@@ -857,7 +865,7 @@ Formato: 1-2 frasi, 30-40 parole.
             .replace("__GR_QUANDO_BULLET__", gr_quando_bullet)
             .replace("__GR_VALUTAZIONE_SECTION__", gr_valutazione)
             .replace("__GR_INTERVENTO_SECTION__", gr_intervento)
-            .replace("__GR_PRIORITY_LINE__", gr_priority_line)
+            .replace("__GR_PRIORITY_LIST__", gr_priority_list)
             .replace("__REASON_ENUM__", reason_enum)
         )
 
