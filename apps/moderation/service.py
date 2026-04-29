@@ -46,6 +46,20 @@ def _resolve_task(task_key: Optional[str], session_id: Optional[str | int] = Non
 AI_INTERVENTION_COOLDOWN = timedelta(seconds=60)
 COOLDOWN_BYPASS_REASONS = {"conflict", "user_request"}
 
+# Reason "responsivi" che bypassano il filtro score: una volta classificato
+# il turno come conflict (insulto) o user_request (richiesta esplicita al
+# moderatore), l'intervento e' dovuto a prescindere dalla gravita percepita.
+# Lo score in questi casi guida solo la modulazione del tono del messaggio,
+# non la decisione di parlare. Simmetrico a COOLDOWN_BYPASS_REASONS.
+SCORE_BYPASS_REASONS = {"conflict", "user_request"}
+
+# Soglia minima di intervention_score per parlare nei reason "discrezionali"
+# (off_topic, monopolization, exclusion, ground_rule_violation). Allineata
+# alla scala di gravita nel prompt: 0.4 corrisponde a "situazione da
+# monitorare ma non critica" — il minimo della fascia di intervento.
+# Reason in SCORE_BYPASS_REASONS bypassano questa soglia.
+MIN_INTERVENTION_SCORE = 0.4
+
 # Cooldown per-reason: i reason cumulativi richiedono attese più lunghe
 # perché il fenomeno (turn count / speaking time) decade lentamente.
 # Heron (1999): minimum intervention principle.
@@ -376,7 +390,6 @@ class ModerationService:
             return cls._fallback_llm_output(mode, base_updated_summary, task=task)
 
         updated_summary = parsed.get("updated_summary", summary_in)
-        should_ai_speak = bool(parsed.get("should_ai_speak", False))
         message_to_say = parsed.get("message_to_say")
         reason = parsed.get("reason", "unknown")
         intervention_score_raw = parsed.get("intervention_score", 0.0)
@@ -385,6 +398,10 @@ class ModerationService:
             intervention_score = float(intervention_score_raw)
         except (TypeError, ValueError):
             intervention_score = 0.0
+
+        # should_ai_speak non e' piu' un campo prodotto dal modello (Feature 2.6):
+        # lo deriviamo da reason. Il modello valuta, il backend decide.
+        should_ai_speak = bool(message_to_say) and reason != "all_ok"
 
         logger.info(
             "[MODERATION][LLM][RESPONSE] mode=%s should_speak=%s reason=%s score=%.2f message=%r",
@@ -473,14 +490,18 @@ class ModerationService:
 
         # Modalità normale: il backend filtra la proposta dell'LLM.
 
-        # 1) Se il modello non propone di parlare, non si interviene.
+        # 1) Se il modello non propone di parlare (reason=all_ok o messaggio
+        # vuoto), non si interviene. should_ai_speak e' derivato da reason
+        # e message_to_say in _call_llm (Feature 2.6).
         if not llm_should_speak or not llm_message:
             return False, None
 
-        # 2) Eventuale soglia su intervention_score (se valorizzato)
-        if llm_score is not None and llm_score < 0.7:
-            # soglia esemplificativa, da tarare
-            return False, None
+        # 2) Soglia minima di gravita su intervention_score per i reason
+        # discrezionali (Feature 2.6). I reason responsivi (conflict,
+        # user_request) bypassano: l'intervento e' dovuto a prescindere.
+        if llm_reason not in SCORE_BYPASS_REASONS:
+            if llm_score is not None and llm_score < MIN_INTERVENTION_SCORE:
+                return False, None
 
         # 3) Cooldown per-reason: confronta col l'ultimo intervento dello
         # STESSO reason (tramite interventions_log). Bypass per conflict
@@ -682,14 +703,33 @@ Intervieni SOLO se:
 5. **Richiesta diretta**: Qualcuno chiede esplicitamente aiuto al moderatore
 __GR_QUANDO_BULLET__
 NON intervenire per:
-- Off-topic parziali (aspetta che il gruppo si auto-corregga)
 - Silenzi brevi o pause naturali
 - Disaccordi civili (sono parte sana della discussione)
 
-## Stile
-- Tono: gentile, indiretto, mai autoritario
-- Lunghezza: 1-2 frasi, 30-40 parole max
-- Usa i nomi ESATTI come compaiono nel payload
+## Stile e modulazione del tono
+
+L'`intervention_score` esprime la gravita del problema E guida il registro del messaggio. A bassa gravita usi un intervento minimale (Heron 1999, minimum intervention principle); a gravita crescente l'intervento diventa piu esplicito e riformulativo.
+
+- **score 0.4-0.5 (situazione da monitorare):** tono molto soft, suggestivo, esitante. Formulazioni interrogative o aperte, mai assertive. Esempi:
+  ✅ "Forse vale la pena sentire anche le altre voci sul punto?"
+  ✅ "Anna, ti chiedo se anche tu vedi questo aspetto allo stesso modo."
+
+- **score 0.6-0.7 (problema percepibile):** tono diretto ma cortese, prompt contestuale agganciato a un punto specifico. Esempi:
+  ✅ "Marco, il gruppo ha proposto X — tu come la vedi?"
+  ✅ "Aspettate, vale la pena chiarire una cosa prima di andare avanti."
+
+- **score 0.8-0.9 (problema evidente):** tono fermo, intervento esplicito, riformula il problema senza giudicare le persone. Esempi:
+  ✅ "Mi sembra che il tono si sia inasprito — riportiamo il focus sulla discussione."
+  ✅ "Stiamo perdendo il filo: torniamo al perche di queste posizioni."
+
+- **score 0.9-1.0 (problema grave):** intervento netto, breve, di reset. Esempi:
+  ✅ "Stop. Toni aggressivi non aiutano. Rispettiamoci e riprendiamo dal punto."
+
+**Vincoli universali (a ogni score):**
+- Mai autoritario. Mai giudicante sui partecipanti.
+- Lunghezza: 1-2 frasi, 30-40 parole max.
+- Usa i nomi ESATTI come compaiono nel payload.
+- Non partecipi alla discussione, non dai opinioni sul tema, non riveli soluzioni esterne.
 
 ## Come valutare
 
@@ -741,13 +781,14 @@ L'`updated_summary` è il riassunto running della discussione, riusato nei turni
 **Densità:** sii il più conciso possibile preservando però tutte le posizioni dei partecipanti e gli argomenti chiave. Se il summary diventa molto lungo (sessione avanzata, molte decisioni accumulate), comprimi i punti più vecchi che sono stati superati o non più rilevanti — ma non tagliare info ancora attiva.
 
 ### Punteggio
-Assegna un `intervention_score` da 0 a 1:
-- 0.0-0.3: Tutto ok, nessun problema
-- 0.4-0.6: Situazione da monitorare ma non critica
-- 0.7-0.8: Problema evidente, intervento consigliato
-- 0.9-1.0: Problema grave (insulti, off-topic totale), intervento necessario
+Assegna un `intervention_score` da 0 a 1 che rifletta la gravità del problema osservato. Lo score e' una valutazione oggettiva: NON deve essere usato come soglia di azione (decide il backend separatamente).
 
-Imposta `should_ai_speak: true` SOLO se `intervention_score >= 0.7`
+- 0.0-0.3: Nessun problema rilevante / discussione che procede bene
+- 0.4-0.6: Situazione da monitorare ma non critica
+- 0.7-0.8: Problema evidente
+- 0.9-1.0: Problema grave (insulti espliciti, off-topic totale, violazioni gravi)
+
+Sii calibrato: usa l'intera scala 0-1, non solo i bracket estremi. Una situazione borderline puo' valere 0.45 o 0.62, non e' obbligatorio "arrotondare" a un bracket.
 
 ## Come intervenire su monopolization / exclusion
 
@@ -785,11 +826,12 @@ Rispondi SEMPRE con un JSON valido:
 
 {
   "updated_summary": "Riassunto aggiornato includendo l'ultimo turno",
-  "should_ai_speak": true/false,
-  "message_to_say": "Il messaggio da dire (null se should_ai_speak=false)",
   "reason": "__REASON_ENUM__",
-  "intervention_score": 0.0-1.0
-}"""
+  "intervention_score": 0.0-1.0,
+  "message_to_say": "Il messaggio del moderatore (null se reason=all_ok)"
+}
+
+Genera `message_to_say` quando `reason` indica un problema (qualsiasi reason diverso da `all_ok`); usa `null` se `reason` = `all_ok`. La decisione finale se far parlare il moderatore e' presa dal backend in base allo score e ad altre policy: tu limitati a valutare la situazione."""
 
         # Sezioni condizionali per ground_rule_violation (solo task con
         # enforces_ground_rules()=True, es. NASA Moon e Lost at Sea).

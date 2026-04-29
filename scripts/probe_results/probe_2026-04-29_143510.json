@@ -1,0 +1,552 @@
+{
+  "timestamp": "2026-04-29_143510",
+  "task": "nasa_moon_survival",
+  "runs_per_case": 3,
+  "results": [
+    {
+      "id": "all_ok_civil",
+      "case": {
+        "id": "all_ok_civil",
+        "expected_reason": "all_ok",
+        "expected_speak": false,
+        "transcript": "Io credo che il kit medico sia piu importante della bussola, perche ferite anche piccole possono essere fatali in tuta."
+      },
+      "runs": [
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "Il gruppo sta discutendo l'importanza degli oggetti per la sopravvivenza sulla Luna. Salvcon ha espresso la sua opinione sul kit medico, sostenendo che sia più importante della bussola a causa dei rischi legati a ferite anche piccole.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "Il gruppo sta discutendo l'importanza degli oggetti per la sopravvivenza sulla Luna. Salvcon ha sottolineato che il kit medico è più importante della bussola, evidenziando che anche ferite piccole possono essere fatali in tuta.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "Il gruppo sta discutendo l'importanza degli oggetti per la sopravvivenza sulla Luna. Salvcon ha sottolineato che il kit medico è più importante della bussola, poiché anche ferite piccole possono essere fatali in tuta.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        }
+      ]
+    },
+    {
+      "id": "all_ok_first_turn_short",
+      "case": {
+        "id": "all_ok_first_turn_short",
+        "expected_reason": "all_ok",
+        "expected_speak": false,
+        "transcript": "Ciao a tutti, partiamo dall'ossigeno secondo me."
+      },
+      "runs": [
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "Il gruppo ha appena iniziato la discussione, con salvcon che ha proposto di partire dall'ossigeno.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "Il gruppo ha appena iniziato a discutere e Salvcon ha proposto di partire dall'ossigeno.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "Il gruppo ha appena iniziato la discussione, con 'salvcon' che ha proposto di partire dall'ossigeno.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        }
+      ]
+    },
+    {
+      "id": "off_topic_clear",
+      "case": {
+        "id": "off_topic_clear",
+        "expected_reason": "off_topic",
+        "expected_speak": true,
+        "transcript": "Comunque ieri sera ho visto una partita pazzesca, l'arbitro doveva dare rigore al 90esimo, e poi sono andato a cena fuori."
+      },
+      "runs": [
+        {
+          "reason": "off_topic",
+          "should_ai_speak": false,
+          "intervention_score": 0.6,
+          "message_to_say": null,
+          "updated_summary": "",
+          "reason_match": true,
+          "speak_match": false,
+          "all_match": false
+        },
+        {
+          "reason": "off_topic",
+          "should_ai_speak": true,
+          "intervention_score": 0.7,
+          "message_to_say": "Salvcon, il tema attuale è il ranking degli oggetti per la sopravvivenza sulla Luna. Potresti riportare la tua attenzione su questo argomento?",
+          "updated_summary": "La discussione è iniziata, ma si è allontanata dal tema principale con l'ultimo intervento di salvcon, che ha parlato di una partita di calcio.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "off_topic",
+          "should_ai_speak": false,
+          "intervention_score": 0.5,
+          "message_to_say": null,
+          "updated_summary": "",
+          "reason_match": true,
+          "speak_match": false,
+          "all_match": false
+        }
+      ]
+    },
+    {
+      "id": "conflict_insult",
+      "case": {
+        "id": "conflict_insult",
+        "expected_reason": "conflict",
+        "expected_speak": true,
+        "transcript": "Ma stai zitto Marco, sei un idiota, non capisci niente di sopravvivenza, ti sto dicendo che ho ragione io punto."
+      },
+      "runs": [
+        {
+          "reason": "conflict",
+          "should_ai_speak": true,
+          "intervention_score": 0.9,
+          "message_to_say": "Salvcon, il tono aggressivo non aiuta la discussione. Proviamo a mantenere un dialogo costruttivo e a condividere le nostre idee senza attaccarci personalmente.",
+          "updated_summary": "Riassunto aggiornato includendo l'ultimo turno",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "conflict",
+          "should_ai_speak": true,
+          "intervention_score": 0.9,
+          "message_to_say": "Salvcon, il tono aggressivo non aiuta la discussione. Proviamo a mantenere un dialogo costruttivo e a condividere le nostre idee senza attacchi personali.",
+          "updated_summary": "Riassunto aggiornato includendo l'ultimo turno.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "conflict",
+          "should_ai_speak": true,
+          "intervention_score": 0.9,
+          "message_to_say": "Salvcon, il tono aggressivo non aiuta la discussione. Proviamo a mantenere un dialogo costruttivo e a condividere le nostre idee senza attaccarci personalmente.",
+          "updated_summary": "Riassunto aggiornato includendo l'ultimo turno",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        }
+      ]
+    },
+    {
+      "id": "user_request_help",
+      "case": {
+        "id": "user_request_help",
+        "expected_reason": "user_request",
+        "expected_speak": true,
+        "transcript": "Moderatore, ci puoi aiutare? Non riusciamo a capire se l'acqua viene prima del kit medico, ci dici tu come procedere?"
+      },
+      "runs": [
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "Il gruppo sta discutendo l'importanza dell'acqua rispetto al kit medico, ma non è ancora stato raggiunto un consenso.",
+          "reason_match": false,
+          "speak_match": false,
+          "all_match": false
+        },
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "Il gruppo sta discutendo l'importanza dell'acqua rispetto al kit medico per il ranking degli oggetti lunari.",
+          "reason_match": false,
+          "speak_match": false,
+          "all_match": false
+        },
+        {
+          "reason": "user_request",
+          "should_ai_speak": false,
+          "intervention_score": 0.4,
+          "message_to_say": null,
+          "updated_summary": "Il gruppo sta discutendo l'importanza dell'acqua rispetto al kit medico nel contesto del ranking degli oggetti lunari.",
+          "reason_match": true,
+          "speak_match": false,
+          "all_match": false
+        }
+      ]
+    },
+    {
+      "id": "rule2_ultimatum_explicit",
+      "case": {
+        "id": "rule2_ultimatum_explicit",
+        "expected_reason": "ground_rule_violation",
+        "expected_speak": true,
+        "transcript": "Senti Marco, o accettate il mio ranking come l'ho proposto io o non se ne fa nulla, decidete voi."
+      },
+      "runs": [
+        {
+          "reason": "ground_rule_violation",
+          "should_ai_speak": true,
+          "intervention_score": 0.8,
+          "message_to_say": "Marco, l'ultimatum non aiuta — proviamo a trovare un'alternativa che convinca anche te?",
+          "updated_summary": "Riassunto aggiornato includendo l'ultimo turno",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "ground_rule_violation",
+          "should_ai_speak": true,
+          "intervention_score": 0.8,
+          "message_to_say": "Marco, l'ultimatum non aiuta — proviamo a trovare un'alternativa che convinca anche te?",
+          "updated_summary": "",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "ground_rule_violation",
+          "should_ai_speak": true,
+          "intervention_score": 0.8,
+          "message_to_say": "Salvcon, l'ultimatum non aiuta — proviamo a trovare un'alternativa che convinca anche te?",
+          "updated_summary": "Riassunto aggiornato includendo l'ultimo turno.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        }
+      ]
+    },
+    {
+      "id": "rule4_real_log_quote",
+      "case": {
+        "id": "rule4_real_log_quote",
+        "expected_reason": "ground_rule_violation",
+        "expected_speak": true,
+        "transcript": "Ciao, io credo che la scelta intelligente permetta come oggetto di sopravvivenza per questa task. Pero credo che sia necessario mettere a voti per decidere."
+      },
+      "runs": [
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "Riassunto aggiornato includendo l'ultimo turno.",
+          "reason_match": false,
+          "speak_match": false,
+          "all_match": false
+        },
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "Il gruppo ha appena iniziato la discussione e non ci sono ancora posizioni chiare sui 15 oggetti lunari. L'ultimo intervento di salvcon ha suggerito di mettere a voti per decidere.",
+          "reason_match": false,
+          "speak_match": false,
+          "all_match": false
+        },
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "",
+          "reason_match": false,
+          "speak_match": false,
+          "all_match": false
+        }
+      ]
+    },
+    {
+      "id": "rule4_classic_votiamo",
+      "case": {
+        "id": "rule4_classic_votiamo",
+        "expected_reason": "ground_rule_violation",
+        "expected_speak": true,
+        "transcript": "Ragazzi votiamo a maggioranza cosi chiudiamo e finiamo."
+      },
+      "runs": [
+        {
+          "reason": "ground_rule_violation",
+          "should_ai_speak": false,
+          "intervention_score": 0.7,
+          "message_to_say": null,
+          "updated_summary": "",
+          "reason_match": true,
+          "speak_match": false,
+          "all_match": false
+        },
+        {
+          "reason": "ground_rule_violation",
+          "should_ai_speak": true,
+          "intervention_score": 0.8,
+          "message_to_say": "Aspettate, votare a maggioranza spegne la discussione. Qual è davvero la differenza di prospettiva tra di voi?",
+          "updated_summary": "Riassunto aggiornato includendo l'ultimo turno",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "ground_rule_violation",
+          "should_ai_speak": false,
+          "intervention_score": 0.7,
+          "message_to_say": null,
+          "updated_summary": "",
+          "reason_match": true,
+          "speak_match": false,
+          "all_match": false
+        }
+      ]
+    },
+    {
+      "id": "rule4_paraphrase_media",
+      "case": {
+        "id": "rule4_paraphrase_media",
+        "expected_reason": "ground_rule_violation",
+        "expected_speak": true,
+        "transcript": "Visto che non concordiamo, facciamo la media tra le tre proposte di ranking e prendiamo quella."
+      },
+      "runs": [
+        {
+          "reason": "ground_rule_violation",
+          "should_ai_speak": true,
+          "intervention_score": 0.8,
+          "message_to_say": "Aspettate, votare a maggioranza spegne la discussione. Qual è davvero la differenza di prospettiva tra di voi?",
+          "updated_summary": "Riassunto aggiornato includendo l'ultimo turno.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "ground_rule_violation",
+          "should_ai_speak": true,
+          "intervention_score": 0.7,
+          "message_to_say": "Aspettate, votare a maggioranza spegne la discussione. Qual è davvero la differenza di prospettiva tra di voi?",
+          "updated_summary": "Il gruppo sta cercando di raggiungere un consenso sul ranking dei 15 oggetti lunari, ma non è ancora stato trovato un accordo.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "ground_rule_violation",
+          "should_ai_speak": true,
+          "intervention_score": 0.8,
+          "message_to_say": "Aspettate, votare a maggioranza spegne la discussione. Qual è davvero la differenza di prospettiva tra di voi?",
+          "updated_summary": "Riassunto aggiornato: il gruppo sta discutendo il ranking dei 15 oggetti lunari per la sopravvivenza. L'ultima proposta di salvcon è di fare la media tra le tre proposte di ranking.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        }
+      ]
+    },
+    {
+      "id": "rule4_paraphrase_alzata",
+      "case": {
+        "id": "rule4_paraphrase_alzata",
+        "expected_reason": "ground_rule_violation",
+        "expected_speak": true,
+        "transcript": "Non andiamo da nessuna parte, decidiamo per alzata di mano e passiamo all'oggetto successivo."
+      },
+      "runs": [
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "Riassunto aggiornato includendo l'ultimo turno.",
+          "reason_match": false,
+          "speak_match": false,
+          "all_match": false
+        },
+        {
+          "reason": "ground_rule_violation",
+          "should_ai_speak": false,
+          "intervention_score": 0.7,
+          "message_to_say": null,
+          "updated_summary": "",
+          "reason_match": true,
+          "speak_match": false,
+          "all_match": false
+        },
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "Riassunto aggiornato includendo l'ultimo turno.",
+          "reason_match": false,
+          "speak_match": false,
+          "all_match": false
+        }
+      ]
+    },
+    {
+      "id": "rule5_frustration",
+      "case": {
+        "id": "rule5_frustration",
+        "expected_reason": "ground_rule_violation",
+        "expected_speak": true,
+        "transcript": "Tanto cosi non si arriva da nessuna parte, e inutile continuare a discutere, non ci accordiamo mai."
+      },
+      "runs": [
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "Riassunto aggiornato includendo l'ultimo turno",
+          "reason_match": false,
+          "speak_match": false,
+          "all_match": false
+        },
+        {
+          "reason": "ground_rule_violation",
+          "should_ai_speak": true,
+          "intervention_score": 0.8,
+          "message_to_say": "I disaccordi non sono un ostacolo — sono il segnale che qualcuno ha informazioni utili. Cosa state vedendo di diverso?",
+          "updated_summary": "Riassunto aggiornato includendo l'ultimo turno.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "all_ok",
+          "should_ai_speak": false,
+          "intervention_score": 0.0,
+          "message_to_say": null,
+          "updated_summary": "",
+          "reason_match": false,
+          "speak_match": false,
+          "all_match": false
+        }
+      ]
+    },
+    {
+      "id": "monopolization_late",
+      "case": {
+        "id": "monopolization_late",
+        "expected_reason": "monopolization",
+        "expected_speak": true,
+        "transcript": "Quindi ribadisco quello che dicevo, secondo me l'ossigeno va prima di tutto perche e essenziale, e anche l'acqua perche senza acqua si muore in 3 giorni.",
+        "speakers": {
+          "salvcon": 600.0,
+          "anna": 60.0,
+          "marco": 60.0
+        },
+        "elapsed": 720.0
+      },
+      "runs": [
+        {
+          "reason": "exclusion",
+          "should_ai_speak": true,
+          "intervention_score": 0.7,
+          "message_to_say": "Grazie salvcon per il tuo contributo. Anna, quale è la tua opinione sull'importanza dell'ossigeno e dell'acqua in questa situazione?",
+          "updated_summary": "Il gruppo sta discutendo l'importanza dell'ossigeno e dell'acqua, con salvcon che sottolinea che l'ossigeno è essenziale e che senza acqua si muore in 3 giorni. Anna e Marco non hanno ancora partecipato attivamente alla discussione.",
+          "reason_match": false,
+          "speak_match": true,
+          "all_match": false
+        },
+        {
+          "reason": "exclusion",
+          "should_ai_speak": true,
+          "intervention_score": 0.7,
+          "message_to_say": "Grazie Salvcon per il tuo contributo. Anna e Marco, quali sono le vostre opinioni riguardo all'importanza dell'ossigeno e dell'acqua nel ranking?",
+          "updated_summary": "Il gruppo sta discutendo l'importanza dell'ossigeno e dell'acqua per la sopravvivenza sulla Luna. Salvcon ha sottolineato che l'ossigeno è essenziale e che senza acqua si muore in tre giorni.",
+          "reason_match": false,
+          "speak_match": true,
+          "all_match": false
+        },
+        {
+          "reason": "exclusion",
+          "should_ai_speak": true,
+          "intervention_score": 0.7,
+          "message_to_say": "Grazie salvcon per il tuo contributo. Anna e Marco, avete opinioni su quanto è stato detto riguardo all'ossigeno e all'acqua? Vorremmo sentire anche le vostre prospettive.",
+          "updated_summary": "Il gruppo sta discutendo l'importanza dell'ossigeno e dell'acqua per la sopravvivenza, con salvcon che sottolinea che l'ossigeno è essenziale e che senza acqua si muore in 3 giorni.",
+          "reason_match": false,
+          "speak_match": true,
+          "all_match": false
+        }
+      ]
+    },
+    {
+      "id": "exclusion_late",
+      "case": {
+        "id": "exclusion_late",
+        "expected_reason": "exclusion",
+        "expected_speak": true,
+        "transcript": "Anna ha proposto la corda al primo posto, io invece la metterei piu in basso, non e cosi essenziale per la sopravvivenza.",
+        "speakers": {
+          "salvcon": 200.0,
+          "anna": 200.0,
+          "marco": 10.0
+        },
+        "elapsed": 720.0
+      },
+      "runs": [
+        {
+          "reason": "exclusion",
+          "should_ai_speak": true,
+          "intervention_score": 0.6,
+          "message_to_say": "Marco, il gruppo ha discusso dell'importanza della corda — tu cosa ne pensi? Hai qualche idea su come potrebbe essere classificata?",
+          "updated_summary": "Anna ha proposto di mettere la corda al primo posto, mentre salvcon ha espresso disaccordo, ritenendola meno essenziale per la sopravvivenza.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "exclusion",
+          "should_ai_speak": true,
+          "intervention_score": 0.7,
+          "message_to_say": "Marco, il gruppo ha discusso dell'importanza della corda. Qual è la tua opinione su questo oggetto e come lo classificheresti?",
+          "updated_summary": "Anna ha proposto di mettere la corda al primo posto, mentre salvcon ha suggerito di posizionarla più in basso, ritenendola non essenziale per la sopravvivenza.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        },
+        {
+          "reason": "exclusion",
+          "should_ai_speak": true,
+          "intervention_score": 0.6,
+          "message_to_say": "Marco, il gruppo sta discutendo sull'importanza della corda — tu hai una posizione su questo oggetto?",
+          "updated_summary": "Anna ha proposto di mettere la corda al primo posto, mentre salvcon ha suggerito di posizionarla più in basso, ritenendola non essenziale per la sopravvivenza.",
+          "reason_match": true,
+          "speak_match": true,
+          "all_match": true
+        }
+      ]
+    }
+  ]
+}

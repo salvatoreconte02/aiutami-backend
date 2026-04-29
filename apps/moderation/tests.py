@@ -1431,13 +1431,18 @@ class BuildNormalModePromptTests(TestCase):
         self.assertIn("conflitt", prompt.lower()) # conflict
 
     def test_build_normal_mode_prompt_contains_json_output_spec(self):
-        """Prompt should specify JSON output format."""
+        """Prompt should specify JSON output format.
+
+        Feature 2.6: should_ai_speak NON e' piu' un campo richiesto al
+        modello — viene derivato dal backend da reason+message_to_say.
+        """
         prompt = ModerationService._build_normal_mode_prompt()
 
         self.assertIn("updated_summary", prompt)
-        self.assertIn("should_ai_speak", prompt)
         self.assertIn("message_to_say", prompt)
         self.assertIn("intervention_score", prompt)
+        self.assertIn("reason", prompt)
+        self.assertNotIn("should_ai_speak", prompt)
 
     def test_build_normal_mode_prompt_contains_score_thresholds(self):
         """Prompt should explain intervention_score thresholds."""
@@ -2008,6 +2013,133 @@ class CooldownBypassTests(TestCase):
 
         self.assertTrue(result.ai_should_speak)
         self.assertIn("richiesta", result.ai_message)
+
+
+class ScoreBypassTests(TestCase):
+    """
+    Test del bypass della soglia score per i reason responsivi (Feature 2.6).
+
+    conflict e user_request devono far parlare il moderatore anche con
+    score basso (es. 0.3): l'intervento e' dovuto a prescindere dalla
+    gravita percepita. Gli altri reason sono soggetti a soglia 0.4.
+    """
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_conflict_bypasses_score_threshold(self, mock_llm):
+        """conflict con score 0.3 deve far parlare il moderatore (bypass)."""
+        session_id = "test-score-bypass-1"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Stop, mantenete un tono rispettoso",
+            "reason": "conflict",
+            "intervention_score": 0.3,
+        }
+
+        state = ModerationState.initial()
+        save_moderation_state(session_id, state)
+
+        result = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        self.assertTrue(result.ai_should_speak)
+        self.assertIn("rispettoso", result.ai_message)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_user_request_bypasses_score_threshold(self, mock_llm):
+        """user_request con score 0.3 deve far parlare il moderatore (bypass)."""
+        session_id = "test-score-bypass-2"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Certo, vi rispondo",
+            "reason": "user_request",
+            "intervention_score": 0.3,
+        }
+
+        state = ModerationState.initial()
+        save_moderation_state(session_id, state)
+
+        result = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        self.assertTrue(result.ai_should_speak)
+        self.assertIn("rispondo", result.ai_message)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_off_topic_below_threshold_blocked(self, mock_llm):
+        """off_topic con score 0.3 deve essere bloccato (sotto soglia 0.4)."""
+        session_id = "test-score-bypass-3"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Tornate al tema",
+            "reason": "off_topic",
+            "intervention_score": 0.3,
+        }
+
+        state = ModerationState.initial()
+        save_moderation_state(session_id, state)
+
+        result = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        self.assertFalse(result.ai_should_speak)
+        self.assertIsNone(result.ai_message)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_off_topic_at_threshold_passes(self, mock_llm):
+        """off_topic con score 0.4 (soglia esatta) deve far parlare."""
+        session_id = "test-score-bypass-4"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Tornate al tema",
+            "reason": "off_topic",
+            "intervention_score": 0.4,
+        }
+
+        state = ModerationState.initial()
+        save_moderation_state(session_id, state)
+
+        result = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        self.assertTrue(result.ai_should_speak)
 
 
 class PerReasonCooldownTests(TestCase):

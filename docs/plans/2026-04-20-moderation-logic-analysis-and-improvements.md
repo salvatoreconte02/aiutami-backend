@@ -405,9 +405,81 @@ Regole:
 
 ---
 
-### 2.6 [DA IMPLEMENTARE] Refactoring soglia intervention_score: separare valutazione LLM da filtro backend
+### 2.6 [COMPLETATO] Refactoring soglia intervention_score + modulazione tono via score
 
-**Stato:** da implementare.
+**Stato:** completato 2026-04-29.
+
+**Data proposta:** 2026-04-22
+
+**Data implementazione:** 2026-04-29
+
+#### Cosa e' stato fatto
+
+Tre modifiche compatte che si rinforzano a vicenda:
+
+1. **Rimozione di `should_ai_speak` dall'output LLM.** Il campo non e' piu' richiesto nel prompt; in `_call_llm` viene derivato da `bool(message_to_say) and reason != "all_ok"`. Il backend continua a riceverlo come prima (zero impatto a valle), ma il modello non e' piu' costretto a dichiararlo.
+
+2. **Soglia score abbassata e differenziata.**
+   - Nuova costante `MIN_INTERVENTION_SCORE = 0.4` (allineata alla scala "0.4-0.6 = situazione da monitorare" del prompt).
+   - Nuova costante `SCORE_BYPASS_REASONS = {"conflict", "user_request"}` simmetrica a `COOLDOWN_BYPASS_REASONS`: i reason responsivi bypassano il filtro score.
+   - `_decide_ai_intervention` filtra `score < 0.4` solo per i reason discrezionali (off_topic, monopolization, exclusion, ground_rule_violation).
+
+3. **Modulazione del tono via score.** La sezione "Stile" del prompt e' diventata "Stile e modulazione del tono": lo score guida il *registro* del messaggio (0.4-0.5 soft suggestivo, 0.6-0.7 diretto cortese, 0.8-0.9 fermo esplicito, 0.9-1.0 reset netto). Lo score smette di essere un gate ridondante e diventa un parametro causalmente connesso al messaggio.
+
+#### Risultati misurati con `scripts/probe_moderation.py`
+
+Probe con 21 casi × 3 run = 63 chiamate LLM su `gpt-4o-mini` (temperature 0.4), prima e dopo le modifiche:
+
+| Caso | Prima (reason+speak) | Dopo (reason+speak) |
+|---|---|---|
+| `rule4_real_log_quote` (caso reale dei log) | 0/3 + 0/3 (cieco) | **3/3 + 3/3** |
+| `rule4_paraphrase_alzata` | 1/3 + 0/3 (instabile) | **3/3 + 3/3** |
+| `rule5_frustration` | 1/3 + 1/3 (instabile) | **3/3 + 3/3** |
+| `user_request_help` | 1/3 + 0/3 | **3/3 + 3/3** |
+| `off_topic_clear` | 3/3 + 1/3 | **3/3 + 3/3** |
+| Tutti gli altri casi base | gia' OK | gia' OK |
+
+PASS aggregato: **8/13 → 12/13** (l'unico residuo `monopolization_late` era un errore nei dati di test, fixato successivamente).
+
+**Effetto inatteso e rilevante per la tesi:** la rimozione della soglia dal prompt ha sbloccato anche la **detection delle ground rules su parafrasi**, che era stabilmente cieca (0/3). Interpretazione: il modello, davanti a `"intervieni solo se score >= 0.7"` su un caso ambiguo (parafrasi di rule violation, non match letterale dei marker), preferiva il path conservativo `all_ok 0.0` invece di classificare correttamente. Tolta la pressione decisionale, lo score smette di essere proxy della decisione e il modello classifica per quello che e'. Confermato dalla zero-varianza post-fix: tutti i casi che prima oscillavano (es. `rule5_frustration` 0.00/0.80/0.00) ora producono lo stesso valore stabilmente.
+
+**Casi adversarial (8 nuovi)**: il moderatore ricusa correttamente in 3/3 prompt injection, richieste di info esterne, richieste di rivelare il system prompt, richieste di partecipare/giudicare. Tono modulato in maniera coerente con lo score.
+
+#### Caveat osservato
+
+La modulazione tono ha *gonfiato leggermente* gli score nei casi base (off_topic da 0.6→0.8, ground rules da 0.7→0.8): il modello associa "tono piu' esplicito = score piu' alto" e tende a classificare piu' interventi nella fascia 0.8. Lo score perde un po' di calibrazione "gravita' oggettiva pura" guadagnando "intensita' del registro che voglio usare". Per la tesi e' ancora difendibile come graduated intervention (Heron 1999), e operativamente non causa problemi: tutti i casi "veri positivi" hanno score >> 0.4.
+
+#### Codice toccato
+
+- `apps/moderation/service.py`:
+  - costanti `SCORE_BYPASS_REASONS`, `MIN_INTERVENTION_SCORE` (riga ~50)
+  - `_build_normal_mode_prompt`: rimosso "Off-topic parziali", riscritta sezione "Stile e modulazione del tono", riscritta sezione "Punteggio" come puramente descrittiva, rimosso `should_ai_speak` dallo schema JSON
+  - `_call_llm`: parsing aggiornato (derivazione `should_ai_speak`)
+  - `_decide_ai_intervention`: bypass score per reason responsivi, soglia 0.4
+- `apps/moderation/tests.py`:
+  - `test_build_normal_mode_prompt_contains_json_output_spec`: aggiornato (assertNotIn `should_ai_speak`)
+  - nuova classe `ScoreBypassTests` (4 test)
+- `scripts/probe_moderation.py`:
+  - 21 casi (13 base + 8 adversarial), parametro `--runs N`, simulazione filtro backend (`backend_speaks`), output JSON+MD in `scripts/probe_results/`
+
+#### Test suite
+
+`265 → 269 test, tutti verdi`.
+
+#### Riferimenti aggiornati
+
+| Aspetto | Riferimento |
+|---|---|
+| Overconfidence verbale LLM (giustifica rimozione soglia dal prompt) | Xiong et al. 2024 ICLR; Tian et al. 2025 |
+| Soglia precision-over-recall (filtro 0.4 backend) | Lee et al. 2023 CSCW |
+| Modulazione intensita' intervento (tono via score) | Heron 1999 *minimum intervention principle*; Lee et al. 2023 |
+| Separation valutazione/decisione | Gorwa et al. 2020 |
+
+---
+
+### 2.6 [originale, kept for traceability] Refactoring soglia intervention_score: separare valutazione LLM da filtro backend
+
+**Stato:** sostituito dal blocco completato qui sopra (2026-04-29).
 
 **Data proposta:** 2026-04-22
 
@@ -613,7 +685,7 @@ Quando si torna a questo documento per implementare:
 - [x] **2.1 `interventions_log` nel report** → completato 2026-04-24. `state.py`, `service.py`, `sessions/services.py`, prompt report (base + MM + NASA + Lost at Sea), `pdf_service.py`, 10 test.
 - [x] **2.4 Memoria per-reason + cooldown differenziato** → completato 2026-04-27. Helper `last_intervention_for_reason` su `interventions_log` (no nuova struttura), cooldown per-reason (mono 3min, excl 2min, default 60s), payload `last_interventions_by_reason` solo per reason cumulativi, sezione prompt "Memoria interventi recenti". 13 nuovi test.
 - [x] **2.5 Metric-informed moderation** → completato 2026-04-24. Helper puro `metrics.py`, `ModerationState.initial(participants=...)` con lookup DB in `load_moderation_state`, payload con `participation_metrics` + `participants.names` (no più `turns` raw), prompt con nuovo blocco "CUMULATIVI" + sezione "Come intervenire" (invitare > correggere, invito contestuale, 30-40 parole). Min turns dinamico `2×N`. 17 nuovi test.
-- [ ] **2.6 Refactoring soglia** → modificare `_build_normal_mode_prompt()` (rimuovere istruzione soglia). Filtro backend invariato.
+- [x] **2.6 Refactoring soglia + modulazione tono** → completato 2026-04-29. Rimosso `should_ai_speak` dall'output LLM (derivato in `_call_llm`), soglia score abbassata a 0.4 con `SCORE_BYPASS_REASONS={conflict, user_request}`, modulazione tono via score (4 fasce con esempi). Side-effect: detection ground rules su parafrasi e' passata da 0/3 a 3/3 sui casi che prima erano ciechi (rule4 reale dai log). Tool: `scripts/probe_moderation.py` con 21 casi (incl. adversarial) e simulazione backend filter. 4 nuovi test, 269 totali verdi.
 - [ ] **2.7 Skip LLM in fase non-ACTIVE** → modificare orchestrator o `handle_human_turn_ended`. Quick win.
 - [x] **2.3 Rimozione forced_summary** → completato 2026-04-24. Rimosso completamente: costante, enum, metodi LLM dedicati, trigger, orchestrator handler, stato Redis, prompt task-specifici, ~17 test.
 - [x] **2.8 Speaking time** → completato 2026-04-27. Switch da turn count a speaking time (secondi PTT-held). Min threshold dinamico → fisso 8 min (paper). State con `speaking_time_per_participant`, `session_started_at`, `current_turn_started_at`. Nuovo `record_human_turn_start` chiamato dal consumer in request_speak. Soglie 2× / 0.5× invariate (deviazione motivata vs paper). 14 test, 267 totali.
