@@ -207,6 +207,31 @@ class LoadModerationStateInitializesFromDBTests(TestCase):
         state = load_moderation_state(999999)
         self.assertEqual(state.speaking_time_per_participant, {})
 
+    def test_session_started_at_is_naive_for_handle_human_turn_compatibility(self):
+        """
+        Regression: Django ORM ritorna started_at tz-aware (USE_TZ=True),
+        ma handle_human_turn_ended sottrae datetime.utcnow() (naive).
+        load_moderation_state deve normalizzare a naive per evitare
+        TypeError "can't subtract offset-naive and offset-aware".
+        """
+        from django.utils import timezone
+
+        # Simula Session.start(): setta started_at con timezone-aware now
+        self.session.started_at = timezone.now()
+        self.session.save(update_fields=["started_at"])
+
+        state = load_moderation_state(self.session.id)
+        self.assertIsNotNone(state.session_started_at)
+        self.assertIsNone(
+            state.session_started_at.tzinfo,
+            "session_started_at must be tz-naive after load_moderation_state",
+        )
+
+        # Verifica che la sottrazione con datetime.utcnow() funzioni
+        from datetime import datetime as _dt
+        delta = (_dt.utcnow() - state.session_started_at).total_seconds()
+        self.assertGreaterEqual(delta, 0)
+
 
 class TriggerEvaluationResultTests(TestCase):
     def test_trigger_result_has_should_transition_to_conclusion(self):

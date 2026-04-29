@@ -232,7 +232,7 @@ class OpenAIRealtimeTranscriptionClient:
                     },
                 }
                 await ws.send(json.dumps(session_update))
-                logger.info("[OPENAI-ASR] transcription_session.update inviato")
+                logger.debug("[OPENAI-ASR] transcription_session.update inviato")
 
                 self._connected_event.set()
 
@@ -351,7 +351,7 @@ class OpenAIRealtimeTranscriptionClient:
             return
 
         if et in ("transcription_session.created", "transcription_session.updated"):
-            logger.info("[OPENAI-ASR][%s] id=%s", et, event.get("session", {}).get("id"))
+            logger.debug("[OPENAI-ASR][%s] id=%s", et, event.get("session", {}).get("id"))
             return
 
         if et == "input_audio_buffer.speech_started":

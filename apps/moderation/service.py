@@ -121,12 +121,14 @@ class ModerationService:
 
         # Elapsed seconds dalla sessione (per min_time_reached). Default a 0
         # se session_started_at non è ancora stato settato (sessione inattiva
-        # o test diretti).
+        # o test diretti). Difensivo contro state Redis pre-esistente
+        # con tz-aware datetime: strippa la tz prima della sottrazione.
         elapsed_seconds = 0.0
         if state.session_started_at is not None:
-            elapsed_seconds = (
-                datetime.utcnow() - state.session_started_at
-            ).total_seconds()
+            started_at = state.session_started_at
+            if started_at.tzinfo is not None:
+                started_at = started_at.replace(tzinfo=None)
+            elapsed_seconds = (datetime.utcnow() - started_at).total_seconds()
 
         # 1) Determinare la modalità di chiamata LLM in base a hard_action
         mode = cls._decide_llm_mode(hard_action, session_phase)

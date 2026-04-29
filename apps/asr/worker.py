@@ -173,7 +173,7 @@ class ASRStreamWorker:
 
         def _on_partial(text: str) -> None:
             if text:
-                logger.info("[ASR][OPENAI][partial] session=%s user=%s text=%r", self.session_id, self.user_id, text)
+                logger.debug("[ASR][OPENAI][partial] session=%s user=%s text=%r", self.session_id, self.user_id, text)
 
         def _on_final(text: str) -> None:
             # Log + persistenza in cache per consumo da TurnsConsumer (fine turno)
@@ -461,7 +461,7 @@ class ASRStreamWorker:
 
         if not self._logged_shape:
             try:
-                logger.info(
+                logger.debug(
                     "[ASR][SHAPE] session=%s user=%s pcm_shape=%s expected_ch=%s dtype=%s sr_in=%s layout=%s",
                     self.session_id,
                     self.user_id,
@@ -485,7 +485,7 @@ class ASRStreamWorker:
                 m_max = float(np.max(mono)) if mono.size else 0.0
                 m_min = float(np.min(mono)) if mono.size else 0.0
                 m_abs = float(np.max(np.abs(mono))) if mono.size else 0.0
-                logger.info(
+                logger.debug(
                     "[ASR][DIAG] mono dtype=%s kind=%s min=%.6f max=%.6f max_abs=%.6f sr_in=%s ch=%s expected_ch=%s",
                     m_dtype, m_kind, m_min, m_max, m_abs, src_sr, ch, expected_ch
                 )
@@ -536,7 +536,7 @@ class ASRStreamWorker:
         if now >= self._diag_next and self._rms_n > 0:
             rms_1s = (self._rms_acc / self._rms_n) ** 0.5
             zero_pct = (self._zero_n / max(self._tot_n, 1)) * 100.0
-            logger.info(
+            logger.debug(
                 "[ASR][1s] session=%s user=%s rms_1s=%.1f zero_pct=%.1f%% sr_in=%s sr_out=%s ch=%s",
                 self.session_id, self.user_id, rms_1s, zero_pct, src_sr, out_sr, self.channels
             )
@@ -565,7 +565,7 @@ class ASRStreamWorker:
                 logger.exception("[ASR] Errore invio buffer al client session=%s user=%s", self.session_id, self.user_id)
                 self._push_buf.clear()
 
-            logger.info(
+            logger.debug(
                 "[ASR] PUSH session=%s user=%s sr_in=%s sr_out=%s peak=%d rms=%.1f sent_bytes=%d buf_rem=%d total_bytes=%d",
                 self.session_id, self.user_id, src_sr, out_sr, peak, rms, self._sent_bytes, len(self._push_buf), self.total_bytes
             )

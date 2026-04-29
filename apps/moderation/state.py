@@ -87,7 +87,13 @@ def _fetch_session_meta(
             getattr(p.user, "display_name", None) or p.user.get_username()
             for p in participants
         ]
-        return names, session.started_at
+        # Django ORM ritorna datetime tz-aware (USE_TZ=True). Tutti gli
+        # altri timestamp moderation sono naive (datetime.utcnow). Strippa
+        # la tz per coerenza ed evitare TypeError in sottrazioni.
+        started_at = session.started_at
+        if started_at is not None and started_at.tzinfo is not None:
+            started_at = started_at.replace(tzinfo=None)
+        return names, started_at
     except Exception:
         return [], None
 

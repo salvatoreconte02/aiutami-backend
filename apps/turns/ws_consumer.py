@@ -1121,10 +1121,21 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     logger.error("[TRIGGER_LOOP][EVAL_ERROR] session=%s error=%s", session_id, e, exc_info=True)
                     continue
 
-                logger.info(
-                    "[TRIGGER_LOOP][RESULT] session=%s messages=%d transition=%s",
-                    session_id, len(trig_result.static_messages_to_speak), trig_result.should_transition_to_conclusion
-                )
+                # Log INFO solo se il tick ha prodotto qualcosa (messaggi
+                # accodati o transizione). Tick "vuoti" (default ogni 5s)
+                # vanno a DEBUG per non sporcare i log di evaluation.
+                _msg_count = len(trig_result.static_messages_to_speak)
+                _transition = trig_result.should_transition_to_conclusion
+                if _msg_count > 0 or _transition:
+                    logger.info(
+                        "[TRIGGER_LOOP][RESULT] session=%s messages=%d transition=%s",
+                        session_id, _msg_count, _transition
+                    )
+                else:
+                    logger.debug(
+                        "[TRIGGER_LOOP][RESULT] session=%s messages=0 transition=False",
+                        session_id
+                    )
 
                 # Esegui/accoda i messaggi
                 # Se should_transition_to_conclusion, passa il flag ai messaggi accodati

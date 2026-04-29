@@ -150,5 +150,11 @@ LOGGING = {
             "handlers": [],
             "propagate": False,
         },
+        # aioice (libreria ICE usata da aiortc) logga ogni candidate
+        # check di WebRTC a INFO. Decine di righe per ogni connessione.
+        # Lo alziamo a WARNING: solo errori e warnings restano visibili.
+        "aioice": {
+            "level": "WARNING",
+        },
     },
 }
