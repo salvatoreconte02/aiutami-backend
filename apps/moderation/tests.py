@@ -1368,6 +1368,8 @@ class AIInterventionCountModeTests(TestCase):
 
         state = ModerationState.initial()
         state.ai_interventions_count = 0
+        # min_time_reached richiesto per reason=monopolization (safety net)
+        state.session_started_at = datetime.utcnow() - timedelta(seconds=600)
         save_moderation_state(session_id, state)
 
         ModerationService.handle_human_turn_ended(
@@ -1900,6 +1902,8 @@ class LLMNormalModeIntegrationTests(TestCase):
         state = ModerationState.initial()
         state.speaking_time_per_participant = {"Mario": 200.0, "Lucia": 0.0}
         state.current_turn_started_at = datetime.utcnow() - timedelta(seconds=10)
+        # min_time_reached richiesto per reason=exclusion (safety net)
+        state.session_started_at = datetime.utcnow() - timedelta(seconds=600)
         save_moderation_state(session_id, state)
 
         # Mario speaks again
@@ -2013,6 +2017,216 @@ class CooldownBypassTests(TestCase):
 
         self.assertTrue(result.ai_should_speak)
         self.assertIn("richiesta", result.ai_message)
+
+
+class MinTimeReachedSafetyNetTests(TestCase):
+    """
+    Safety net backend: monopolization/exclusion devono essere bloccati
+    finche' min_time_reached non e' True, anche se il modello li propone.
+    Il prompt dice gia' di ignorarli, ma gpt-4o-mini talvolta disobbedisce
+    quando vede nomi nelle liste over/under_participators.
+    """
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_exclusion_blocked_when_min_time_not_reached(self, mock_llm):
+        """exclusion proposto a inizio sessione (elapsed < 480s) deve essere bloccato."""
+        session_id = "test-mintime-1"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Anna, tu cosa ne pensi?",
+            "reason": "exclusion",
+            "intervention_score": 0.6,
+        }
+
+        # session_started_at recente: elapsed ~30s, ben sotto 480s
+        state = ModerationState.initial()
+        state.session_started_at = datetime.utcnow() - timedelta(seconds=30)
+        save_moderation_state(session_id, state)
+
+        result = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        self.assertFalse(result.ai_should_speak)
+        self.assertIsNone(result.ai_message)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_monopolization_blocked_when_min_time_not_reached(self, mock_llm):
+        """monopolization proposto a inizio sessione deve essere bloccato."""
+        session_id = "test-mintime-2"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Mario, sentiamo anche gli altri.",
+            "reason": "monopolization",
+            "intervention_score": 0.7,
+        }
+
+        state = ModerationState.initial()
+        state.session_started_at = datetime.utcnow() - timedelta(seconds=60)
+        save_moderation_state(session_id, state)
+
+        result = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        self.assertFalse(result.ai_should_speak)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_exclusion_passes_when_min_time_reached(self, mock_llm):
+        """exclusion proposto dopo 480s deve passare il safety net."""
+        session_id = "test-mintime-3"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Anna, tu cosa ne pensi?",
+            "reason": "exclusion",
+            "intervention_score": 0.7,
+        }
+
+        state = ModerationState.initial()
+        state.session_started_at = datetime.utcnow() - timedelta(seconds=600)
+        save_moderation_state(session_id, state)
+
+        result = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        self.assertTrue(result.ai_should_speak)
+        self.assertIn("Anna", result.ai_message)
+
+    @patch.object(ModerationService, '_call_llm')
+    def test_off_topic_not_blocked_by_min_time(self, mock_llm):
+        """off_topic non e' cumulativo, non deve essere bloccato dal safety net."""
+        session_id = "test-mintime-4"
+
+        mock_llm.return_value = {
+            "updated_summary": "Test summary",
+            "should_ai_speak": True,
+            "message_to_say": "Tornate al tema",
+            "reason": "off_topic",
+            "intervention_score": 0.7,
+        }
+
+        state = ModerationState.initial()
+        state.session_started_at = datetime.utcnow() - timedelta(seconds=30)
+        save_moderation_state(session_id, state)
+
+        result = ModerationService.handle_human_turn_ended(
+            session_id=session_id,
+            user_id=1,
+            last_turn_text="Test turn",
+            session_phase="ACTIVE",
+            hard_action=HardModerationAction.NONE,
+            speaker_name="Mario",
+        )
+
+        self.assertTrue(result.ai_should_speak)
+
+
+class CallLlmPayloadFilteringTests(TestCase):
+    """
+    Verifica che _call_llm filtri over/under_participators dal payload
+    inviato al modello quando min_time_reached=False.
+    """
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch.object(ModerationService, '_build_openai_client')
+    def test_over_under_hidden_when_min_time_not_reached(self, mock_client):
+        """Quando elapsed < 480s, le liste over/under nel payload devono essere vuote."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "updated_summary": "x",
+            "reason": "all_ok",
+            "intervention_score": 0.0,
+            "message_to_say": None,
+        })
+        mock_client.return_value.chat.completions.create.return_value = mock_response
+
+        # Mario ha parlato 30s, Lucia 0s, Anna 0s; elapsed=120s (sotto 480)
+        ModerationService._call_llm(
+            summary_in="",
+            last_turn="test",
+            mode="normal",
+            session_phase="ACTIVE",
+            speaker_name="Mario",
+            speaking_time_per_participant={"Mario": 30.0, "Lucia": 0.0, "Anna": 0.0},
+            elapsed_seconds=120.0,
+            interventions_log=[],
+            task_key="nasa_moon_survival",
+        )
+
+        call_args = mock_client.return_value.chat.completions.create.call_args
+        user_message = json.loads(call_args[1]['messages'][1]['content'])
+        metrics = user_message["participation_metrics"]
+
+        self.assertFalse(metrics["min_time_reached"])
+        self.assertEqual(metrics["over_participators"], [])
+        self.assertEqual(metrics["under_participators"], [])
+
+    @patch.object(ModerationService, '_build_openai_client')
+    def test_over_under_exposed_when_min_time_reached(self, mock_client):
+        """Quando elapsed >= 480s, le liste over/under sono esposte normalmente."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps({
+            "updated_summary": "x",
+            "reason": "all_ok",
+            "intervention_score": 0.0,
+            "message_to_say": None,
+        })
+        mock_client.return_value.chat.completions.create.return_value = mock_response
+
+        # Stessa distribuzione di tempi, ma elapsed=600s (sopra soglia)
+        ModerationService._call_llm(
+            summary_in="",
+            last_turn="test",
+            mode="normal",
+            session_phase="ACTIVE",
+            speaker_name="Mario",
+            speaking_time_per_participant={"Mario": 600.0, "Lucia": 100.0, "Anna": 100.0, "Bea": 100.0},
+            elapsed_seconds=600.0,
+            interventions_log=[],
+            task_key="nasa_moon_survival",
+        )
+
+        call_args = mock_client.return_value.chat.completions.create.call_args
+        user_message = json.loads(call_args[1]['messages'][1]['content'])
+        metrics = user_message["participation_metrics"]
+
+        self.assertTrue(metrics["min_time_reached"])
+        self.assertIn("Mario", metrics["over_participators"])
 
 
 class ScoreBypassTests(TestCase):
@@ -2175,6 +2389,9 @@ class PerReasonCooldownTests(TestCase):
 
     def _setup_state(self, session_id, log_entries):
         state = ModerationState.initial()
+        # Sessione abbastanza vecchia da soddisfare min_time_reached (>=480s)
+        # per i test su mono/excl. Singoli test possono override.
+        state.session_started_at = datetime.utcnow() - timedelta(seconds=600)
         state.interventions_log = log_entries
         save_moderation_state(session_id, state)
 
@@ -2280,6 +2497,8 @@ class InterventionsLogTests(TestCase):
             "intervention_score": 0.8,
         }
         state = ModerationState.initial()
+        # min_time_reached richiesto per reason=exclusion (safety net)
+        state.session_started_at = datetime.utcnow() - timedelta(seconds=600)
         save_moderation_state(session_id, state)
 
         ModerationService.handle_human_turn_ended(

@@ -16,7 +16,7 @@ from .state import (
     save_moderation_state,
     last_intervention_for_reason,
 )
-from .metrics import compute_participation_metrics
+from .metrics import compute_participation_metrics, DEFAULT_MIN_ELAPSED_SECONDS
 
 from apps.tasks.base import TaskDefinition
 from apps.tasks.registry import get_task
@@ -164,6 +164,7 @@ class ModerationService:
         state.summary = llm_output["updated_summary"]
 
         # 4) Decidere se l'AI deve parlare davvero (regole backend + hard/soft)
+        min_time_reached = elapsed_seconds >= DEFAULT_MIN_ELAPSED_SECONDS
         ai_should_speak, ai_message = cls._decide_ai_intervention(
             state=state,
             llm_should_speak=llm_output.get("should_ai_speak", False),
@@ -172,6 +173,7 @@ class ModerationService:
             llm_score=llm_output.get("intervention_score"),  # opzionale
             session_phase=session_phase,
             mode=mode,
+            min_time_reached=min_time_reached,
         )
 
         # 5) Se l'AI parlerà in normal mode, aggiornare contatori e log
@@ -310,6 +312,19 @@ class ModerationService:
         )
         last_by_reason = cls._extract_last_interventions_by_reason(interventions_log)
 
+        # Quando min_time_reached=False, il prompt dice di ignorare
+        # monopolization/exclusion. gpt-4o-mini pero' tende a rispettare i
+        # nomi nelle liste over/under_participators come segnale strutturato
+        # forte, anche quando la regola condizionale lo proibisce. Quindi
+        # nel payload inviato al modello azzeriamo le due liste finche' il
+        # min_time non e' raggiunto: il modello vede liste vuote e applica
+        # naturalmente la sua altra regola ("se entrambe vuote, ignora").
+        # La metrica originale resta invariata per logging/uso interno.
+        payload_metrics = dict(participation_metrics)
+        if not payload_metrics.get("min_time_reached"):
+            payload_metrics["over_participators"] = []
+            payload_metrics["under_participators"] = []
+
         llm_input = {
             "mode": mode,
             "scenario": task.llm_scenario_payload(mode),
@@ -326,7 +341,7 @@ class ModerationService:
                 ),
                 "names": list(speaking_time_per_participant.keys()),
             },
-            "participation_metrics": participation_metrics,
+            "participation_metrics": payload_metrics,
             "last_interventions_by_reason": last_by_reason,
             "session": {
                 "phase": session_phase,
@@ -467,6 +482,7 @@ class ModerationService:
         llm_score: Optional[float],
         session_phase: str,
         mode: str,
+        min_time_reached: bool = False,
     ) -> tuple[bool, Optional[str]]:
         """
         Applica le regole di backend sopra la proposta dell'LLM.
@@ -478,6 +494,10 @@ class ModerationService:
 
         - mode == "normal":
           si usano cooldown, max interventi, eventuale soglia su llm_score.
+          Inoltre: i reason cumulativi (monopolization/exclusion) sono
+          bloccati finche' min_time_reached non e' True (safety net per
+          il caso in cui il modello li classifichi a inizio sessione
+          ignorando la regola del prompt).
         """
 
         if mode == "forced_conclusion":
@@ -496,7 +516,19 @@ class ModerationService:
         if not llm_should_speak or not llm_message:
             return False, None
 
-        # 2) Soglia minima di gravita su intervention_score per i reason
+        # 2) Safety net: i reason cumulativi richiedono min_time_reached.
+        # Anche se il prompt dice di ignorarli quando False, il modello
+        # talvolta li propone basandosi sui nomi visti in over/under
+        # (gpt-4o-mini disobbedisce alle regole condizionali). Blocchiamo
+        # qui per coerenza con la policy del prompt.
+        if llm_reason in {"monopolization", "exclusion"} and not min_time_reached:
+            logger.info(
+                "[MODERATION][BLOCK] reason=%s but min_time_reached=False",
+                llm_reason,
+            )
+            return False, None
+
+        # 3) Soglia minima di gravita su intervention_score per i reason
         # discrezionali (Feature 2.6). I reason responsivi (conflict,
         # user_request) bypassano: l'intervento e' dovuto a prescindere.
         if llm_reason not in SCORE_BYPASS_REASONS:

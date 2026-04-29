@@ -196,6 +196,22 @@ CASES: list[dict] = [
         "elapsed": LATE_ELAPSED,
     },
 
+    # ---- caso reale dai log (29 apr 17:08): primo turno solo, elapsed
+    # ~144s (sotto 480), il modello classifico exclusion 0.60 nonostante
+    # il prompt dicesse di ignorarla. Atteso ora: backend la blocca.
+    {
+        "id": "early_exclusion_attempt",
+        "expected_reason": "all_ok",  # backend blocca anche se LLM dice excl
+        "expected_speak": False,
+        "transcript": (
+            "Ciao, io sono Salvatore e credo che la scatola di fiammiferi "
+            "debba stare al primo posto perche potrebbe essere utile per "
+            "accendere il fuoco."
+        ),
+        "speakers": {"salvcon": 15.0, "simocos": 0.0, "simona": 0.0},
+        "elapsed": 144.0,  # 2:24 min, ben sotto 480s
+    },
+
     # ---- exclusion (richiede min_time_reached) ----
     {
         "id": "exclusion_late",
