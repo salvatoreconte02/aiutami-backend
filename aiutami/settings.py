@@ -136,3 +136,19 @@ OPENAI_STT_MODEL = os.getenv("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe")
 OPENAI_STT_LANGUAGE = os.getenv("OPENAI_STT_LANGUAGE", "it")
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "onyx")
+
+# Logging: silenzia il rumore degli scanner internet che bussano con
+# hostname non in ALLOWED_HOSTS. Django emette un traceback completo per
+# ogni DisallowedHost: su VPS pubblico sono decine al minuto e nascondono
+# i log utili. Le richieste vengono comunque rifiutate con 400 (Django
+# fa il suo lavoro), silenziamo solo l'output a log.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "loggers": {
+        "django.security.DisallowedHost": {
+            "handlers": [],
+            "propagate": False,
+        },
+    },
+}
