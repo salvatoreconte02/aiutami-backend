@@ -121,7 +121,7 @@ class OpenAIRealtimeTranscriptionClient:
             self._connected_event.clear()
             self._stopped_event.clear()
 
-        logger.info(
+        logger.debug(
             "[OPENAI-ASR] Avvio client streaming (model=%s language=%s sr=%s)",
             self.model,
             self.language,
@@ -172,7 +172,7 @@ class OpenAIRealtimeTranscriptionClient:
         if self._loop_thread is not None:
             self._loop_thread.join(timeout=self.STOP_FINAL_GRACE_S + 3.0)
 
-        logger.info(
+        logger.debug(
             "[OPENAI-ASR] Stop client streaming (pushed_bytes_total=%d write_failures=%d queue_size=%d)",
             self._stats.pushed_bytes_total,
             self._stats.write_failures,
@@ -245,7 +245,7 @@ class OpenAIRealtimeTranscriptionClient:
                 # Committa l'audio residuo e attende eventi finali
                 try:
                     await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
-                    logger.info("[OPENAI-ASR] input_audio_buffer.commit inviato")
+                    logger.debug("[OPENAI-ASR] input_audio_buffer.commit inviato")
                 except Exception:
                     logger.exception("[OPENAI-ASR] Errore invio commit")
 
@@ -297,7 +297,7 @@ class OpenAIRealtimeTranscriptionClient:
                     self._stats.write_failures += 1
                     logger.exception("[OPENAI-ASR] Errore invio audio chunk")
         finally:
-            logger.info("[OPENAI-ASR] Writer terminato")
+            logger.debug("[OPENAI-ASR] Writer terminato")
 
     async def _reader_loop(self, ws: ClientConnection) -> None:
         """
@@ -314,7 +314,7 @@ class OpenAIRealtimeTranscriptionClient:
                 self._handle_event(event)
         except Exception:
             # Chiusura WS o errore di rete: semplicemente usciamo
-            logger.info("[OPENAI-ASR] Reader terminato (connessione chiusa)")
+            logger.debug("[OPENAI-ASR] Reader terminato (connessione chiusa)")
 
     def _handle_event(self, event: dict) -> None:
         et = event.get("type") or ""

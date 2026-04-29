@@ -101,7 +101,7 @@ class ASRStreamWorker:
         try:
             cache.delete(key)
             cache.set(key, [], timeout=self.TRANSCRIPT_TTL_S)
-            logger.info("[ASR][CACHE] reset session=%s user=%s", self.session_id, self.user_id)
+            logger.debug("[ASR][CACHE] reset session=%s user=%s", self.session_id, self.user_id)
         except Exception:
             logger.exception("[ASR][CACHE] failed reset session=%s user=%s", self.session_id, self.user_id)
 
@@ -150,7 +150,7 @@ class ASRStreamWorker:
 
                 cache.set(key, segments, timeout=self.TRANSCRIPT_TTL_S)
 
-            logger.info(
+            logger.debug(
                 "[ASR][CACHE] appended_final session=%s user=%s segments=%d last=%r",
                 self.session_id,
                 self.user_id,
@@ -178,7 +178,9 @@ class ASRStreamWorker:
         def _on_final(text: str) -> None:
             # Log + persistenza in cache per consumo da TurnsConsumer (fine turno)
             if text:
-                logger.info("[ASR][OPENAI][final] session=%s user=%s text=%r", self.session_id, self.user_id, text)
+                # Duplicato di [OPENAI-ASR][final] in openai_realtime_client.py:339,
+                # che resta a INFO. Qui DEBUG per evitare doppio log dello stesso evento.
+                logger.debug("[ASR][OPENAI][final] session=%s user=%s text=%r", self.session_id, self.user_id, text)
                 self._append_final_segment_to_cache(text)
 
         self._asr_client = ASRStreamingClient(
@@ -230,12 +232,12 @@ class ASRStreamWorker:
             self._debug_wav_raw_path = None
             self._debug_wav_target_path = None
 
-        logger.info("[ASR] Worker avviato session=%s user=%s", self.session_id, self.user_id)
+        logger.debug("[ASR] Worker avviato session=%s user=%s", self.session_id, self.user_id)
 
         self._init_asr_client()
         if self._asr_client:
             self._asr_client.start()
-            logger.info("[ASR] client streaming avviato session=%s user=%s", self.session_id, self.user_id)
+            logger.debug("[ASR] client streaming avviato session=%s user=%s", self.session_id, self.user_id)
 
     def _try_signal_end_of_stream(self) -> None:
         c = self._asr_client
@@ -246,7 +248,7 @@ class ASRStreamWorker:
             if callable(fn):
                 try:
                     fn()
-                    logger.info("[ASR] Segnalato end-of-stream al client via %s()", name)
+                    logger.debug("[ASR] Segnalato end-of-stream al client via %s()", name)
                 except Exception:
                     logger.exception("[ASR] Errore durante end-of-stream via %s()", name)
                 return
@@ -318,7 +320,7 @@ class ASRStreamWorker:
 
         self._write_debug_wavs()
 
-        logger.info(
+        logger.debug(
             "[ASR] Worker terminato session=%s user=%s total_samples=%d total_bytes=%d sent_bytes=%d debug_wav=%s",
             self.session_id,
             self.user_id,

@@ -247,7 +247,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
         async def on_ice_gathering_state_change():
             try:
                 st = self.pc.iceGatheringState if self.pc else None
-                logger.info("[WebRTC] iceGatheringState=%s user=%s session=%s", st, self.user.id, self.session_id)
+                logger.debug("[WebRTC] iceGatheringState=%s user=%s session=%s", st, self.user.id, self.session_id)
             except Exception:
                 logger.exception("[WebRTC] icegatheringstatechange error user=%s session=%s", self.user.id, self.session_id)
 
@@ -255,7 +255,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
         async def on_ice_state_change():
             try:
                 st = self.pc.iceConnectionState if self.pc else None
-                logger.info("[WebRTC] iceConnectionState=%s user=%s session=%s", st, self.user.id, self.session_id)
+                logger.debug("[WebRTC] iceConnectionState=%s user=%s session=%s", st, self.user.id, self.session_id)
             except Exception:
                 logger.exception("[WebRTC] iceconnectionstatechange error user=%s session=%s", self.user.id, self.session_id)
 
@@ -263,7 +263,12 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
         async def on_connection_state_change():
             try:
                 st = self.pc.connectionState if self.pc else None
-                logger.info("[WebRTC] connectionState=%s user=%s session=%s", st, self.user.id, self.session_id)
+                # connected/failed/closed/disconnected restano INFO (eventi finali utili in prod);
+                # gli stati intermedi (connecting, new) vanno a DEBUG.
+                if st in ("connected", "failed", "closed", "disconnected"):
+                    logger.info("[WebRTC] connectionState=%s user=%s session=%s", st, self.user.id, self.session_id)
+                else:
+                    logger.debug("[WebRTC] connectionState=%s user=%s session=%s", st, self.user.id, self.session_id)
                 if st in ("failed", "closed", "disconnected"):
                     await self._cleanup(reason=f"connectionState={st}")
             except Exception:
@@ -293,7 +298,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
         # Ricezione track (browser -> server)
         @self.pc.on("track")
         async def on_track(track):
-            logger.info("[WebRTC] Track received kind=%s user=%s session=%s", track.kind, self.user.id, self.session_id)
+            logger.debug("[WebRTC] Track received kind=%s user=%s session=%s", track.kind, self.user.id, self.session_id)
             if track.kind != "audio":
                 return
 
@@ -334,7 +339,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
                             logger.exception("[WebRTC] forwarding error user=%s session=%s", self.user.id, self.session_id)
 
                 except asyncio.CancelledError:
-                    logger.info("[WebRTC] Reader cancelled user=%s session=%s", self.user.id, self.session_id)
+                    logger.debug("[WebRTC] Reader cancelled user=%s session=%s", self.user.id, self.session_id)
                 except Exception:
                     logger.exception("[WebRTC] Reader error user=%s session=%s", self.user.id, self.session_id)
                 finally:
@@ -360,7 +365,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
                 "type_sdp": self.pc.localDescription.type,
             }
         )
-        logger.info("[WebRTC] Answer sent user=%s session=%s", self.user.id, self.session_id)
+        logger.debug("[WebRTC] Answer sent user=%s session=%s", self.user.id, self.session_id)
 
     # ICE (browser -> server)
 
@@ -373,7 +378,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
         if cand is None:
             try:
                 await self.pc.addIceCandidate(None)
-                logger.info("[WebRTC] addIceCandidate(None) end user=%s session=%s", self.user.id, self.session_id)
+                logger.debug("[WebRTC] addIceCandidate(None) end user=%s session=%s", self.user.id, self.session_id)
             except Exception:
                 logger.exception("[WebRTC] addIceCandidate(None) failed user=%s session=%s", self.user.id, self.session_id)
             return
@@ -399,7 +404,7 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
             ice.sdpMLineIndex = int(sdp_mline) if sdp_mline is not None else None
             await self.pc.addIceCandidate(ice)
 
-            logger.info(
+            logger.debug(
                 "[WebRTC] ICE added user=%s session=%s mid=%s mline=%s",
                 self.user.id,
                 self.session_id,

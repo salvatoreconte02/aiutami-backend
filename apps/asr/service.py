@@ -36,7 +36,7 @@ class ASRStreamManager:
         key = self._key(session_id, user_id)
 
         if key in self._streams:
-            logger.info(
+            logger.debug(
                 "[ASR] start_stream: worker già esistente session=%s user=%s",
                 session_id,
                 user_id,
@@ -46,16 +46,16 @@ class ASRStreamManager:
         # Reset transcript cache per questo turno (pulizia forte)
         try:
             cache.delete(self._transcript_cache_key(session_id, user_id))
-            logger.info("[ASR][CACHE] cleared session=%s user=%s", session_id, user_id)
+            logger.debug("[ASR][CACHE] cleared session=%s user=%s", session_id, user_id)
         except Exception:
             logger.exception("[ASR][CACHE] failed clear session=%s user=%s", session_id, user_id)
 
         worker = ASRStreamWorker(session_id=session_id, user_id=user_id)
         self._streams[key] = worker
 
-        logger.info("[ASR] START worker session=%s user=%s", session_id, user_id)
+        logger.debug("[ASR] START worker session=%s user=%s", session_id, user_id)
         worker.start()
-        logger.info("[ASR] Stream creato session=%s user=%s", session_id, user_id)
+        logger.debug("[ASR] Stream creato session=%s user=%s", session_id, user_id)
 
     def ingest_frame(self, session_id, user_id, frame) -> None:
         """
@@ -79,7 +79,7 @@ class ASRStreamManager:
         worker = self._streams.pop(key, None)
 
         if not worker:
-            logger.info(
+            logger.debug(
                 "[ASR] stop_stream: nessun worker da chiudere session=%s user=%s",
                 session_id,
                 user_id,
