@@ -196,6 +196,45 @@ CASES: list[dict] = [
         "elapsed": LATE_ELAPSED,
     },
 
+    # ---- GRV phantom: violazione passata nel summary ma last_turn neutro.
+    # Replica del caso reale dai log del 29 apr 18:20-21: dopo che salvatore
+    # e' stato richiamato per "facciamo a voti", il summary contiene la
+    # menzione e il modello sbagliava classificando GRV anche su turni
+    # successivi neutri. Atteso: il modello guarda last_turn, ignora la
+    # traccia nel summary, ritorna all_ok.
+    {
+        "id": "grv_phantom_in_summary",
+        "expected_reason": "all_ok",
+        "expected_speak": False,
+        "transcript": (
+            "Per me il riscaldatore portatile alla fine del ranking, "
+            "almeno questo e' quello che credo."
+        ),
+        "summary_in": (
+            "Salvatore propone l'ossigeno al primo posto. Simona sostiene "
+            "l'acqua come bene primario (3 giorni senza acqua si muore). "
+            "Salvatore ha proposto di mettere a voti per il primo posto."
+        ),
+    },
+
+    # ---- GRV nuova violazione DOPO una recente: il modello deve ancora
+    # classificare correttamente GRV, anche se il summary ha menzioni di
+    # voti passati. Il backend (test unit GroundRuleViolationCooldownTests)
+    # poi blocca per cooldown 60s, ma quello e' separato dalla classification.
+    {
+        "id": "grv_new_violation_after_handled",
+        "expected_reason": "ground_rule_violation",
+        "expected_speak": True,
+        "transcript": (
+            "Ok dai, allora facciamo la media tra le tre proposte e "
+            "andiamo avanti."
+        ),
+        "summary_in": (
+            "Salvatore propone l'ossigeno al primo posto. Simona sostiene "
+            "l'acqua. Marco preferisce il kit medico."
+        ),
+    },
+
     # ---- caso reale dai log (29 apr 17:08): primo turno solo, elapsed
     # ~144s (sotto 480), il modello classifico exclusion 0.60 nonostante
     # il prompt dicesse di ignorarla. Atteso ora: backend la blocca.
@@ -305,23 +344,192 @@ CASES: list[dict] = [
 ]
 
 
+# ============================================================
+# SEQUENZE MULTI-TURNO: verificano che il summary running NON
+# contenga eventi puntuali (off_topic, conflict, GRV, user_request)
+# ma solo posizioni sostantive sul task.
+# ============================================================
+
+SEQUENCES: list[dict] = [
+    {
+        "id": "seq_off_topic_then_substance",
+        "description": (
+            "Turno 1 sostantivo, turno 2 off_topic (calcio), turno 3 sostantivo. "
+            "Il summary finale deve descrivere posizioni su ranking, non l'off_topic."
+        ),
+        "turns": [
+            {"speaker": "salvcon",
+             "transcript": "Io credo che l'ossigeno sia il piu importante, va al primo posto."},
+            {"speaker": "anna",
+             "transcript": "Comunque ieri ho visto la partita pazzesca, l'arbitro doveva dare rigore al 90esimo."},
+            {"speaker": "marco",
+             "transcript": "Per me l'acqua viene prima del kit medico, e' essenziale per la sopravvivenza."},
+        ],
+        # Parole che NON dovrebbero comparire nel summary finale
+        "forbidden_substrings": ["partita", "arbitro", "calcio", "rigore", "off-topic", "off topic", "fuori tema"],
+    },
+    {
+        "id": "seq_conflict_then_substance",
+        "description": (
+            "Turno 1 sostantivo, turno 2 conflict (insulto), turno 3 sostantivo. "
+            "Il summary finale deve descrivere posizioni, non riportare il conflitto."
+        ),
+        "turns": [
+            {"speaker": "salvcon",
+             "transcript": "Per me il riscaldatore portatile va in fondo, non serve di giorno."},
+            {"speaker": "anna",
+             "transcript": "Ma stai zitto Salvatore, sei un idiota, non capisci niente di sopravvivenza."},
+            {"speaker": "marco",
+             "transcript": "Io penso che il kit medico debba stare al secondo posto, ferite anche piccole sono fatali."},
+        ],
+        "forbidden_substrings": [
+            "idiota", "stai zitto", "insulto", "tono aggressivo", "conflitto",
+            "moderatore ha richiamato", "tono inasprito", "richiamare",
+        ],
+    },
+    {
+        "id": "seq_grv_then_substance",
+        "description": (
+            "Turno 1 sostantivo, turno 2 GRV (proposta voto), turno 3 sostantivo. "
+            "Il summary finale deve descrivere posizioni, non la proposta di voto."
+        ),
+        "turns": [
+            {"speaker": "salvcon",
+             "transcript": "Io credo che la bussola sia inutile sulla luna, va in fondo."},
+            {"speaker": "anna",
+             "transcript": "Visto che non concordiamo, mettiamola a voti per il primo posto e chiudiamo."},
+            {"speaker": "marco",
+             "transcript": "Secondo me la corda di nylon e' essenziale per i crepacci, va al terzo posto."},
+        ],
+        "forbidden_substrings": [
+            "voti", "votare", "votazione", "media", "compromesso",
+            "alzata di mano", "moderatore ha contestato", "ground rule",
+            "regola", "violazione",
+        ],
+    },
+]
+
+
 def run_case(case: dict) -> dict:
     speakers = case.get("speakers", DEFAULT_PARTICIPANTS)
     elapsed = case.get("elapsed", DEFAULT_ELAPSED)
     speaker_name = case.get("speaker_name", "salvcon")
+    summary_in = case.get("summary_in", "")
+    interventions_log = case.get("interventions_log", [])
 
     out = ModerationService._call_llm(
-        summary_in="",
+        summary_in=summary_in,
         last_turn=case["transcript"],
         mode="normal",
         session_phase="ACTIVE",
         speaker_name=speaker_name,
         speaking_time_per_participant=speakers,
         elapsed_seconds=elapsed,
-        interventions_log=[],
+        interventions_log=interventions_log,
         task_key=TASK_KEY,
     )
     return out
+
+
+def run_sequence(sequence: dict) -> dict:
+    """
+    Esegue una sequenza multi-turno. Il summary di un turno diventa
+    summary_in del turno successivo. Restituisce il flusso completo +
+    una verifica delle forbidden_substrings sul summary finale.
+    """
+    turns_data = sequence["turns"]
+    speakers_set = sorted({t["speaker"] for t in turns_data})
+    speaking_time = {s: 30.0 for s in speakers_set}
+
+    summary = ""
+    per_turn: list[dict] = []
+    for turn in turns_data:
+        out = ModerationService._call_llm(
+            summary_in=summary,
+            last_turn=turn["transcript"],
+            mode="normal",
+            session_phase="ACTIVE",
+            speaker_name=turn["speaker"],
+            speaking_time_per_participant=speaking_time,
+            elapsed_seconds=120.0,
+            interventions_log=[],
+            task_key=TASK_KEY,
+        )
+        summary = out.get("updated_summary", summary)
+        per_turn.append({
+            "speaker": turn["speaker"],
+            "transcript": turn["transcript"],
+            "reason": out.get("reason"),
+            "score": float(out.get("intervention_score") or 0.0),
+            "message": out.get("message_to_say"),
+            "summary_after": summary,
+        })
+
+    forbidden = sequence.get("forbidden_substrings", [])
+    summary_lower = summary.lower()
+    found = [w for w in forbidden if w.lower() in summary_lower]
+
+    return {
+        "id": sequence["id"],
+        "description": sequence.get("description", ""),
+        "final_summary": summary,
+        "forbidden_found": found,
+        "clean": len(found) == 0,
+        "turns": per_turn,
+    }
+
+
+def render_sequences_markdown(seq_results: list[dict], runs: int) -> str:
+    lines: list[str] = []
+    lines.append("## Sequenze multi-turno (summary running)")
+    lines.append("")
+    lines.append(
+        "Verificano che eventi puntuali (off_topic, conflict, GRV) NON "
+        "contaminino il summary aggiornato. Ogni sequenza e' eseguita "
+        f"{runs} volte; il check e' superato se nessuna parola vietata "
+        "compare nel summary finale di nessuna delle run."
+    )
+    lines.append("")
+    lines.append("| Sequenza | Run pulite | Forbidden trovate (cumulativo) |")
+    lines.append("|---|---|---|")
+    for seq in seq_results:
+        runs_data = seq["runs"]
+        clean_runs = sum(1 for r in runs_data if r["clean"])
+        all_forbidden = sorted({w for r in runs_data for w in r["forbidden_found"]})
+        forbidden_str = ", ".join(f"`{w}`" for w in all_forbidden) if all_forbidden else "—"
+        lines.append(
+            f"| `{seq['id']}` | {clean_runs}/{len(runs_data)} | {forbidden_str} |"
+        )
+    lines.append("")
+
+    for seq in seq_results:
+        lines.append(f"### `{seq['id']}`")
+        lines.append("")
+        lines.append(f"**Descrizione:** {seq.get('description', '')}")
+        lines.append("")
+        for run_idx, run in enumerate(seq["runs"], 1):
+            flag = "✅ pulito" if run["clean"] else "❌ contaminato"
+            lines.append(f"#### Run {run_idx} — {flag}")
+            lines.append("")
+            if run["forbidden_found"]:
+                lines.append(
+                    f"Parole vietate trovate nel summary finale: "
+                    f"{', '.join(f'`{w}`' for w in run['forbidden_found'])}"
+                )
+                lines.append("")
+            lines.append("| Turno | Speaker | Transcript | Reason | Score | Summary dopo turno |")
+            lines.append("|---|---|---|---|---|---|")
+            for ti, t in enumerate(run["turns"], 1):
+                tr = t["transcript"].replace("|", "\\|")
+                summary_short = t["summary_after"].replace("|", "\\|").replace("\n", " ")
+                lines.append(
+                    f"| {ti} | {t['speaker']} | {tr} | `{t['reason']}` | "
+                    f"{t['score']:.2f} | {summary_short} |"
+                )
+            lines.append("")
+            lines.append(f"**Final summary:** {run['final_summary']}")
+            lines.append("")
+    return "\n".join(lines)
 
 
 def evaluate_run(case: dict, out: dict) -> dict:
@@ -498,16 +706,57 @@ def main() -> None:
             f"{s_min:.2f}-{s_max:.2f}"
         )
 
+    # ---- Sequenze multi-turno ----
+    print()
+    print("=== SEQUENZE multi-turno (verifica summary pulito) ===")
+    seq_header = f"{'SEQUENCE':35s} CLEAN_RUNS  FORBIDDEN_FOUND_AGGREGATE"
+    print(seq_header)
+    print("-" * len(seq_header))
+
+    seq_results: list[dict] = []
+    for sequence in SEQUENCES:
+        runs_out: list[dict] = []
+        for _ in range(args.runs):
+            try:
+                runs_out.append(run_sequence(sequence))
+            except Exception as e:
+                runs_out.append({
+                    "error": f"{type(e).__name__}: {e}",
+                    "id": sequence["id"],
+                    "final_summary": "",
+                    "forbidden_found": [],
+                    "clean": False,
+                    "turns": [],
+                })
+        seq_results.append({
+            "id": sequence["id"],
+            "description": sequence.get("description", ""),
+            "runs": runs_out,
+        })
+
+        clean_runs = sum(1 for r in runs_out if r.get("clean"))
+        all_forbidden = sorted({w for r in runs_out for w in r.get("forbidden_found", [])})
+        forbidden_str = ", ".join(all_forbidden) if all_forbidden else "—"
+        print(
+            f"{sequence['id']:35s} {clean_runs}/{len(runs_out)}         {forbidden_str}"
+        )
+
     json_payload = {
         "timestamp": ts,
         "task": TASK_KEY,
         "runs_per_case": args.runs,
         "results": all_results,
+        "sequences": seq_results,
     }
     json_path = out_dir / f"probe_{ts}.json"
     md_path = out_dir / f"probe_{ts}.md"
     json_path.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2))
-    md_path.write_text(render_markdown(all_results, args.runs, ts))
+    md_text = (
+        render_markdown(all_results, args.runs, ts)
+        + "\n\n"
+        + render_sequences_markdown(seq_results, args.runs)
+    )
+    md_path.write_text(md_text)
 
     print()
     print(f"Saved JSON  → {json_path}")

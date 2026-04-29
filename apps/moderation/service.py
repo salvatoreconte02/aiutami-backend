@@ -794,21 +794,30 @@ __GR_VALUTAZIONE_SECTION__
 
 L'`updated_summary` è il riassunto running della discussione, riusato nei turni successivi come `summary` in input. Scrivilo pensando che sarai TU stesso a leggerlo al prossimo turno: deve essere utile per le tue decisioni successive E come base per il report finale della sessione.
 
-**Cosa includere:**
-- Posizioni dei partecipanti su scelte/ranking
-- Argomenti chiave emersi (perché certi oggetti sono prioritari)
+Il summary contiene SOLO la **sostanza della discussione** (posizioni, argomenti, accordi). NON contiene gli **eventi procedurali puntuali** (proposte di voto, conflitti, off-topic, richieste al moderatore): quelli sono incidenti one-shot, una volta accaduti il moderatore puo' averli contestati ma non descrivono la discussione e non vanno mantenuti nel summary. Tenerli dentro fa ripartire interventi duplicati nei turni successivi.
+
+**Cosa includere (sostanza):**
+- Posizioni dei partecipanti su scelte/ranking ("Marco propone l'ossigeno al primo posto")
+- Argomenti chiave: PERCHE' certi oggetti sono prioritari ("perche' senza acqua si muore in 3 giorni")
 - Decisioni o accordi raggiunti dal gruppo
 - Cambi di posizione significativi
-- Stato corrente della discussione
+- Stato corrente del consenso (cosa e' risolto, cosa e' in dibattito)
 
-**Cosa NON includere:**
+**Cosa NON includere (eventi procedurali / incidenti):**
 - Convenevoli, saluti, frasi di transizione
 - Turn-by-turn play-by-play
 - Dettagli che non influenzano il consenso
+- Eventi puntuali: proposte di voto/media/compromesso, ultimatum, conflitti, toni aggressivi, off-topic, richieste dirette al moderatore. Sono incidenti, non sostanza.
+- Riferimenti agli interventi del moderatore stesso ("il moderatore ha richiamato X")
+
+**Esempio concreto:**
+✅ "Salvatore propone l'ossigeno al primo posto, Simona sostiene l'acqua come priorita' (bene primario, 3 giorni)."
+❌ "Salvatore ha proposto di mettere a voti il primo posto." (proposta di voto = evento procedurale, NON va nel summary)
+❌ "Il moderatore ha richiamato Marco per l'ultimatum." (intervento moderatore, NON va nel summary)
 
 **Stile:** terza persona neutrale, factual, no opinioni del moderatore.
 
-**Continuità:** parti sempre dal `summary` precedente e integra i contributi del `last_turn`. Non reinventare da zero. Mantieni informazioni rilevanti dei turni precedenti che non sono state aggiornate.
+**Continuità:** parti sempre dal `summary` precedente e integra i contributi del `last_turn`. Non reinventare da zero. **Quando rielabori il summary, RIMUOVI eventuali eventi procedurali ereditati da turni precedenti** (anche se erano nel summary in input): la regola "no eventi procedurali" si applica ad ogni rigenerazione.
 
 **Densità:** sii il più conciso possibile preservando però tutte le posizioni dei partecipanti e gli argomenti chiave. Se il summary diventa molto lungo (sessione avanzata, molte decisioni accumulate), comprimi i punti più vecchi che sono stati superati o non più rilevanti — ma non tagliare info ancora attiva.
 
