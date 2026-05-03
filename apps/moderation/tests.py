@@ -1423,14 +1423,18 @@ class BuildNormalModePromptTests(TestCase):
         self.assertGreater(len(prompt), 100)
 
     def test_build_normal_mode_prompt_contains_intervention_criteria(self):
-        """Prompt should contain specific intervention criteria."""
+        """Prompt should contain specific intervention criteria.
+
+        Asserzioni su enum values (`monopolization`, `exclusion`, `off_topic`,
+        `conflict`) che sono language-invariant: gli enum non vengono mai
+        tradotti, sono token strutturali del JSON output.
+        """
         prompt = ModerationService._build_normal_mode_prompt()
 
-        # Check for intervention criteria
-        self.assertIn("monopol", prompt.lower())  # monopolization
-        self.assertIn("esclus", prompt.lower())   # exclusion
-        self.assertIn("off-topic", prompt.lower())
-        self.assertIn("conflitt", prompt.lower()) # conflict
+        self.assertIn("monopol", prompt.lower())   # monopolization (enum)
+        self.assertIn("exclusion", prompt.lower()) # exclusion (enum, EN prompt)
+        self.assertIn("off-topic", prompt.lower()) # off-topic (universal)
+        self.assertIn("conflict", prompt.lower())  # conflict (enum)
 
     def test_build_normal_mode_prompt_contains_json_output_spec(self):
         """Prompt should specify JSON output format.
@@ -1463,7 +1467,7 @@ class BuildSystemPromptTests(TestCase):
     def test_build_system_prompt_forced_conclusion_mode(self):
         """_build_system_prompt('forced_conclusion') should return conclusion prompt."""
         prompt = ModerationService._build_system_prompt("forced_conclusion")
-        # Should use existing _build_forced_conclusion_system_prompt
+        # "conclus" matches both Italian "conclusione" and English "conclusion"
         self.assertIn("conclus", prompt.lower())
 
     def test_build_system_prompt_unknown_mode_defaults_to_normal(self):
@@ -2630,39 +2634,41 @@ class GroundRuleViolationPromptTests(TestCase):
     def test_prompt_for_nasa_moon_contains_ground_rule_violation(self):
         prompt = self._prompt_for("nasa_moon_survival")
         self.assertIn("ground_rule_violation", prompt)
-        self.assertIn("Violazione ground rules", prompt)
+        self.assertIn("Ground rules violation", prompt)
 
     def test_prompt_for_lost_at_sea_contains_ground_rule_violation(self):
         prompt = self._prompt_for("lost_at_sea")
         self.assertIn("ground_rule_violation", prompt)
-        self.assertIn("Violazione ground rules", prompt)
+        self.assertIn("Ground rules violation", prompt)
 
     def test_prompt_for_murder_mystery_excludes_ground_rule_violation(self):
         prompt = self._prompt_for("murder_mystery")
         self.assertNotIn("ground_rule_violation", prompt)
-        self.assertNotIn("Violazione ground rules", prompt)
+        self.assertNotIn("Ground rules violation", prompt)
 
     def test_prompt_for_generic_excludes_ground_rule_violation(self):
         prompt = self._prompt_for("generic")
         self.assertNotIn("ground_rule_violation", prompt)
-        self.assertNotIn("Violazione ground rules", prompt)
+        self.assertNotIn("Ground rules violation", prompt)
 
     def test_prompt_lists_only_rules_2_4_5_for_runtime_detection(self):
-        """Le rules enforced sono 2 (impasse), 4 (voto/media), 5 (frustrazione)."""
+        """Le rules enforced sono 2 (impasse), 4 (voto/media), 5 (frustrazione).
+        Marker linguistici sono in inglese (system prompt language); il modello
+        rileva i corrispettivi italiani perche' istruito a leggere l'input
+        utente e mappare il concetto, non solo il marker letterale."""
         prompt = self._prompt_for("nasa_moon_survival")
-        # Marker espliciti delle 3 rules enforced
         self.assertIn("Rule 2", prompt)
         self.assertIn("Rule 4", prompt)
         self.assertIn("Rule 5", prompt)
-        # Cita marker linguistici riconoscibili
         self.assertIn("ultimatum", prompt.lower())
-        self.assertTrue("votiamo" in prompt.lower() or "voto" in prompt.lower())
+        # Marker EN per Rule 4 (vote/average/compromise)
+        self.assertIn("vote", prompt.lower())
 
     def test_prompt_includes_priority_section_for_all_tasks(self):
-        """La sezione 'Priorità tra reason' è sempre presente."""
+        """La sezione 'Priority among reasons' è sempre presente."""
         for task_key in ("nasa_moon_survival", "lost_at_sea", "murder_mystery", "generic"):
             prompt = self._prompt_for(task_key)
-            self.assertIn("Priorità tra reason", prompt, f"Missing in {task_key}")
+            self.assertIn("Priority among reasons", prompt, f"Missing in {task_key}")
 
 
 class GroundRuleViolationCooldownTests(TestCase):

@@ -72,21 +72,27 @@ class TaskDefinition(ABC):
     # inserire nel payload LLM. I default sono pensati per GENERIC: blocco
     # vuoto + payload vuoto. I task concreti (MM, NASA) li sovrascrivono.
 
-    def task_context_block(self, mode: str) -> str:
+    def task_context_block(self, mode: str, language: str = "Italian") -> str:
         """
         Ritorna il blocco di testo task-specifico da iniettare nello scheletro
         del system prompt del moderatore.
 
         `mode` è uno di: "normal", "forced_conclusion".
+        `language` controlla la lingua del blocco ("Italian" | "English" | ...).
+        Default "Italian" per backward-compat. I task concreti che vogliono
+        supportare l'inglese forniscono entrambe le varianti.
         Stringa vuota = task completamente generico (nessuno scenario specifico).
         """
         return ""
 
-    def llm_scenario_payload(self, mode: str = "normal") -> Dict[str, Any]:
+    def llm_scenario_payload(
+        self, mode: str = "normal", language: str = "Italian"
+    ) -> Dict[str, Any]:
         """
         Ritorna il dict da inserire come `scenario` nel payload JSON inviato
         all'LLM. I task concreti mettono qui tipo, obiettivo e info di contesto
-        che l'LLM può consultare. Default vuoto = GENERIC.
+        che l'LLM può consultare. Stringhe localizzate via `language`.
+        Default vuoto = GENERIC.
         """
         return {}
 
@@ -140,14 +146,30 @@ class TaskDefinition(ABC):
         }
 
     def fallback_forced_conclusion_body(
-        self, summary: str, conclusion_reason: str
+        self,
+        summary: str,
+        conclusion_reason: str,
+        language: str = "Italian",
     ) -> str:
         """
         Testo pre-scritto usato se la chiamata LLM per forced_conclusion
-        fallisce. I task concreti possono personalizzarlo con istruzioni
-        specifiche (es. "selezionate il colpevole"). Il default è generico:
-        riepilogo della discussione + ringraziamento.
+        fallisce. Va in TTS ai partecipanti — quindi localizzato.
+        I task concreti possono personalizzarlo con istruzioni specifiche
+        (es. "selezionate il colpevole"). Default generico: riepilogo +
+        ringraziamento.
         """
+        if language == "English":
+            if conclusion_reason == "timer_expired":
+                intro = "Time is up."
+            elif conclusion_reason == "all_participants_ready":
+                intro = "You've decided to conclude the session."
+            else:
+                intro = "In conclusion:"
+            return (
+                f"{intro} "
+                f"Here is a brief recap of your discussion: {summary}. "
+                f"Thank you for using AIutami for your session!"
+            )
         if conclusion_reason == "timer_expired":
             intro = "Il tempo a disposizione è terminato."
         elif conclusion_reason == "all_participants_ready":
@@ -165,25 +187,29 @@ class TaskDefinition(ABC):
     # task-agnostic. I task concreti forniscono prompt LLM, titolo PDF,
     # dati task-specifici e sezioni PDF extra.
 
-    def build_report_llm_prompt(self) -> str:
+    def build_report_llm_prompt(self, language: str = "Italian") -> str:
         """
-        System prompt inviato all'LLM per generare il testo narrativo
-        del report. I task concreti descrivono il proprio scenario e le
-        sezioni desiderate. Default generico.
+        System prompt inviato all'LLM per generare il testo narrativo del
+        report. Il PDF e' user-facing (scaricato dai partecipanti) quindi
+        l'output deve essere nella loro lingua. Le istruzioni al modello
+        sono in inglese per coerenza con il moderator system prompt; la
+        lingua di output e' iniettata via {LANGUAGE} placeholder.
+        I task concreti descrivono il proprio scenario e le sezioni desiderate.
         """
         return (
-            "Sei un analista di sessioni di discussione moderate su AIutami.\n\n"
-            "Genera un report testuale in italiano per una sessione di discussione.\n\n"
-            "Il report deve includere:\n"
-            "- STATISTICHE PARTECIPAZIONE: interventi per partecipante\n"
-            "- INTERVENTI DEL MODERATORE: se presente `interventions_log`, "
-            "includi numero totale di interventi AI, breakdown per reason "
-            "(es: '3 off_topic, 2 monopolization'), e per ogni intervento "
-            "indica timestamp, reason e speaker che aveva parlato\n"
-            "- RIASSUNTO DELLA DISCUSSIONE: basato sul final_summary\n"
-            "- ANALISI FINALE: breve analisi di come è andata\n\n"
-            "Formato: testo semplice, NO markdown, sezioni separate da riga vuota.\n"
-            "Lunghezza: 200-400 parole."
+            "You are an analyst of moderated group discussion sessions on AIutami.\n\n"
+            f"Generate a text report in {language} for a discussion session.\n\n"
+            "The report must include:\n"
+            "- PARTICIPATION STATISTICS: turns per participant\n"
+            "- MODERATOR INTERVENTIONS: if `interventions_log` is present, "
+            "include total number of AI interventions, breakdown by reason "
+            "(e.g. '3 off_topic, 2 monopolization'), and for each intervention "
+            "the timestamp, reason and the speaker who had just spoken\n"
+            "- DISCUSSION SUMMARY: based on final_summary\n"
+            "- FINAL ANALYSIS: brief analysis of how the session went\n\n"
+            "Format: plain text, NO markdown, sections separated by blank lines.\n"
+            "Length: 200-400 words.\n\n"
+            f"IMPORTANT: write the entire report in {language}."
         )
 
     def report_title(self) -> str:

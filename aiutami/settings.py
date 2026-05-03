@@ -137,6 +137,14 @@ OPENAI_STT_LANGUAGE = os.getenv("OPENAI_STT_LANGUAGE", "it")
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "onyx")
 
+# Lingua di output del moderatore AI. Iniettata nel system prompt LLM
+# (modulo apps/moderation/prompts.py) per controllare la lingua di
+# message_to_say e updated_summary, e nel prompt LLM dei report. Stringa
+# in inglese ("Italian", "English", ...) perche' il system prompt e' in
+# inglese e ce la inseriamo testualmente. Default Italian per la raccolta
+# dati italiana; setta English per pilot internazionale.
+MODERATOR_OUTPUT_LANGUAGE = os.getenv("MODERATOR_OUTPUT_LANGUAGE", "Italian")
+
 # Logging: silenzia il rumore degli scanner internet che bussano con
 # hostname non in ALLOWED_HOSTS. Django emette un traceback completo per
 # ogni DisallowedHost: su VPS pubblico sono decine al minuto e nascondono

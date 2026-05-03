@@ -10,45 +10,54 @@ from typing import Any, Dict
 from .config import EXPERT_RANKING, compute_error_score, MAX_ERROR_SCORE
 
 
-REPORT_LLM_PROMPT = """Sei un analista di sessioni di discussione moderate su AIutami.
+def build_lost_at_sea_report_llm_prompt(language: str = "Italian") -> str:
+    """System prompt LLM per il report Lost at Sea, parametrizzato
+    per lingua di output (il PDF e' user-facing)."""
+    return f"""You are an analyst of moderated group discussion sessions on AIutami.
 
-Genera un report testuale completo in italiano per una sessione Lost at Sea Survival Challenge.
+Generate a complete text report in {language} for a Lost at Sea Survival Challenge session.
 
-Il report deve includere queste sezioni (usa esattamente questi titoli):
+The report must include these sections (use exactly these titles, translated into {language}):
 
-RISULTATO RANKING
-- Error score del gruppo (piu basso = migliore, range 0-112)
-- Valutazione qualitativa (eccellente / buono / nella media / scarso)
+RANKING RESULT
+- Group error score (lower = better, range 0-112)
+- Qualitative evaluation (excellent / good / average / poor)
 
-CONFRONTO CON GLI ESPERTI
-- Oggetti posizionati correttamente o quasi
-- Errori piu significativi (oggetti molto distanti dalla posizione esperta)
+COMPARISON WITH EXPERTS
+- Items positioned correctly or nearly so
+- Most significant errors (items very far from the expert position)
 
-STATISTICHE PARTECIPAZIONE
-- Interventi per partecipante con percentuali
-- Interventi del moderatore AI con percentuale
-- Commenta il Gini index della partecipazione (0 = perfetta uguaglianza, 1 = massima disuguaglianza)
+PARTICIPATION STATISTICS
+- Turns per participant with percentages
+- AI moderator interventions with percentage
+- Comment on the Gini index of participation (0 = perfect equality, 1 = max inequality)
 
-INTERVENTI DEL MODERATORE
-Se presente `interventions_log`, includi:
-- Numero totale di interventi AI
-- Breakdown per reason (es: "3 off_topic, 2 monopolization, 1 user_request")
-- Per ogni intervento: timestamp, reason, speaker che aveva parlato
+MODERATOR INTERVENTIONS
+If `interventions_log` is present, include:
+- Total number of AI interventions
+- Breakdown by reason (e.g. "3 off_topic, 2 monopolization, 1 user_request")
+- For each intervention: timestamp, reason, speaker who had spoken
 
-RIASSUNTO DELLA DISCUSSIONE
-- Basato sul final_summary fornito, rielaboralo in modo discorsivo
-- Evidenzia se il gruppo ha seguito le regole procedurali di consenso
+DISCUSSION SUMMARY
+- Based on the provided final_summary, reformulate it in a discursive way
+- Highlight whether the group followed the procedural consensus rules
 
-ANALISI FINALE
-- Un breve paragrafo (3-5 frasi) che analizza come e andata la sessione
-- Commenta la qualita del processo decisionale e la partecipazione
+FINAL ANALYSIS
+- A short paragraph (3-5 sentences) analyzing how the session went
+- Comment on the quality of the decision process and participation
 
-Formato:
-- Usa testo semplice, NO markdown
-- Separa le sezioni con una riga vuota
-- Tono informativo ma accessibile
-- Lunghezza totale: 300-500 parole
+Format:
+- Use plain text, NO markdown
+- Separate sections with a blank line
+- Informative but accessible tone
+- Total length: 300-500 words
+
+IMPORTANT: write the entire report in {language}, including section titles.
 """
+
+
+# Backward-compat alias (default Italian).
+REPORT_LLM_PROMPT = build_lost_at_sea_report_llm_prompt("Italian")
 
 
 def collect_lost_at_sea_report_context(session) -> Dict[str, Any]:

@@ -53,20 +53,40 @@ class MurderMysteryTask(TaskDefinition):
 
     # --- Step 3: prompt building ---
 
-    def task_context_block(self, mode: str) -> str:
-        return {
-            "normal": mm_prompts.SCENARIO_BLOCK_NORMAL,
-            "forced_conclusion": mm_prompts.SCENARIO_BLOCK_FORCED_CONCLUSION,
-        }.get(mode, "")
+    def task_context_block(self, mode: str, language: str = "Italian") -> str:
+        if language == "English":
+            blocks = {
+                "normal": mm_prompts.SCENARIO_BLOCK_NORMAL_EN,
+                "forced_conclusion": mm_prompts.SCENARIO_BLOCK_FORCED_CONCLUSION_EN,
+            }
+        else:
+            blocks = {
+                "normal": mm_prompts.SCENARIO_BLOCK_NORMAL_IT,
+                "forced_conclusion": mm_prompts.SCENARIO_BLOCK_FORCED_CONCLUSION_IT,
+            }
+        return blocks.get(mode, "")
 
-    def llm_scenario_payload(self, mode: str = "normal") -> Dict[str, Any]:
+    def llm_scenario_payload(
+        self, mode: str = "normal", language: str = "Italian"
+    ) -> Dict[str, Any]:
         if mode == "forced_conclusion":
+            if language == "English":
+                return {
+                    "type": "murder_mystery",
+                    "vote_action": "select the murderer",
+                    "vote_outcome": "you'll find out whether you guessed the murderer correctly",
+                }
             return {
                 "type": "murder_mystery",
                 "vote_action": "selezionare il colpevole",
                 "vote_outcome": "scoprirete se avete indovinato l'assassino",
             }
         # normal
+        if language == "English":
+            return {
+                "type": "murder_mystery",
+                "objective": "Discuss the clues and figure out who the murderer is",
+            }
         return {
             "type": "murder_mystery",
             "objective": "Discutere gli indizi e scoprire chi è l'assassino",
@@ -98,8 +118,8 @@ class MurderMysteryTask(TaskDefinition):
 
     # --- Step 5: report ---
 
-    def build_report_llm_prompt(self) -> str:
-        return mm_report.REPORT_LLM_PROMPT
+    def build_report_llm_prompt(self, language: str = "Italian") -> str:
+        return mm_report.build_mm_report_llm_prompt(language)
 
     def report_title(self) -> str:
         return "REPORT SESSIONE MURDER MYSTERY"
@@ -147,10 +167,27 @@ class MurderMysteryTask(TaskDefinition):
         }
 
     def fallback_forced_conclusion_body(
-        self, summary: str, conclusion_reason: str
+        self,
+        summary: str,
+        conclusion_reason: str,
+        language: str = "Italian",
     ) -> str:
         # Preserva il testo esatto del fallback MM pre-refactor
         # (apps/moderation/service.py:_fallback_forced_conclusion)
+        if language == "English":
+            if conclusion_reason == "timer_expired":
+                intro = "Time is up."
+            elif conclusion_reason == "all_participants_ready":
+                intro = "You've decided to move on to the vote."
+            else:
+                intro = "In conclusion:"
+            return (
+                f"{intro} "
+                f"Here is a brief recap of your discussion: {summary}. "
+                f"It's now time to select who you think is the murderer. "
+                f"Once everyone has voted, you'll find out if you guessed correctly. "
+                f"Thank you for using AIutami for your session!"
+            )
         if conclusion_reason == "timer_expired":
             intro = "Il tempo a disposizione è terminato."
         elif conclusion_reason == "all_participants_ready":

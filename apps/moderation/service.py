@@ -17,9 +17,15 @@ from .state import (
     last_intervention_for_reason,
 )
 from .metrics import compute_participation_metrics, DEFAULT_MIN_ELAPSED_SECONDS
+from . import prompts as moderation_prompts
 
 from apps.tasks.base import TaskDefinition
 from apps.tasks.registry import get_task
+
+
+def _output_language() -> str:
+    """Lingua di output del moderatore, da env. Default Italian."""
+    return getattr(settings, "MODERATOR_OUTPUT_LANGUAGE", "Italian")
 
 
 def _resolve_task(task_key: Optional[str], session_id: Optional[str | int] = None) -> TaskDefinition:
@@ -325,9 +331,11 @@ class ModerationService:
             payload_metrics["over_participators"] = []
             payload_metrics["under_participators"] = []
 
+        language = _output_language()
+
         llm_input = {
             "mode": mode,
-            "scenario": task.llm_scenario_payload(mode),
+            "scenario": task.llm_scenario_payload(mode, language=language),
             "discussion": {
                 "summary": summary_in,
                 "last_turn": last_turn,
@@ -348,7 +356,7 @@ class ModerationService:
                 "elapsed_seconds": round(elapsed_seconds, 1),
                 "total_speaking_time_s": round(total_speaking_time_s, 1),
             },
-            "language": "it",
+            "language": language,
         }
 
         logger.info(
@@ -443,20 +451,20 @@ class ModerationService:
         task: Optional[TaskDefinition] = None,
     ) -> dict:
         """
-        Comportamento di riserva se la chiamata ad Azure fallisce
-        o l'output non è parsabile. Mantiene la stessa semantica
-        che aveva lo stub originale.
+        Comportamento di riserva se la chiamata LLM fallisce o l'output
+        non e' parsabile. Localizzato via settings.MODERATOR_OUTPUT_LANGUAGE.
         """
         logger.warning("[MODERATION][LLM][FALLBACK] mode=%s (using local fallback)", mode)
 
         if mode == "forced_conclusion":
             if task is None:
                 task = _resolve_task(None)
+            language = _output_language()
             return {
                 "updated_summary": base_updated_summary,
                 "should_ai_speak": True,
                 "message_to_say": task.fallback_forced_conclusion_body(
-                    base_updated_summary, ""
+                    base_updated_summary, "", language=language
                 ),
                 "reason": "conclusion_fallback",
                 "intervention_score": 1.0,
@@ -504,7 +512,12 @@ class ModerationService:
             # Se il modello non ha fornito un messaggio esplicito,
             # si usa come fallback il riassunto attuale dello stato.
             if not llm_message:
-                llm_message = state.summary.strip() or "Ricapitolando la discussione finora."
+                if state.summary.strip():
+                    llm_message = state.summary.strip()
+                elif _output_language() == "English":
+                    llm_message = "Summing up the discussion so far."
+                else:
+                    llm_message = "Ricapitolando la discussione finora."
 
             return True, llm_message
 
@@ -592,13 +605,16 @@ class ModerationService:
 
             system_prompt = cls._build_forced_conclusion_system_prompt(task=task)
 
+            language = _output_language()
             llm_input = {
                 "mode": "forced_conclusion",
                 "summary_in": summary_in,
                 "conclusion_reason": conclusion_reason,
                 "session_duration_minutes": session_duration_minutes,
-                "scenario": task.llm_scenario_payload("forced_conclusion"),
-                "language": "it",
+                "scenario": task.llm_scenario_payload(
+                    "forced_conclusion", language=language
+                ),
+                "language": language,
             }
 
             response = client.chat.completions.create(
@@ -643,51 +659,15 @@ class ModerationService:
     def _build_forced_conclusion_system_prompt(
         cls, task: Optional[TaskDefinition] = None
     ) -> str:
-        """Prompt di sistema per FORCED_CONCLUSION.
+        """Thin dispatcher → apps.moderation.prompts.build_forced_conclusion_prompt.
 
-        Scheletro task-agnostic + blocco di scenario iniettato dal task.
+        Lingua di output letta da settings.MODERATOR_OUTPUT_LANGUAGE.
         """
         if task is None:
             task = _resolve_task(None)
-        scenario_block = task.task_context_block("forced_conclusion")
-
-        template = """Sei il moderatore AI di AIutami, una piattaforma per discussioni di gruppo moderate.
-
-__SCENARIO_BLOCK__
-
-La sessione sta per concludersi e devi generare il messaggio finale di chiusura.
-
-## Il tuo compito
-
-Genera un messaggio che:
-1. **Riassuma la discussione** - Parti dal summary fornito e adattalo per un contesto di chiusura. Evidenzia i punti chiave emersi, le posizioni principali, eventuali accordi o disaccordi.
-
-2. **Dia istruzioni per l'azione finale** - Se lo scenario prevede un'azione finale (es. un voto, una scelta, una submission) spiega chiaramente cosa devono fare i partecipanti e cosa succederà dopo. Se lo scenario non prevede nessuna azione finale, salta questo punto.
-
-3. **Ringrazi i partecipanti** - Concludi con un ringraziamento generale per aver usato AIutami per la moderazione.
-
-## Tono e stile
-
-- **Caldo e coinvolgente**: non freddo o robotico
-- **Valorizza la partecipazione**: fai sentire che la discussione è stata significativa
-- **Lunghezza**: 100-150 parole (circa 30-60 secondi di parlato)
-
-## Adatta il tono al motivo della conclusione
-
-- Se `conclusion_reason == "timer_expired"`: il tempo è terminato, usa un tono che riconosca il lavoro svolto nonostante il limite di tempo
-- Se `conclusion_reason == "all_participants_ready"`: i partecipanti hanno scelto di concludere, valorizza la loro decisione
-
-## Output
-
-Rispondi SOLO con un JSON valido:
-
-{
-    "updated_summary": "Il riassunto finale della discussione",
-    "message_to_say": "Il messaggio completo da pronunciare"
-}
-
-IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ringraziamento) in un unico messaggio fluido e ben collegato."""
-        return template.replace("__SCENARIO_BLOCK__", scenario_block)
+        return moderation_prompts.build_forced_conclusion_prompt(
+            task, language=_output_language()
+        )
 
     @classmethod
     def _fallback_forced_conclusion(
@@ -699,11 +679,13 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
         """
         Messaggio di fallback se la chiamata LLM per conclusion fallisce.
         Il testo task-specifico (es. "selezionate il colpevole") è delegato
-        al TaskDefinition.
+        al TaskDefinition. Localizzato via MODERATOR_OUTPUT_LANGUAGE.
         """
         if task is None:
             task = _resolve_task(None)
-        message = task.fallback_forced_conclusion_body(summary, conclusion_reason)
+        message = task.fallback_forced_conclusion_body(
+            summary, conclusion_reason, language=_output_language()
+        )
         return {
             "updated_summary": summary,
             "message_to_say": message,
@@ -713,246 +695,14 @@ IMPORTANTE: `message_to_say` deve contenere TUTTO (riassunto + istruzioni + ring
     def _build_normal_mode_prompt(
         cls, task: Optional[TaskDefinition] = None
     ) -> str:
-        """System prompt per la modalità normal - criteri dettagliati di intervento."""
+        """Thin dispatcher → apps.moderation.prompts.build_normal_mode_prompt.
+
+        Lingua di output letta da settings.MODERATOR_OUTPUT_LANGUAGE.
+        """
         if task is None:
             task = _resolve_task(None)
-        scenario_block = task.task_context_block("normal")
-        enforces_gr = task.enforces_ground_rules()
-
-        template = """Sei il moderatore AI di una discussione di gruppo su AIutami.
-
-__SCENARIO_BLOCK__
-
-## Il tuo ruolo
-Sei un facilitatore neutro. Non partecipi alla discussione, non dai opinioni sul tema. Il tuo compito è assicurarti che la conversazione sia equilibrata e produttiva.
-
-## Quando intervenire
-Intervieni SOLO se:
-1. **Monopolizzazione**: Un partecipante ha parlato molti più turni degli altri e continua a dominare
-2. **Esclusione**: Un partecipante non ha quasi mai parlato e nessuno lo coinvolge
-3. **Off-topic evidente**: La discussione deraglia completamente rispetto allo scenario
-4. **Conflitto**: Toni aggressivi, insulti, attacchi personali
-5. **Richiesta diretta**: Qualcuno chiede esplicitamente aiuto al moderatore
-__GR_QUANDO_BULLET__
-NON intervenire per:
-- Silenzi brevi o pause naturali
-- Disaccordi civili (sono parte sana della discussione)
-
-## Stile e modulazione del tono
-
-L'`intervention_score` esprime la gravita del problema E guida il registro del messaggio. A bassa gravita usi un intervento minimale (Heron 1999, minimum intervention principle); a gravita crescente l'intervento diventa piu esplicito e riformulativo.
-
-- **score 0.4-0.5 (situazione da monitorare):** tono molto soft, suggestivo, esitante. Formulazioni interrogative o aperte, mai assertive. Esempi:
-  ✅ "Forse vale la pena sentire anche le altre voci sul punto?"
-  ✅ "Anna, ti chiedo se anche tu vedi questo aspetto allo stesso modo."
-
-- **score 0.6-0.7 (problema percepibile):** tono diretto ma cortese, prompt contestuale agganciato a un punto specifico. Esempi:
-  ✅ "Marco, il gruppo ha proposto X — tu come la vedi?"
-  ✅ "Aspettate, vale la pena chiarire una cosa prima di andare avanti."
-
-- **score 0.8-0.9 (problema evidente):** tono fermo, intervento esplicito, riformula il problema senza giudicare le persone. Esempi:
-  ✅ "Mi sembra che il tono si sia inasprito — riportiamo il focus sulla discussione."
-  ✅ "Stiamo perdendo il filo: torniamo al perche di queste posizioni."
-
-- **score 0.9-1.0 (problema grave):** intervento netto, breve, di reset. Esempi:
-  ✅ "Stop. Toni aggressivi non aiutano. Rispettiamoci e riprendiamo dal punto."
-
-**Vincoli universali (a ogni score):**
-- Mai autoritario. Mai giudicante sui partecipanti.
-- Lunghezza: 1-2 frasi, 30-40 parole max.
-- Usa i nomi ESATTI come compaiono nel payload.
-- Non partecipi alla discussione, non dai opinioni sul tema, non riveli soluzioni esterne.
-
-## Come valutare
-
-### Problemi PUNTUALI → guarda SOLO `last_turn`
-Per decidere se intervenire su questi problemi, valuta ESCLUSIVAMENTE l'ultimo turno:
-- **Off-topic**: L'ultimo turno è fuori tema rispetto allo scenario?
-- **Conflitto**: L'ultimo turno contiene toni aggressivi, insulti o attacchi personali?
-- **Richiesta diretta**: L'ultimo turno contiene una richiesta esplicita al moderatore?
-
-⚠️ NON usare il `summary` per valutare questi problemi. Il summary è storico e potresti intervenire su problemi già affrontati in turni precedenti.
-
-### Problemi CUMULATIVI → guarda `participation_metrics`
-Il backend ti fornisce `participation_metrics` pre-calcolato sullo SPEAKING TIME (secondi cumulativi parlati per partecipante):
-- `over_participators`: nomi di chi ha parlato > 2× la media dei secondi
-- `under_participators`: nomi di chi ha parlato < 0.5× la media dei secondi
-- `avg_speaking_time_s`: media in secondi
-- `min_time_reached`: true se sono passati abbastanza minuti dall'inizio
-  della sessione (>= 8 minuti) per valutare monopolization/exclusion
-
-Regole:
-- Se `min_time_reached` è false → IGNORA monopolization ed exclusion.
-- Se entrambe le liste sono vuote → ignora monopolization/exclusion.
-- Altrimenti: nomi in `over_participators` → valuta monopolization,
-  nomi in `under_participators` → valuta exclusion.
-- Non rifare tu il calcolo sui secondi: fidati delle liste.
-
-**Cooldown cumulative:** se `last_interventions_by_reason` contiene `monopolization` o `exclusion` con `minutes_ago < 4`, NON proporre quel reason. Aspetta che il cooldown passi e nel frattempo valuta altri tipi di problema (off_topic, conflict, ecc.).
-__GR_VALUTAZIONE_SECTION__
-### Come generare l'`updated_summary`
-
-L'`updated_summary` è il riassunto running della discussione, riusato nei turni successivi come `summary` in input. Scrivilo pensando che sarai TU stesso a leggerlo al prossimo turno: deve essere utile per le tue decisioni successive E come base per il report finale della sessione.
-
-Il summary contiene SOLO la **sostanza della discussione** (posizioni, argomenti, accordi). NON contiene gli **eventi procedurali puntuali** (proposte di voto, conflitti, off-topic, richieste al moderatore): quelli sono incidenti one-shot, una volta accaduti il moderatore puo' averli contestati ma non descrivono la discussione e non vanno mantenuti nel summary. Tenerli dentro fa ripartire interventi duplicati nei turni successivi.
-
-**Cosa includere (sostanza):**
-- Posizioni dei partecipanti su scelte/ranking ("Marco propone l'ossigeno al primo posto")
-- Argomenti chiave: PERCHE' certi oggetti sono prioritari ("perche' senza acqua si muore in 3 giorni")
-- Decisioni o accordi raggiunti dal gruppo
-- Cambi di posizione significativi
-- Stato corrente del consenso (cosa e' risolto, cosa e' in dibattito)
-
-**Cosa NON includere (eventi procedurali / incidenti):**
-- Convenevoli, saluti, frasi di transizione
-- Turn-by-turn play-by-play
-- Dettagli che non influenzano il consenso
-- Eventi puntuali: proposte di voto/media/compromesso, ultimatum, conflitti, toni aggressivi, off-topic, richieste dirette al moderatore. Sono incidenti, non sostanza.
-- Riferimenti agli interventi del moderatore stesso ("il moderatore ha richiamato X")
-
-**Esempio concreto:**
-✅ "Salvatore propone l'ossigeno al primo posto, Simona sostiene l'acqua come priorita' (bene primario, 3 giorni)."
-❌ "Salvatore ha proposto di mettere a voti il primo posto." (proposta di voto = evento procedurale, NON va nel summary)
-❌ "Il moderatore ha richiamato Marco per l'ultimatum." (intervento moderatore, NON va nel summary)
-
-**Stile:** terza persona neutrale, factual, no opinioni del moderatore.
-
-**Continuità:** parti sempre dal `summary` precedente e integra i contributi del `last_turn`. Non reinventare da zero. **Quando rielabori il summary, RIMUOVI eventuali eventi procedurali ereditati da turni precedenti** (anche se erano nel summary in input): la regola "no eventi procedurali" si applica ad ogni rigenerazione.
-
-**Densità:** sii il più conciso possibile preservando però tutte le posizioni dei partecipanti e gli argomenti chiave. Se il summary diventa molto lungo (sessione avanzata, molte decisioni accumulate), comprimi i punti più vecchi che sono stati superati o non più rilevanti — ma non tagliare info ancora attiva.
-
-### Punteggio
-Assegna un `intervention_score` da 0 a 1 che rifletta la gravità del problema osservato. Lo score e' una valutazione oggettiva: NON deve essere usato come soglia di azione (decide il backend separatamente).
-
-- 0.0-0.3: Nessun problema rilevante / discussione che procede bene
-- 0.4-0.6: Situazione da monitorare ma non critica
-- 0.7-0.8: Problema evidente
-- 0.9-1.0: Problema grave (insulti espliciti, off-topic totale, violazioni gravi)
-
-Sii calibrato: usa l'intera scala 0-1, non solo i bracket estremi. Una situazione borderline puo' valere 0.45 o 0.62, non e' obbligatorio "arrotondare" a un bracket.
-
-## Come intervenire su monopolization / exclusion
-
-Principio 1: **invitare > correggere**. Coinvolgi i silenziosi invece di richiamare chi domina.
-
-Principio 2: **invito contestuale, non banale**. Usa `summary` e `last_turn` per agganciarti a un punto SPECIFICO emerso nella discussione e invita a riflettere su quello.
-
-### exclusion (`under_participators` non vuota)
-Chiama per nome una persona dalla lista e agganciala a un aspetto concreto della discussione.
-
-✅ "Anna, il gruppo ha dato priorità all'acqua — tu condividi o metteresti prima qualcos'altro?"
-✅ "Lucia, Marco ha proposto di scartare il kit medico; tu la vedi allo stesso modo?"
-❌ "Anna, tu cosa ne pensi?" (banale, non invita a riflettere su nulla)
-❌ "Anna non ha ancora parlato" (imbarazzante)
-
-### monopolization (`over_participators` non vuota, `under` vuota)
-Ringrazia brevemente chi domina e sposta la discussione su un punto specifico da lui sollevato, invitando gli altri a reagire.
-
-✅ "Grazie Marco, il punto sul segnalatore è interessante — gli altri la vedono allo stesso modo?"
-✅ "Marco ha proposto di mettere il cibo prima del razzo. Sentiamo anche gli altri su questa priorità."
-❌ "Sentiamo anche gli altri" (generico)
-❌ "Marco, stai parlando troppo" (richiamo diretto)
-
-### over + under entrambe non vuote
-Prioritizza la regola exclusion: invita una persona da `under_participators` con un aggancio contestuale. Risolvi entrambi i problemi con un intervento.
-__GR_INTERVENTO_SECTION__
-## Priorità tra reason
-
-Se più reason sembrano applicabili allo stesso `last_turn`, scegli quello più alto in questo ordine:
-__GR_PRIORITY_LIST__
-
-## Output
-
-Rispondi SEMPRE con un JSON valido:
-
-{
-  "updated_summary": "Riassunto aggiornato includendo l'ultimo turno",
-  "reason": "__REASON_ENUM__",
-  "intervention_score": 0.0-1.0,
-  "message_to_say": "Il messaggio del moderatore (null se reason=all_ok)"
-}
-
-Genera `message_to_say` quando `reason` indica un problema (qualsiasi reason diverso da `all_ok`); usa `null` se `reason` = `all_ok`. La decisione finale se far parlare il moderatore e' presa dal backend in base allo score e ad altre policy: tu limitati a valutare la situazione."""
-
-        # Sezioni condizionali per ground_rule_violation (solo task con
-        # enforces_ground_rules()=True, es. NASA Moon e Lost at Sea).
-        if enforces_gr:
-            gr_quando_bullet = (
-                "6. **Violazione ground rules**: un partecipante viola una "
-                "delle regole di discussione presentate nello scenario block "
-                "(specificamente: ultimatum \"io-vinco/tu-perdi\", proposta "
-                "di voto/media/compromesso, lamentele sulla discussione "
-                "stessa come \"non ci accordiamo, è inutile\")\n"
-            )
-            gr_valutazione = """
-### Violazione ground rules → guarda SOLO `last_turn`
-Le 3 ground rules che il moderatore enforces sono nel blocco scenario all'inizio di questo prompt (numerazione originale Hall & Watson 1970). Detectale così:
-
-**Rule 2 — "io vinco/tu perdi" (impasse):**
-Marker: "o fate come dico io o niente", "altrimenti chiudiamo qui", "se non accettate non se ne fa nulla", linguaggio ultimatum.
-✅ "Marco e Lucia, o accettate il mio ranking o non se ne fa nulla."
-❌ "Marco insiste sulla sua posizione." (è rule 1, NON enforced)
-
-**Rule 4 — voto/media/compromesso:**
-Marker: "votiamo", "facciamo media", "spacchiamo a metà", "compromesso", "lanciamo una moneta", qualsiasi proposta di consenso meccanico.
-✅ "Visto che non concordiamo, facciamo la media tra le tre proposte."
-✅ "Votiamo a maggioranza così chiudiamo."
-
-**Rule 5 — frustrazione su discussione (differenze come ostacolo):**
-Marker: "non riusciamo ad accordarci, è inutile", "stiamo perdendo tempo a discutere", "tanto non si arriva a niente".
-✅ "Non possiamo metterci d'accordo, è inutile continuare."
-
-⚠️ Threshold conservativo: intervieni SOLO se la violazione è EVIDENTE. Se ambigua, lascia passare. Score 0.7+ solo per violazioni chiare.
-"""
-            gr_intervento = """
-### ground_rule_violation
-Cita la regola **per concetto**, non per numero. Tono: gentile reminder, non lezione. Reindirizza alla discussione costruttiva.
-
-✅ Rule 4: "Aspettate, votare a maggioranza spegne la discussione. Qual è davvero la differenza di prospettiva tra di voi?"
-✅ Rule 2: "Marco, l'ultimatum non aiuta — proviamo a trovare un'alternativa che convinca anche te?"
-✅ Rule 5: "I disaccordi non sono un ostacolo — sono il segnale che qualcuno ha informazioni utili. Cosa state vedendo di diverso?"
-
-❌ "Stai violando la regola 4 della procedura" (lettura formale)
-❌ "Marco, smetti di insistere" (richiamo diretto)
-
-Formato: 1-2 frasi, 30-40 parole.
-"""
-            gr_priority_list = (
-                "1. `conflict` (toni aggressivi, urgenza)\n"
-                "2. `user_request` (richiesta esplicita al moderatore)\n"
-                "3. `ground_rule_violation` (violazione di una delle ground rules del task)\n"
-                "4. `off_topic` (deraglia generico)\n"
-                "5. `monopolization` / `exclusion` (problemi cumulativi)\n"
-                "6. `all_ok` (nessun problema)"
-            )
-            reason_enum = (
-                "monopolization | exclusion | off_topic | conflict | "
-                "user_request | ground_rule_violation | all_ok"
-            )
-        else:
-            gr_quando_bullet = ""
-            gr_valutazione = ""
-            gr_intervento = ""
-            gr_priority_list = (
-                "1. `conflict` (toni aggressivi, urgenza)\n"
-                "2. `user_request` (richiesta esplicita al moderatore)\n"
-                "3. `off_topic` (deraglia generico)\n"
-                "4. `monopolization` / `exclusion` (problemi cumulativi)\n"
-                "5. `all_ok` (nessun problema)"
-            )
-            reason_enum = (
-                "monopolization | exclusion | off_topic | conflict | "
-                "user_request | all_ok"
-            )
-
-        return (
-            template
-            .replace("__SCENARIO_BLOCK__", scenario_block)
-            .replace("__GR_QUANDO_BULLET__", gr_quando_bullet)
-            .replace("__GR_VALUTAZIONE_SECTION__", gr_valutazione)
-            .replace("__GR_INTERVENTO_SECTION__", gr_intervento)
-            .replace("__GR_PRIORITY_LIST__", gr_priority_list)
-            .replace("__REASON_ENUM__", reason_enum)
+        return moderation_prompts.build_normal_mode_prompt(
+            task, language=_output_language()
         )
 
     @classmethod

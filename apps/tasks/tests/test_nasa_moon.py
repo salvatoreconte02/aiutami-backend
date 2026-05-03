@@ -115,14 +115,26 @@ class NasaMoonPromptTests(SimpleTestCase):
             self.assertTrue(len(block) > 0, f"Block for {mode} is empty")
 
     def test_normal_block_contains_scenario(self) -> None:
+        # Default Italian
         block = self.task.task_context_block("normal")
         self.assertIn("Luna", block)
         self.assertIn("consenso", block)
 
+    def test_normal_block_english_contains_scenario(self) -> None:
+        block = self.task.task_context_block("normal", language="English")
+        self.assertIn("Moon", block)
+        self.assertIn("consensus", block)
+
     def test_normal_block_contains_ground_rules(self) -> None:
+        # Default Italian
         block = self.task.task_context_block("normal")
         self.assertIn("voto a maggioranza", block)
         self.assertIn("conflitto", block)
+
+    def test_normal_block_english_contains_ground_rules(self) -> None:
+        block = self.task.task_context_block("normal", language="English")
+        self.assertIn("majority vote", block)
+        self.assertIn("conflict", block.lower())
 
     def test_intro_message_tail_contains_rules(self) -> None:
         tail = self.task.intro_message_tail()
@@ -170,7 +182,8 @@ class NasaMoonReportTests(SimpleTestCase):
     def test_report_llm_prompt(self) -> None:
         prompt = self.task.build_report_llm_prompt()
         self.assertIn("NASA Moon Survival", prompt)
-        self.assertIn("Error score", prompt)
+        # Marker EN del nuovo prompt parametrizzato
+        self.assertIn("error score", prompt.lower())
 
     def test_report_pdf_sections_empty_when_no_ranking(self) -> None:
         from reportlab.lib.styles import getSampleStyleSheet

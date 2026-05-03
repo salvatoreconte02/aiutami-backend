@@ -37,11 +37,17 @@ class ReportLLMService:
         if task is None:
             logger.warning("[REPORT][LLM] task=None — il caller dovrebbe sempre passare il task")
 
-        system_prompt = task.build_report_llm_prompt() if task else (
-            "Genera un report testuale in italiano per una sessione di discussione. "
-            "Includi statistiche partecipazione, commenta il Gini index, e riassunto. "
-            "Formato: testo semplice, 200-400 parole."
-        )
+        language = getattr(settings, "MODERATOR_OUTPUT_LANGUAGE", "Italian")
+
+        if task:
+            system_prompt = task.build_report_llm_prompt(language=language)
+        else:
+            system_prompt = (
+                f"Generate a text report in {language} for a discussion session. "
+                "Include participation statistics, comment on the Gini index, and "
+                "a summary. Format: plain text, 200-400 words. "
+                f"IMPORTANT: write the entire report in {language}."
+            )
 
         logger.info("[REPORT][LLM][REQUEST] Generating report for session: %s", data.get("session_title"))
 

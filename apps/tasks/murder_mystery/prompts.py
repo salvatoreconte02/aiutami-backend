@@ -2,19 +2,29 @@
 Blocchi di testo task-specifici per Murder Mystery, iniettati dal core
 moderation nello scheletro del system prompt LLM.
 
-Step 3 del refactor task-pluggable: queste stringhe vivevano prima dentro
-apps/moderation/service.py hardcoded nei 3 `_build_*_system_prompt()`. Ora
-sono isolate qui e il core le ottiene tramite MurderMysteryTask.task_context_block(mode).
-
-Vedi docs/plans/2026-04-08-task-pluggable-architecture.md §5 Step 3.
+Versioni IT/EN parallele: il sistema seleziona la lingua via
+settings.MODERATOR_OUTPUT_LANGUAGE (default Italian).
 """
 
-# Usato dal prompt `normal` (decisione intervento durante la discussione).
-SCENARIO_BLOCK_NORMAL = """## Scenario
+# --- Italian ---
+
+SCENARIO_BLOCK_NORMAL_IT = """## Scenario
 I partecipanti stanno giocando a un murder mystery. Il loro obiettivo è discutere gli indizi e scoprire chi è l'assassino."""
 
-
-# Usato dal prompt `forced_conclusion` (messaggio finale di chiusura).
-# Istruisce l'LLM sull'azione finale richiesta ai partecipanti (voto colpevole).
-SCENARIO_BLOCK_FORCED_CONCLUSION = """## Scenario
+SCENARIO_BLOCK_FORCED_CONCLUSION_IT = """## Scenario
 I partecipanti hanno giocato a un murder mystery. Al termine della sessione ciascun partecipante deve selezionare il colpevole nella propria interfaccia; dopo il voto scopriranno se hanno indovinato l'assassino."""
+
+
+# --- English ---
+
+SCENARIO_BLOCK_NORMAL_EN = """## Scenario
+The participants are playing a murder mystery game. Their goal is to discuss the clues and figure out who the murderer is."""
+
+SCENARIO_BLOCK_FORCED_CONCLUSION_EN = """## Scenario
+The participants have been playing a murder mystery. At the end of the session each participant must select the suspect in their own interface; after voting they'll find out if they guessed the murderer correctly."""
+
+
+# --- Backward-compat aliases (default Italian) ---
+
+SCENARIO_BLOCK_NORMAL = SCENARIO_BLOCK_NORMAL_IT
+SCENARIO_BLOCK_FORCED_CONCLUSION = SCENARIO_BLOCK_FORCED_CONCLUSION_IT

@@ -44,20 +44,41 @@ class NasaMoonTask(TaskDefinition):
 
     # --- Prompt building ---
 
-    def task_context_block(self, mode: str) -> str:
-        return {
-            "normal": nasa_prompts.SCENARIO_BLOCK_NORMAL,
-            "forced_conclusion": nasa_prompts.SCENARIO_BLOCK_FORCED_CONCLUSION,
-        }.get(mode, "")
+    def task_context_block(self, mode: str, language: str = "Italian") -> str:
+        if language == "English":
+            blocks = {
+                "normal": nasa_prompts.SCENARIO_BLOCK_NORMAL_EN,
+                "forced_conclusion": nasa_prompts.SCENARIO_BLOCK_FORCED_CONCLUSION_EN,
+            }
+        else:
+            blocks = {
+                "normal": nasa_prompts.SCENARIO_BLOCK_NORMAL_IT,
+                "forced_conclusion": nasa_prompts.SCENARIO_BLOCK_FORCED_CONCLUSION_IT,
+            }
+        return blocks.get(mode, "")
 
-    def llm_scenario_payload(self, mode: str = "normal") -> Dict[str, Any]:
+    def llm_scenario_payload(
+        self, mode: str = "normal", language: str = "Italian"
+    ) -> Dict[str, Any]:
         if mode == "forced_conclusion":
+            if language == "English":
+                return {
+                    "type": "nasa_moon_survival",
+                    "submission_action": "confirm the final ranking of the 15 items",
+                    "submission_outcome": "the ranking will be compared against the NASA experts' ranking",
+                }
             return {
                 "type": "nasa_moon_survival",
                 "submission_action": "confermare il ranking finale dei 15 oggetti",
                 "submission_outcome": "il ranking verra confrontato con quello degli esperti NASA",
             }
         # normal
+        if language == "English":
+            return {
+                "type": "nasa_moon_survival",
+                "objective": "Reach group consensus on the ranking of the 15 lunar survival items",
+                "items_count": len(NASA_ITEMS),
+            }
         return {
             "type": "nasa_moon_survival",
             "objective": "Raggiungere un consenso di gruppo sul ranking dei 15 oggetti lunari",
@@ -101,8 +122,25 @@ class NasaMoonTask(TaskDefinition):
         }
 
     def fallback_forced_conclusion_body(
-        self, summary: str, conclusion_reason: str
+        self,
+        summary: str,
+        conclusion_reason: str,
+        language: str = "Italian",
     ) -> str:
+        if language == "English":
+            if conclusion_reason == "timer_expired":
+                intro = "Time is up."
+            elif conclusion_reason == "all_participants_ready":
+                intro = "You've decided to conclude the session."
+            else:
+                intro = "In conclusion:"
+            return (
+                f"{intro} "
+                f"Here is a brief recap of your discussion: {summary}. "
+                f"The host must now confirm the final ranking of the 15 items. "
+                f"The ranking will be compared against the NASA experts' ranking. "
+                f"Thank you for using AIutami for your session!"
+            )
         if conclusion_reason == "timer_expired":
             intro = "Il tempo a disposizione e terminato."
         elif conclusion_reason == "all_participants_ready":
@@ -119,8 +157,8 @@ class NasaMoonTask(TaskDefinition):
 
     # --- Report ---
 
-    def build_report_llm_prompt(self) -> str:
-        return nasa_report.REPORT_LLM_PROMPT
+    def build_report_llm_prompt(self, language: str = "Italian") -> str:
+        return nasa_report.build_nasa_report_llm_prompt(language)
 
     def report_title(self) -> str:
         return "REPORT NASA MOON SURVIVAL"

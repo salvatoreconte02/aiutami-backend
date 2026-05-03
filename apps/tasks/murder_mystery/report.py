@@ -10,46 +10,55 @@ li ottiene tramite MurderMysteryTask.build_report_*() / collect_report_context()
 from typing import Any, Dict
 
 
-# Prompt LLM per il report MM — verbatim dal pre-refactor
-# (apps/reports/llm_service.py:REPORT_SYSTEM_PROMPT).
-REPORT_LLM_PROMPT = """Sei un analista di sessioni di discussione moderate su AIutami.
+def build_mm_report_llm_prompt(language: str = "Italian") -> str:
+    """System prompt LLM per il report Murder Mystery, parametrizzato per
+    lingua di output (il PDF e' user-facing). Le istruzioni sono in inglese
+    per coerenza con il moderator system prompt; la lingua di output e'
+    iniettata via {language}."""
+    return f"""You are an analyst of moderated group discussion sessions on AIutami.
 
-Genera un report testuale completo in italiano per una sessione di Murder Mystery.
+Generate a complete text report in {language} for a Murder Mystery session.
 
-Il report deve includere queste sezioni (usa esattamente questi titoli):
+The report must include these sections (use exactly these titles, translated into {language}):
 
-RISULTATO FINALE
-- Chi era il colpevole
-- Quanti partecipanti hanno indovinato (es. "2 su 3")
-- Percentuale di successo
+FINAL RESULT
+- Who the murderer was
+- How many participants guessed correctly (e.g. "2 out of 3")
+- Success rate
 
-VOTI DEI PARTECIPANTI
-- Lista dei partecipanti con chi hanno scelto e se era corretto (usa ✓ o ✗)
+PARTICIPANT VOTES
+- List of participants with who they chose and whether it was correct (use ✓ or ✗)
 
-STATISTICHE PARTECIPAZIONE
-- Interventi per partecipante con percentuali
-- Interventi del moderatore AI con percentuale
-- Commenta il Gini index della partecipazione (0 = perfetta uguaglianza, 1 = massima disuguaglianza)
+PARTICIPATION STATISTICS
+- Turns per participant with percentages
+- AI moderator interventions with percentage
+- Comment on the Gini index of participation (0 = perfect equality, 1 = max inequality)
 
-INTERVENTI DEL MODERATORE
-Se presente `interventions_log`, includi:
-- Numero totale di interventi AI
-- Breakdown per reason (es: "3 off_topic, 2 monopolization, 1 user_request")
-- Per ogni intervento: timestamp, reason, speaker che aveva parlato
+MODERATOR INTERVENTIONS
+If `interventions_log` is present, include:
+- Total number of AI interventions
+- Breakdown by reason (e.g. "3 off_topic, 2 monopolization, 1 user_request")
+- For each intervention: timestamp, reason, speaker who had spoken
 
-RIASSUNTO DELLA DISCUSSIONE
-- Basato sul final_summary fornito, rielaboralo in modo discorsivo
+DISCUSSION SUMMARY
+- Based on the provided final_summary, reformulate it in a discursive way
 
-ANALISI FINALE
-- Un breve paragrafo (3-5 frasi) che analizza come è andata la sessione
-- Commenta la partecipazione, eventuali dinamiche interessanti, e il risultato finale
+FINAL ANALYSIS
+- A short paragraph (3-5 sentences) analyzing how the session went
+- Comment on participation, any interesting dynamics, and the final result
 
-Formato:
-- Usa testo semplice, NO markdown
-- Separa le sezioni con una riga vuota
-- Tono informativo ma accessibile (il pubblico sono ragazzi)
-- Lunghezza totale: 300-500 parole
+Format:
+- Use plain text, NO markdown
+- Separate sections with a blank line
+- Informative but accessible tone (audience: young adults)
+- Total length: 300-500 words
+
+IMPORTANT: write the entire report in {language}, including section titles.
 """
+
+
+# Backward-compat alias (default Italian).
+REPORT_LLM_PROMPT = build_mm_report_llm_prompt("Italian")
 
 
 def collect_mm_report_context(session) -> Dict[str, Any]:
