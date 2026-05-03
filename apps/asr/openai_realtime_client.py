@@ -368,11 +368,23 @@ class OpenAIRealtimeTranscriptionClient:
 
         if et == "error":
             err = event.get("error") or {}
-            logger.error(
-                "[OPENAI-ASR][error] type=%s message=%s",
-                err.get("type"),
-                err.get("message"),
-            )
+            err_type = err.get("type")
+            err_msg = err.get("message") or ""
+            # "buffer too small" e' un edge case innocuo: arriva quando il
+            # server-side VAD chiude un segmento e il commit finale ha
+            # < 100ms di audio residuo. La trascrizione precedente e' gia'
+            # arrivata correttamente come [final], il client riprende.
+            if err_type == "invalid_request_error" and "buffer too small" in err_msg:
+                logger.debug(
+                    "[OPENAI-ASR][buffer] commit skipped (residual <100ms): %s",
+                    err_msg,
+                )
+            else:
+                logger.error(
+                    "[OPENAI-ASR][error] type=%s message=%s",
+                    err_type,
+                    err_msg,
+                )
             return
 
         logger.debug("[OPENAI-ASR][event] %s", et)

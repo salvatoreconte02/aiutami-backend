@@ -221,18 +221,23 @@ class ReportPDFService:
 
         elements.append(Paragraph("STATISTICHE PARTECIPAZIONE", section_style))
 
-        # Tabella partecipanti
-        table_data = [["Partecipante", "Interventi", "%"]]
+        # Tabella partecipanti — tempo di parlato (sec) + percentuale sul totale
+        def _fmt_secs(secs: float) -> str:
+            mm, ss = divmod(int(secs), 60)
+            return f"{mm}:{ss:02d}"
+
+        table_data = [["Partecipante", "Tempo parlato", "%"]]
         for p in data.get("participants", []):
+            secs = float(p.get("speaking_time_s") or 0)
             table_data.append([
                 p.get("name", ""),
-                str(p.get("turns", 0)),
+                _fmt_secs(secs),
                 f"{p.get('percentage', 0)}%",
             ])
-        # Riga moderatore AI
+        # Riga moderatore AI: numero di interventi (no percentuale: AI parla
+        # in time slots distinti, percentuale non confrontabile con i partecipanti)
         ai_interventions = data.get("ai_interventions", 0)
-        ai_pct = data.get("ai_intervention_percentage", 0)
-        table_data.append(["Moderatore AI", str(ai_interventions), f"{ai_pct}%"])
+        table_data.append(["Moderatore AI", f"{ai_interventions} interventi", "—"])
 
         part_table = Table(
             table_data,
@@ -266,7 +271,8 @@ class ReportPDFService:
         else:
             gini_label = "sbilanciata"
         elements.append(Paragraph(
-            f"Indice di Gini: <b>{gini:.2f}</b> &mdash; partecipazione {gini_label}",
+            f"Indice di Gini (tempo parlato): <b>{gini:.2f}</b> &mdash; "
+            f"partecipazione {gini_label}",
             body_style,
         ))
         elements.append(Spacer(1, 12))

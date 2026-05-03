@@ -28,9 +28,9 @@ COMPARISON WITH EXPERTS
 - Most significant errors (items very far from the expert position)
 
 PARTICIPATION STATISTICS
-- Turns per participant with percentages
-- AI moderator interventions with percentage
-- Comment on the Gini index of participation (0 = perfect equality, 1 = max inequality)
+- For each participant report `speaking_time_s` (seconds spoken) and `percentage` of total speaking time. Convert seconds into minutes:seconds for readability (e.g. 245.0s → "4 min 05 sec").
+- AI moderator interventions count
+- Comment on the Gini index of speaking-time participation (0 = perfect equality, 1 = max inequality). Cite `total_speaking_time_s` as a reference.
 
 MODERATOR INTERVENTIONS
 If `interventions_log` is present, include:

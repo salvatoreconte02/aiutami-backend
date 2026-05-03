@@ -12,14 +12,17 @@ from apps.sessions.models import (
 logger = logging.getLogger(__name__)
 
 
-def _compute_gini(values: list[int]) -> float:
-    """Gini index: 0 = perfetta uguaglianza, 1 = massima disuguaglianza."""
+def _compute_gini(values: list[float]) -> float:
+    """Gini index: 0 = perfetta uguaglianza, 1 = massima disuguaglianza.
+
+    Accetta float (speaking time in secondi) o int (turn count).
+    """
     if not values or all(v == 0 for v in values):
         return 0.0
     n = len(values)
     sorted_vals = sorted(values)
     total = sum(sorted_vals)
-    gini_sum = 0
+    gini_sum = 0.0
     for i, v in enumerate(sorted_vals):
         gini_sum += (2 * (i + 1) - n - 1) * v
     return gini_sum / (n * total)
@@ -103,38 +106,44 @@ def _collect_report_data(session, mod_state=None, task=None) -> dict:
     elif session.started_at:
         duration_minutes = int((timezone.now() - session.started_at).total_seconds() / 60)
 
-    turns_per_participant = {}
-    if mod_state and hasattr(mod_state, 'turns_per_participant'):
-        turns_per_participant = mod_state.turns_per_participant
+    # Statistiche di partecipazione: usiamo speaking_time_per_participant (sec)
+    # invece del fantasma turns_per_participant. Lo speaking time e' la metrica
+    # primaria del sistema (Mono/Excl in moderation/metrics.py si basano su
+    # quella) e nella letteratura su small-group dynamics il participation
+    # imbalance si misura in time, non turn count. Vedi commit message per i
+    # dettagli.
+    speaking_time_per_participant: dict[str, float] = {}
+    if mod_state and hasattr(mod_state, 'speaking_time_per_participant'):
+        speaking_time_per_participant = mod_state.speaking_time_per_participant or {}
 
-    total_human_turns = sum(turns_per_participant.values()) if turns_per_participant else 1
+    total_speaking_time_s = sum(speaking_time_per_participant.values())
 
     ai_interventions = 0
     if mod_state and hasattr(mod_state, 'ai_interventions_count'):
         ai_interventions = mod_state.ai_interventions_count
 
-    total_turns = total_human_turns + ai_interventions
-    ai_percentage = int((ai_interventions / total_turns) * 100) if total_turns > 0 else 0
-
     participants_data = []
-    for name, turns in turns_per_participant.items():
-        percentage = int((turns / total_human_turns) * 100) if total_human_turns > 0 else 0
+    for name, seconds in speaking_time_per_participant.items():
+        seconds = round(float(seconds), 1)
+        percentage = (
+            round((seconds / total_speaking_time_s) * 100, 1)
+            if total_speaking_time_s > 0
+            else 0.0
+        )
         participants_data.append({
             "name": name,
-            "turns": turns,
+            "speaking_time_s": seconds,
             "percentage": percentage,
         })
 
-    gini_index = _compute_gini(list(turns_per_participant.values()))
+    gini_index = _compute_gini(list(speaking_time_per_participant.values()))
 
     data = {
         "session_title": session.title,
         "duration_minutes": duration_minutes,
         "participants": participants_data,
-        "total_human_turns": total_human_turns,
-        "total_turns": total_turns,
+        "total_speaking_time_s": round(total_speaking_time_s, 1),
         "ai_interventions": ai_interventions,
-        "ai_intervention_percentage": ai_percentage,
         "gini_index": round(gini_index, 4),
         "final_summary": session.final_summary or "",
     }

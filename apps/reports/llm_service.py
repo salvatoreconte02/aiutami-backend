@@ -97,12 +97,19 @@ class ReportLLMService:
         ])
 
         for p in data.get("participants", []):
-            lines.append(f"- {p.get('name')}: {p.get('turns')} interventi ({p.get('percentage')}%)")
+            secs = float(p.get("speaking_time_s") or 0)
+            mm, ss = divmod(int(secs), 60)
+            lines.append(
+                f"- {p.get('name')}: {mm} min {ss:02d} sec ({p.get('percentage')}%)"
+            )
 
         gini = data.get("gini_index", 0)
+        total_s = float(data.get("total_speaking_time_s") or 0)
+        total_mm, total_ss = divmod(int(total_s), 60)
         lines.extend([
-            f"- Moderatore AI: {data.get('ai_interventions', 0)} interventi ({data.get('ai_intervention_percentage', 0)}%)",
-            f"Indice di Gini: {gini:.2f}",
+            f"- Moderatore AI: {data.get('ai_interventions', 0)} interventi",
+            f"Tempo totale di parlato: {total_mm} min {total_ss:02d} sec",
+            f"Indice di Gini (speaking time): {gini:.2f}",
             "",
             "RIASSUNTO",
             data.get("final_summary", "Nessun riassunto disponibile."),
