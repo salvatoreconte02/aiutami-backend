@@ -248,3 +248,89 @@ class SessionEvent(models.Model):
         return f"{self.session_id} - {self.type}"
 
 
+class DiscussionEventType(models.TextChoices):
+    """Tipi di evento registrati nell'event log della discussione.
+
+    Distinto da SessionEventType (sopra) che traccia transizioni di stato
+    macro della sessione (CREATED, JOINED, STARTED, ...). DiscussionEvent
+    cattura invece la sequenza turn-by-turn di una sessione attiva, per
+    analisi empirica a freddo.
+    """
+    HUMAN_TURN = "human_turn", "Human turn"
+    AI_INTERVENTION = "ai_intervention", "AI intervention"
+    SYSTEM = "system", "System event"
+
+
+class DiscussionEvent(models.Model):
+    """Event log immutabile della discussione (turni umani + interventi AI).
+
+    Pattern event sourcing: una riga per ogni evento, ordinato via
+    `sequence_number` (atomic counter Redis-backed, vedi event_log.py).
+    Permette di ricostruire la timeline esatta di una sessione a freddo
+    per analisi empirica della tesi (Synergy gain, intervention patterns,
+    summary evolution debugging).
+
+    I dati cumulativi e gli aggregati continuano a vivere in
+    `Session.report_data`; questa tabella tiene il dato GREZZO turn-by-turn.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    session = models.ForeignKey(
+        Session, on_delete=models.CASCADE, related_name="discussion_events"
+    )
+    sequence_number = models.PositiveBigIntegerField(
+        help_text="Counter monotono per sessione, atomic via Redis INCR. "
+                  "Garantisce ordering robusto anche con timestamp identici."
+    )
+    timestamp = models.DateTimeField(
+        default=timezone.now,
+        help_text="UTC con microsecondi, momento di registrazione dell'evento."
+    )
+    event_type = models.CharField(
+        max_length=32, choices=DiscussionEventType.choices
+    )
+    speaker = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="discussion_events_as_speaker",
+        help_text="Per HUMAN_TURN: chi ha parlato. Per AI_INTERVENTION: "
+                  "lo speaker del turno PRECEDENTE che ha innescato la "
+                  "decisione del moderatore. NULL per SYSTEM events."
+    )
+    content = models.TextField(
+        blank=True,
+        default="",
+        help_text="HUMAN_TURN: trascrizione del turno (può essere vuota se "
+                  "ASR non ha trascritto nulla). AI_INTERVENTION: messaggio "
+                  "del moderatore (vuoto se reason=all_ok o intervento bloccato "
+                  "senza testo). SYSTEM: descrizione human-readable."
+    )
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Campi specifici per event_type. Vedi event_log.py per "
+                  "lo schema atteso di ciascun tipo."
+    )
+
+    class Meta:
+        db_table = "session_discussion_event"
+        ordering = ["session", "sequence_number"]
+        indexes = [
+            models.Index(fields=["session", "sequence_number"]),
+            models.Index(fields=["session", "event_type"]),
+            models.Index(fields=["session", "timestamp"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "sequence_number"],
+                name="uniq_discussion_event_seq_per_session",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"DiscussionEvent[{self.session_id}/{self.sequence_number}] "
+            f"{self.event_type}"
+        )

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -19,6 +20,7 @@ from .state import (
 from .metrics import compute_participation_metrics, DEFAULT_MIN_ELAPSED_SECONDS
 from . import prompts as moderation_prompts
 
+from apps.sessions.event_log import persist_event_async
 from apps.tasks.base import TaskDefinition
 from apps.tasks.registry import get_task
 
@@ -124,6 +126,12 @@ class ModerationService:
         """
         state = load_moderation_state(session_id)
 
+        # Cattura snapshot prima della mutazione: serviranno per l'event log
+        # (DiscussionEvent.metadata.summary_at_decision e duration_s)
+        summary_in_for_event = state.summary
+        turn_started_at_for_event = state.current_turn_started_at
+        turn_duration_s_for_event = 0.0
+
         # Accumula speaking time del turno appena chiuso, se abbiamo un
         # timestamp di inizio (settato da record_human_turn_start).
         # Se manca (es. reconnection mid-turn, test che chiamano direttamente),
@@ -137,6 +145,7 @@ class ModerationService:
                     state.speaking_time_per_participant.get(speaker_name, 0.0)
                     + delta_seconds
                 )
+                turn_duration_s_for_event = delta_seconds
             state.current_turn_started_at = None
 
         # Elapsed seconds dalla sessione (per min_time_reached). Default a 0
@@ -202,11 +211,169 @@ class ModerationService:
         # 7) Salvare lo stato aggiornato
         save_moderation_state(session_id, state)
 
+        # 8) Persistenza event log (DiscussionEvent) — fire-and-forget,
+        # non blocca il caller. Se fallisce, log e proseguiamo.
+        cls._fire_persist_events(
+            session_id=session_id,
+            speaker_name=speaker_name,
+            last_turn_text=last_turn_text,
+            turn_duration_s=turn_duration_s_for_event,
+            turn_started_at=turn_started_at_for_event,
+            summary_after_turn=state.summary,
+            summary_at_decision=summary_in_for_event,
+            llm_output=llm_output,
+            ai_should_speak=ai_should_speak,
+            ai_message=ai_message,
+            min_time_reached=min_time_reached,
+            mode=mode,
+            session_phase=session_phase,
+        )
+
         return ModerationResult(
             ai_should_speak=ai_should_speak,
             ai_message=ai_message,
             updated_state=state,
         )
+
+    @staticmethod
+    def _diagnose_block_reason(
+        *,
+        llm_should_speak: bool,
+        llm_reason: Optional[str],
+        llm_score: Optional[float],
+        ai_should_speak: bool,
+        min_time_reached: bool,
+        session_phase: str,
+        state: ModerationState,
+    ) -> Optional[str]:
+        """Replica la logica di _decide_ai_intervention per attribuire la
+        ragione del block, quando ai_should_speak=False ma il LLM voleva
+        parlare. Solo a fini di telemetry/event log: NON modifica nulla.
+        """
+        if ai_should_speak:
+            return None
+        if not llm_should_speak:
+            # Il LLM stesso non voleva parlare (reason=all_ok o no message).
+            return None
+        if llm_reason in {"monopolization", "exclusion"} and not min_time_reached:
+            return "min_time_not_reached"
+        if llm_reason not in SCORE_BYPASS_REASONS:
+            if llm_score is not None and llm_score < MIN_INTERVENTION_SCORE:
+                return "min_score"
+        if llm_reason not in COOLDOWN_BYPASS_REASONS:
+            last_for_reason = last_intervention_for_reason(state, llm_reason)
+            if last_for_reason is not None:
+                last_ts = datetime.fromisoformat(last_for_reason["ts"])
+                cooldown = COOLDOWN_OVERRIDES.get(
+                    llm_reason, AI_INTERVENTION_COOLDOWN
+                )
+                if datetime.utcnow() - last_ts < cooldown:
+                    return "cooldown"
+        if session_phase != "ACTIVE":
+            return "not_active_phase"
+        return "unknown"
+
+    @classmethod
+    def _fire_persist_events(
+        cls,
+        *,
+        session_id,
+        speaker_name: Optional[str],
+        last_turn_text: str,
+        turn_duration_s: float,
+        turn_started_at: Optional[datetime],
+        summary_after_turn: str,
+        summary_at_decision: str,
+        llm_output: dict,
+        ai_should_speak: bool,
+        ai_message: Optional[str],
+        min_time_reached: bool,
+        mode: str,
+        session_phase: str,
+    ) -> None:
+        """Fire-and-forget di 2 eventi: human_turn + ai_intervention.
+
+        Usa asyncio.create_task se siamo in event loop async (production
+        Daphne), altrimenti fa write sincrono via persist_event_sync (test).
+        """
+        # Costruisce metadata
+        human_meta = {
+            "duration_s": round(turn_duration_s, 3),
+            "turn_started_at": (
+                turn_started_at.isoformat() if turn_started_at else None
+            ),
+            "summary_after_this_turn": summary_after_turn,
+            "empty_transcription": not (last_turn_text or "").strip(),
+        }
+
+        llm_reason = llm_output.get("reason", "unknown")
+        llm_score = llm_output.get("intervention_score", 0.0)
+        llm_should_speak = llm_output.get("should_ai_speak", False)
+        block_reason = cls._diagnose_block_reason(
+            llm_should_speak=llm_should_speak,
+            llm_reason=llm_reason,
+            llm_score=llm_score,
+            ai_should_speak=ai_should_speak,
+            min_time_reached=min_time_reached,
+            session_phase=session_phase,
+            # Usiamo state caricato fresh per avere interventions_log corrente
+            state=load_moderation_state(session_id),
+        )
+
+        ai_meta = {
+            "reason": llm_reason,
+            "score": float(llm_score) if llm_score is not None else None,
+            "was_played": ai_should_speak,
+            "block_reason": block_reason,
+            "summary_at_decision": summary_at_decision,
+            "mode": mode,
+        }
+        # Per ai_intervention il messaggio "intended" del LLM va in content
+        # (utile per debug anche se bloccato)
+        ai_content = (
+            ai_message
+            if ai_should_speak
+            else (llm_output.get("message_to_say") or "")
+        )
+
+        # Determina se siamo in event loop async (Daphne) o sync (test/CLI)
+        try:
+            asyncio.get_running_loop()
+            running_async = True
+        except RuntimeError:
+            running_async = False
+
+        if running_async:
+            asyncio.create_task(persist_event_async(
+                session_id=session_id,
+                event_type="human_turn",
+                speaker_name=speaker_name,
+                content=last_turn_text or "",
+                metadata=human_meta,
+            ))
+            asyncio.create_task(persist_event_async(
+                session_id=session_id,
+                event_type="ai_intervention",
+                speaker_name=speaker_name,  # speaker che ha innescato
+                content=ai_content,
+                metadata=ai_meta,
+            ))
+        else:
+            from apps.sessions.event_log import persist_event_sync
+            persist_event_sync(
+                session_id=session_id,
+                event_type="human_turn",
+                speaker_name=speaker_name,
+                content=last_turn_text or "",
+                metadata=human_meta,
+            )
+            persist_event_sync(
+                session_id=session_id,
+                event_type="ai_intervention",
+                speaker_name=speaker_name,
+                content=ai_content,
+                metadata=ai_meta,
+            )
 
     @classmethod
     def record_human_turn_start(

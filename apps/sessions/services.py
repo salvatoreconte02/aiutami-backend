@@ -169,6 +169,10 @@ def _cleanup_session_redis_keys(session_id: str) -> None:
         f"session:{session_id}:transcript",
         f"turns:{session_id}",
         f"moderation:{session_id}",
+        # Counter monotono usato da apps/sessions/event_log.py per il
+        # sequence_number atomico dei DiscussionEvent. Va resettato perche'
+        # il dato canonico ormai e' su Postgres (DiscussionEvent table).
+        f"session:{session_id}:event_seq",
     ]
 
     for key in keys_to_delete:
