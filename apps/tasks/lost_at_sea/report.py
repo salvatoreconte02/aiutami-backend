@@ -11,48 +11,61 @@ from .config import EXPERT_RANKING, compute_error_score, MAX_ERROR_SCORE
 
 
 def build_lost_at_sea_report_llm_prompt(language: str = "Italian") -> str:
-    """System prompt LLM per il report Lost at Sea, parametrizzato
-    per lingua di output (il PDF e' user-facing)."""
+    """System prompt LLM per il report Lost at Sea Survival.
+
+    NOTA: questo prompt genera SOLO la parte narrativa del report. Le tabelle
+    strutturate (ranking finale, partecipazione, interventi, confronto con
+    esperto) sono gia' renderizzate dal pdf_service. NON duplicarle.
+    """
     return f"""You are an analyst of moderated group discussion sessions on AIutami.
 
-Generate a complete text report in {language} for a Lost at Sea Survival Challenge session.
+Generate the NARRATIVE portion of a session report for the Lost at Sea
+Survival Challenge, in {language}. The PDF that wraps your output ALREADY
+shows the following as structured tables / sections, so DO NOT reproduce
+them verbatim in your text:
 
-The report must include these sections (use exactly these titles, translated into {language}):
+  - The final group ranking of the 15 items (table)
+  - Speaking time per participant + Gini index (table + summary line)
+  - The list of moderator interventions with timestamp / reason / speaker (table)
+  - Item-by-item comparison with the US Coast Guard expert ranking (table)
+
+Your job is to produce the INTERPRETATION around those tables.
+
+Generate exactly these four sections (use these titles, translated into {language}):
 
 RANKING RESULT
-- Group error score (lower = better, range 0-112)
-- Qualitative evaluation (excellent / good / average / poor)
+- Briefly state the group error score and the qualitative evaluation
+  (excellent / good / average / poor). One or two sentences.
+- If `synergy_gain` is provided, comment whether the group's discussion
+  improved over the average individual baseline. If null, do not mention it.
 
 COMPARISON WITH EXPERTS
-- Items positioned correctly or nearly so
-- Most significant errors (items very far from the expert position)
-
-PARTICIPATION STATISTICS
-- For each participant report `speaking_time_s` (seconds spoken) and `percentage` of total speaking time. Convert seconds into minutes:seconds for readability (e.g. 245.0s → "4 min 05 sec").
-- AI moderator interventions count
-- Comment on the Gini index of speaking-time participation (0 = perfect equality, 1 = max inequality). Cite `total_speaking_time_s` as a reference.
-
-MODERATOR INTERVENTIONS
-If `interventions_log` is present, include:
-- Total number of AI interventions
-- Breakdown by reason (e.g. "3 off_topic, 2 monopolization, 1 user_request")
-- For each intervention: timestamp, reason, speaker who had spoken
+- Highlight 2-3 items the group placed close to the US Coast Guard ranking,
+  with the reason if it can be inferred from the discussion summary.
+- Highlight 2-3 items the group placed far from the expert ranking and
+  comment briefly on what may have driven the divergence.
 
 DISCUSSION SUMMARY
-- Based on the provided final_summary, reformulate it in a discursive way
-- Highlight whether the group followed the procedural consensus rules
+- Reformulate the provided `final_summary` as a fluid narrative paragraph.
+- Mention whether the group adhered to the Hall & Watson consensus rules
+  (avoiding voting / averaging / ultimatums) only if there is evidence
+  for it in the summary or interventions_log.
 
 FINAL ANALYSIS
-- A short paragraph (3-5 sentences) analyzing how the session went
-- Comment on the quality of the decision process and participation
+- A short paragraph (3-5 sentences) interpreting how the session went.
+- Comment qualitatively on participation balance (referring to the Gini
+  index as "balanced", "moderately uneven", etc., without restating
+  the numerical value — it is already in the table).
 
 Format:
-- Use plain text, NO markdown
-- Separate sections with a blank line
-- Informative but accessible tone
-- Total length: 300-500 words
+- Plain text, NO markdown.
+- Separate sections with a blank line.
+- Use the exact section titles above (translated into {language}).
+- Total length: 200-350 words. Be concise — the tables already cover the data.
 
 IMPORTANT: write the entire report in {language}, including section titles.
+Do NOT include any "PARTICIPATION STATISTICS" or "MODERATOR INTERVENTIONS"
+section: those are shown as tables before your text.
 """
 
 
@@ -63,6 +76,10 @@ REPORT_LLM_PROMPT = build_lost_at_sea_report_llm_prompt("Italian")
 def collect_lost_at_sea_report_context(session) -> Dict[str, Any]:
     """
     Raccoglie ranking di gruppo e calcola error score per il report.
+
+    `synergy_gain` e `assembly_bonus` sono predisposti come None in attesa
+    del flow di submission individuale. Vedi nasa_moon/report.py per il
+    pattern e dettagli sulle metriche empiriche.
     """
     from .models import LostAtSeaRanking
 
@@ -71,7 +88,6 @@ def collect_lost_at_sea_report_context(session) -> Dict[str, Any]:
         ranked_items = ranking.ranked_items
         error_score = compute_error_score(ranked_items)
 
-        # Dettaglio per-item
         items_detail = []
         for i, item in enumerate(ranked_items):
             team_rank = i + 1
@@ -90,14 +106,25 @@ def collect_lost_at_sea_report_context(session) -> Dict[str, Any]:
             "max_error_score": MAX_ERROR_SCORE,
             "items_detail": items_detail,
             "has_ranking": True,
+            "synergy_gain": None,
+            "individual_errors": None,
+            "assembly_bonus": None,
         }
     except LostAtSeaRanking.DoesNotExist:
-        return {"has_ranking": False}
+        return {
+            "has_ranking": False,
+            "synergy_gain": None,
+            "individual_errors": None,
+            "assembly_bonus": None,
+        }
 
 
 def build_lost_at_sea_pdf_sections(session, context: Dict[str, Any], styles: Dict[str, Any]) -> list:
     """
-    Sezioni PDF task-specifiche per Lost at Sea: tabella ranking team vs expert + score.
+    Sezioni PDF task-specifiche per Lost at Sea:
+      - RANKING FINALE GRUPPO (15 item ordinati 1..15)
+      - RISULTATO + Synergy gain placeholder
+      - CONFRONTO CON RANKING ESPERTO
     """
     from reportlab.lib import colors
     from reportlab.lib.units import cm
@@ -116,8 +143,39 @@ def build_lost_at_sea_pdf_sections(session, context: Dict[str, Any], styles: Dic
         return elements
 
     error_score = context["error_score"]
+    items_detail = context["items_detail"]
 
-    # Valutazione qualitativa basata sull'error score
+    # === RANKING FINALE GRUPPO ===
+    elements.append(Paragraph("RANKING FINALE GRUPPO", section_style))
+    final_ranking_data = [["Posizione", "Oggetto"]]
+    for item_info in items_detail:
+        final_ranking_data.append([
+            str(item_info["team_rank"]),
+            item_info["item"],
+        ])
+
+    final_ranking_table = Table(
+        final_ranking_data,
+        colWidths=[2.5 * cm, 11.5 * cm],
+    )
+    final_ranking_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2E86AB')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#F5F5F5')),
+        ('GRID', (0, 0), (-1, -1), 1, colors.white),
+        ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ('TOPPADDING', (0, 1), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+    ]))
+    elements.append(final_ranking_table)
+    elements.append(Spacer(1, 12))
+
+    # === RISULTATO + METRICHE EMPIRICHE ===
     if error_score <= 20:
         quality = "Eccellente"
     elif error_score <= 35:
@@ -127,17 +185,48 @@ def build_lost_at_sea_pdf_sections(session, context: Dict[str, Any], styles: Dic
     else:
         quality = "Scarso"
 
-    # Sezione risultato
-    elements.append(Paragraph("RISULTATO RANKING", section_style))
+    elements.append(Paragraph("RISULTATO", section_style))
     elements.append(Paragraph(
-        f"Error score: <b>{error_score}</b> / {MAX_ERROR_SCORE} ({quality})", body_style
+        f"Error score: <b>{error_score}</b> / {MAX_ERROR_SCORE} "
+        f"&mdash; valutazione: <b>{quality}</b>",
+        body_style,
     ))
+
+    synergy = context.get("synergy_gain")
+    if synergy is None:
+        elements.append(Paragraph(
+            "Synergy gain: <i>N/A &mdash; richiede la fase di ranking individuale "
+            "pre-discussione (in arrivo nella prossima iterazione).</i>",
+            body_style,
+        ))
+    else:
+        sign = "+" if synergy >= 0 else ""
+        elements.append(Paragraph(
+            f"Synergy gain: <b>{sign}{synergy:.1f}</b> "
+            f"(differenza tra error medio individuale e error di gruppo, "
+            f"piu' alto = il gruppo migliora di piu' rispetto agli individui)",
+            body_style,
+        ))
+
+    assembly = context.get("assembly_bonus")
+    if assembly is True:
+        elements.append(Paragraph(
+            "Assembly bonus: <b>SI</b> &mdash; il gruppo ha fatto meglio "
+            "del miglior partecipante individuale.",
+            body_style,
+        ))
+    elif assembly is False:
+        elements.append(Paragraph(
+            "Assembly bonus: <b>NO</b> &mdash; almeno un partecipante "
+            "individualmente ha fatto meglio del gruppo.",
+            body_style,
+        ))
     elements.append(Spacer(1, 12))
 
-    # Tabella comparativa
+    # === CONFRONTO CON RANKING ESPERTO ===
     elements.append(Paragraph("CONFRONTO CON RANKING ESPERTO", section_style))
     table_data = [["Oggetto", "Gruppo", "Esperto", "Diff."]]
-    for item_info in context["items_detail"]:
+    for item_info in items_detail:
         table_data.append([
             item_info["item"],
             str(item_info["team_rank"]),

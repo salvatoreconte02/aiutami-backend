@@ -11,49 +11,52 @@ from typing import Any, Dict
 
 
 def build_mm_report_llm_prompt(language: str = "Italian") -> str:
-    """System prompt LLM per il report Murder Mystery, parametrizzato per
-    lingua di output (il PDF e' user-facing). Le istruzioni sono in inglese
-    per coerenza con il moderator system prompt; la lingua di output e'
-    iniettata via {language}."""
+    """System prompt LLM per il report Murder Mystery.
+
+    NOTA: questo prompt genera SOLO la parte narrativa del report. Le
+    tabelle strutturate (voti, partecipazione, interventi del moderatore)
+    sono gia' renderizzate dal pdf_service. NON duplicarle.
+    """
     return f"""You are an analyst of moderated group discussion sessions on AIutami.
 
-Generate a complete text report in {language} for a Murder Mystery session.
+Generate the NARRATIVE portion of a session report for a Murder Mystery
+session, in {language}. The PDF that wraps your output ALREADY shows the
+following as structured tables / sections, so DO NOT reproduce them
+verbatim in your text:
 
-The report must include these sections (use exactly these titles, translated into {language}):
+  - The participants' votes (who voted whom + correct/incorrect, table)
+  - Speaking time per participant + Gini index (table + summary line)
+  - The list of moderator interventions with timestamp / reason / speaker (table)
+
+Your job is to produce the INTERPRETATION around those tables.
+
+Generate exactly these three sections (use these titles, translated into {language}):
 
 FINAL RESULT
-- Who the murderer was
-- How many participants guessed correctly (e.g. "2 out of 3")
-- Success rate
-
-PARTICIPANT VOTES
-- List of participants with who they chose and whether it was correct (use ✓ or ✗)
-
-PARTICIPATION STATISTICS
-- For each participant report `speaking_time_s` (seconds spoken) and `percentage` of total speaking time. Convert seconds into minutes:seconds for readability (e.g. 245.0s → "4 min 05 sec").
-- AI moderator interventions count
-- Comment on the Gini index of speaking-time participation (0 = perfect equality, 1 = max inequality). Cite `total_speaking_time_s` as a reference.
-
-MODERATOR INTERVENTIONS
-If `interventions_log` is present, include:
-- Total number of AI interventions
-- Breakdown by reason (e.g. "3 off_topic, 2 monopolization, 1 user_request")
-- For each intervention: timestamp, reason, speaker who had spoken
+- Briefly state who the murderer was, how many participants guessed
+  correctly, and the success rate. One or two sentences. Do NOT list
+  individual votes — they are in the table.
 
 DISCUSSION SUMMARY
-- Based on the provided final_summary, reformulate it in a discursive way
+- Reformulate the provided `final_summary` as a fluid narrative paragraph.
+- Mention key clues, suspect changes, and turning points in the discussion.
 
 FINAL ANALYSIS
-- A short paragraph (3-5 sentences) analyzing how the session went
-- Comment on participation, any interesting dynamics, and the final result
+- A short paragraph (3-5 sentences) interpreting how the session went.
+- Comment qualitatively on participation balance (referring to the Gini
+  index as "balanced", "moderately uneven", etc., without restating the
+  numerical value), the dynamics among participants, and the overall result.
 
 Format:
-- Use plain text, NO markdown
-- Separate sections with a blank line
-- Informative but accessible tone (audience: young adults)
-- Total length: 300-500 words
+- Plain text, NO markdown.
+- Separate sections with a blank line.
+- Use the exact section titles above (translated into {language}).
+- Tone: informative but accessible (audience: young adults).
+- Total length: 200-350 words. Be concise — the tables already cover the data.
 
 IMPORTANT: write the entire report in {language}, including section titles.
+Do NOT include any "PARTICIPATION STATISTICS", "MODERATOR INTERVENTIONS",
+or "PARTICIPANT VOTES" section: those are shown as tables before your text.
 """
 
 

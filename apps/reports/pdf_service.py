@@ -109,8 +109,14 @@ class ReportPDFService:
         story.append(Paragraph(f"Data: {date_str} - Durata: {duration} minuti", body_style))
         story.append(Spacer(1, 12))
 
-        # Sezioni task-specifiche (per MM: risultato finale + tabella voti)
-        task_sections = task.build_report_pdf_sections(session, {}, task_styles)
+        # Sezioni task-specifiche (per MM: tabella voti; per NASA/LostAtSea:
+        # ranking finale + confronto esperto). Passare session.report_data al
+        # task: e' il dict completo gia' popolato in _collect_report_data
+        # (con has_ranking, items_detail, ranked_items, etc.). Pre-fix era un
+        # {} vuoto che faceva uscire sempre "Nessun ranking sottomesso".
+        task_sections = task.build_report_pdf_sections(
+            session, session.report_data or {}, task_styles
+        )
         story.extend(task_sections)
 
         # Sezione partecipazione (dal report_data salvato)
@@ -260,7 +266,8 @@ class ReportPDFService:
         elements.append(part_table)
         elements.append(Spacer(1, 8))
 
-        # Gini index
+        # Gini index — evidenziato in box dedicato (metrica chiave per
+        # l'analisi empirica: confronto moderato vs unmoderated)
         gini = data.get("gini_index", 0)
         if gini <= 0.2:
             gini_label = "molto equilibrata"
@@ -270,11 +277,35 @@ class ReportPDFService:
             gini_label = "moderatamente sbilanciata"
         else:
             gini_label = "sbilanciata"
-        elements.append(Paragraph(
-            f"Indice di Gini (tempo parlato): <b>{gini:.2f}</b> &mdash; "
-            f"partecipazione {gini_label}",
-            body_style,
-        ))
+
+        elements.append(Spacer(1, 4))
+        gini_style = ParagraphStyle(
+            "GiniHighlight",
+            parent=body_style,
+            fontSize=12,
+            leading=16,
+            textColor=colors.HexColor('#1B4F72'),
+            alignment=1,  # center
+        )
+        # Box visivo: tabella di una sola cella con sfondo colorato
+        gini_box_data = [[Paragraph(
+            f"<b>Indice di Gini (tempo parlato): {gini:.2f}</b><br/>"
+            f"Partecipazione <b>{gini_label}</b><br/>"
+            f"<font size=\"9\" color=\"#555555\">"
+            f"0 = perfetta uguaglianza, 1 = massima disuguaglianza"
+            f"</font>",
+            gini_style,
+        )]]
+        gini_box = Table(gini_box_data, colWidths=[14 * cm])
+        gini_box.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#EAF4FB')),
+            ('BOX', (0, 0), (-1, -1), 1.5, colors.HexColor('#2E86AB')),
+            ('TOPPADDING', (0, 0), (-1, -1), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+            ('LEFTPADDING', (0, 0), (-1, -1), 12),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+        ]))
+        elements.append(gini_box)
         elements.append(Spacer(1, 12))
 
         return elements
