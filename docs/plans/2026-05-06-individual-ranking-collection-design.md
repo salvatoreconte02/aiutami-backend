@@ -286,18 +286,92 @@ File `urls.py` di ciascuna app task (`apps/tasks/nasa_moon/urls.py`,
 
 **`LOBBY → INDIVIDUAL_RANKING`** (host preme "Avvia"):
 
-L'endpoint che oggi gestisce `LOBBY → ACTIVE` (vedi
-`apps/sessions/serializers.py:223`) consulta il task plugin:
-- se `task.requires_individual_ranking_phase()` è `True`:
-  - `state = INDIVIDUAL_RANKING`,
-  - `individual_ranking_started_at = now()`,
-  - WS push `STATE_CHANGED` con `state: "INDIVIDUAL_RANKING"` e
-    `phase_deadline_at`.
-- se `False`: comportamento attuale invariato (`LOBBY → ACTIVE`,
-  `started_at = now()`).
+La transizione tocca **due luoghi** del codice attuale:
+
+**(A) `Session.start()` in `apps/sessions/models.py:143-150`** — è il metodo
+che oggi imposta `state = ACTIVE` e `started_at = now()`. Va modificato così
+(pseudocodice):
+
+```python
+def start(self):
+    if self.state != SessionState.LOBBY:
+        raise ValidationError("La sessione non è in stato LOBBY.")
+    if self.participants_count < self.min_size:
+        raise ValidationError("Numero minimo di partecipanti non raggiunto.")
+
+    from apps.tasks.registry import get_task
+    task = get_task(self.context)
+
+    if task.requires_individual_ranking_phase():
+        self.state = SessionState.INDIVIDUAL_RANKING
+        self.individual_ranking_started_at = timezone.now()
+        # `started_at` NON viene impostato qui: resta NULL finché non si
+        # transita davvero ad ACTIVE in _finalize_individual_ranking_phase().
+    else:
+        self.state = SessionState.ACTIVE
+        self.started_at = timezone.now()
+```
+
+**(B) `SessionStartSerializer.save()` in `apps/sessions/serializers.py:218-230`** —
+è il caller. Oggi fa `session.save(update_fields=["state", "started_at"])`,
+e poi crea un `SessionEvent` di tipo `STARTED`. Entrambi vanno resi adattivi:
+
+```python
+@transaction.atomic
+def save(self, **kwargs):
+    session = self.instance
+    session.start()
+    session.full_clean()
+
+    if session.state == SessionState.INDIVIDUAL_RANKING:
+        session.save(update_fields=["state", "individual_ranking_started_at"])
+        # nuovo SessionEventType (vedi sotto) o STARTED riusato col payload diverso
+        SessionEvent.objects.create(
+            session=session,
+            type=SessionEventType.STARTED,  # decisione: vedi 7.1.bis
+            actor=self.context["request"].user,
+            payload={
+                "phase": "INDIVIDUAL_RANKING",
+                "individual_ranking_started_at": session.individual_ranking_started_at.isoformat(),
+                "phase_deadline_at": (
+                    session.individual_ranking_started_at
+                    + timedelta(seconds=task.individual_ranking_duration_seconds())
+                ).isoformat(),
+            },
+        )
+    else:
+        session.save(update_fields=["state", "started_at"])
+        SessionEvent.objects.create(
+            session=session,
+            type=SessionEventType.STARTED,
+            actor=self.context["request"].user,
+            payload={"started_at": session.started_at.isoformat()},
+        )
+    return session
+```
+
+Nota su `full_clean()`: oggi viene chiamato dopo `start()` per validare il
+modello. La migration deve aggiungere `INDIVIDUAL_RANKING` a
+`SessionState.choices` *prima* che il codice deployato chiami `full_clean()`,
+altrimenti la validazione fallirebbe per una sessione mai avviata.
+
+**WS push del cambio stato**: il broadcast WebSocket `STATE_CHANGED`
+(payload con `state: "INDIVIDUAL_RANKING"` e `phase_deadline_at`) avviene
+dove avviene oggi per `STARTED → ACTIVE` (vedi `apps/sessions/views.py`).
+Questo consumer va reso simmetrico: pusha sia per `INDIVIDUAL_RANKING` sia
+per `ACTIVE` quando la transizione avviene da `LOBBY`.
+
+### 7.1.bis. SessionEventType nuovo (decisione minore)
+
+Riusiamo `SessionEventType.STARTED` con payload differente, oppure aggiungiamo
+un nuovo type `INDIVIDUAL_RANKING_STARTED`? La spec opta per **riusare
+STARTED** con un campo `phase` nel payload — minimizza churn nello schema
+e rispetta il principio "STARTED = la sessione è uscita dalla lobby". Se in
+futuro emergesse necessità di filtri più granulari nei log, si può separare.
 
 **`INDIVIDUAL_RANKING → ACTIVE`**: solo via
-`_finalize_individual_ranking_phase()`.
+`_finalize_individual_ranking_phase()` (sezione 7.2). Non c'è nessun altro
+percorso valido per questa transizione.
 
 ### 7.2. `_finalize_individual_ranking_phase(session)` — pseudocodice
 
@@ -506,28 +580,48 @@ Target: i 237+ test esistenti restano verdi, +nuovi.
 
 ## 10. Deploy e rollout
 
-Sequenza standard backend → VPS (vedi `CLAUDE.md`):
+**Strategia: backend-first, frontend dopo, niente feature flag.**
 
-1. Migrations applicate al DB di prod (3 nuove migrations).
-2. Deploy backend.
-3. **Frontend**: lavoro parallelo nella repo separata. Il backend è
-   deploy-safe anche senza frontend nuovo: per le sessioni esistenti
-   `requires_individual_ranking_phase()` resta `False` (default), e per
-   NASA/LAS il frontend deve adattarsi al nuovo flow prima che il backend
-   abbia utenti reali — coordinare il merge dei due.
-4. Sessioni in corso al deploy: nessuna è in `INDIVIDUAL_RANKING` (stato
-   nuovo), nessun impatto. Le sessioni nuove iniziate dopo il deploy useranno
-   il nuovo flow.
+Sequenza:
 
-Migration backward compat: il campo `individual_ranking_started_at` ha
-`null=True`, sessioni precedenti non subiscono effetti. Lo stato
-`INDIVIDUAL_RANKING` è additivo all'enum.
+1. **Implementazione + test backend in locale** (modelli, endpoint, transizioni,
+   finalizzazione, report). Tutti i test verdi.
+2. **Brief al Claude del frontend**: al termine dell'implementazione backend,
+   produciamo un documento dettagliato (in questa stessa repo, ad esempio in
+   `docs/plans/2026-05-06-individual-ranking-frontend-brief.md` oppure
+   inviato direttamente nella sessione frontend) che descrive:
+   - nuovo stato `INDIVIDUAL_RANKING` e cosa significa per la UI;
+   - nuova pagina dedicata al ranking individuale (pubblica a *tutti* i
+     partecipanti, non solo l'host — divergenza significativa rispetto alla
+     pagina attuale del ranking di gruppo);
+   - meccanica autosave (PUT debounced) e submit esplicito;
+   - countdown UI degli 8 minuti calcolato da `phase_deadline_at`;
+   - chiamata a `POST /finalize-if-expired/` allo scadere del setTimeout;
+   - reazione al WS `STATE_CHANGED` con `state: ACTIVE` per navigare alla
+     pagina di discussione esistente.
+3. **Implementazione frontend** (lavoro parallelo nella repo separata).
+4. **Deploy coordinato**: prima frontend (carica artefatti statici, pronto
+   ma inattivo perché il backend ancora non emette `INDIVIDUAL_RANKING`),
+   poi backend con migrations. Da questo momento le sessioni NASA/LAS nuove
+   useranno il flow.
+5. Sessioni in corso al deploy backend: nessuna è in `INDIVIDUAL_RANKING`
+   (stato nuovo), zero impatto.
+
+Migration backward compat: `individual_ranking_started_at` ha `null=True`,
+sessioni precedenti non subiscono effetti. Lo stato `INDIVIDUAL_RANKING` è
+additivo all'enum.
+
+**Perché non una feature flag**: introduce complessità (env var, branching
+nel TaskDefinition, override_settings nei test) per coprire un caso di
+rollout che è naturalmente già a basso rischio (il VPS è uno solo, il
+deploy è manuale e coordinato, non c'è rolling/canary su più nodi).
+Si valuterà di aggiungerla solo se emerge un bisogno operativo concreto.
 
 ## 11. Rischi e mitigazioni
 
 | Rischio | Probabilità | Mitigazione |
 |---|---|---|
-| Frontend non aggiornato → sessioni NASA/LAS non avviabili | Alta a livello di processo | Coordinare deploy backend ↔ frontend, oppure feature flag `requires_individual_ranking_phase` controllata da env var per disabilitare temporaneamente |
+| Frontend non aggiornato al deploy backend → sessioni NASA/LAS non avviabili | Media (rollout manuale) | Sequenza esplicita in §10: deploy frontend prima, backend dopo. Eventualmente revert backend (`git revert` + redeploy) finché i due non sono allineati |
 | Tutti i partecipanti chiudono il browser → setTimeout perso → fase non finalizza | Bassa | Lazy check sui successivi PUT di altri (improbabile ma possibile in scenari estremi). In ultima istanza un endpoint admin manuale (out of scope ora) |
 | Race condition: due `POST /submit/` simultanei dell'ultimo partecipante | Bassa | `select_for_update` su `Session` nella finalize garantisce idempotenza |
 | Migration `INDIVIDUAL_RANKING` non in produzione ma codice deployato | Media | Standard ordering: `migrate` prima di restart del web |
