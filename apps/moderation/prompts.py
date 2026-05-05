@@ -102,7 +102,7 @@ Rules:
 - Otherwise: names in `over_participators` → consider monopolization, names in `under_participators` → consider exclusion.
 - Don't recompute from seconds yourself: trust the lists.
 
-**Cumulative cooldown:** if `last_interventions_by_reason` contains `monopolization` or `exclusion` with `minutes_ago < 4`, do NOT propose that reason. Wait for the cooldown to elapse and meanwhile evaluate other types of issue (off_topic, conflict, etc.).
+**Cumulative cooldown:** if `last_interventions_by_reason` contains `monopolization` or `exclusion` with `minutes_ago < 4`, do NOT propose that reason. Wait for the cooldown to elapse. Do not switch to a different reason just because this one is blocked: only propose another reason if the new `last_turn` independently and clearly contains it.
 {evaluation}
 {summary}
 
