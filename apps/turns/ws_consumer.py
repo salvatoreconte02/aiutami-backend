@@ -360,6 +360,16 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         # Verrà aperta DOPO la moderazione (in ai_end se l'AI parla,
         # oppure manualmente alla fine di questo metodo se l'AI non parla).
 
+        # GUARD mod-OFF: la sessione gira senza moderatore AI.
+        # Il turno umano è chiuso (step 1) e gli eventi sono già stati
+        # broadcast. Si esce qui senza entrare nella pipeline di
+        # moderazione (no LLM, no TTS, no static messages, no transition
+        # forzata da end_speak — la transizione a CONCLUSION arriva solo
+        # via trigger_loop o "tutti pronti").
+        # Vedi docs/plans/2026-05-07-no-moderator-mode-design.md §6.4(b).
+        if not await self._get_moderator_enabled(self.session_id):
+            return
+
         # 3) Entrata nella fase di moderazione: blocco nuovi turni umani
         await self._set_moderation_in_progress(True)
         logger.info(
@@ -841,6 +851,26 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         return Session.objects.values_list("state", flat=True).get(id=session_id)
 
+    @database_sync_to_async
+    def _get_moderator_enabled(self, session_id) -> bool:
+        """
+        Restituisce il flag moderator_enabled della sessione (default True
+        se non trovato o errore di lookup — coerente con backward-compat).
+
+        Usato dai 3 guard per decidere se saltare la pipeline LLM
+        (vedi docs/plans/2026-05-07-no-moderator-mode-design.md).
+        """
+        from apps.sessions.models import Session
+
+        try:
+            return Session.objects.values_list(
+                "moderator_enabled", flat=True
+            ).get(id=session_id)
+        except Exception:
+            # Sessione non trovata, ID non valido, errore DB: il default
+            # conservativo è True (moderatore attivo, flusso normale).
+            return True
+
     async def _ensure_session_active(self) -> bool:
         from apps.sessions.models import SessionState
 
@@ -1112,6 +1142,12 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     logger.warning("[TRIGGER_LOOP][GET_STATE_ERROR] session=%s error=%s", session_id, e)
                     continue
 
+                # Carica moderator_enabled una volta per tick: i guard mod-OFF
+                # sotto lo riusano. Default True se sessione non trovata
+                # (l'auto-exit per CONCLUSION/CLOSED al passo successivo
+                # gestisce comunque il caso di sessione cancellata).
+                moderator_enabled = await self._get_moderator_enabled(session_id)
+
                 # Self-exit on terminal session state. The loop is no
                 # longer cancelled by per-user disconnects (vedi
                 # `disconnect`); l'unico modo pulito di terminarlo è
@@ -1159,9 +1195,13 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     )
 
                 # Esegui/accoda i messaggi
-                # Se should_transition_to_conclusion, passa il flag ai messaggi accodati
+                # Se should_transition_to_conclusion, passa il flag ai messaggi accodati.
+                # GUARD mod-OFF: i static_messages sono contenuto del moderator
+                # service e vanno saltati interamente. La transizione di stato
+                # (sotto) viene comunque eseguita.
+                # Vedi docs/plans/2026-05-07-no-moderator-mode-design.md §6.4(c).
                 message_was_queued = False
-                if trig_result.static_messages_to_speak:
+                if trig_result.static_messages_to_speak and moderator_enabled:
                     message_was_queued = await self._execute_static_messages(
                         trig_result.static_messages_to_speak,
                         trigger_conclusion=trig_result.should_transition_to_conclusion,
@@ -1187,8 +1227,13 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                                 "payload": payload,
                             },
                         )
-                        # Esegue FORCED_CONCLUSION immediatamente
-                        await self._execute_forced_conclusion()
+                        # GUARD mod-OFF: il recap LLM finale viene saltato.
+                        # La transizione di stato sopra è comunque avvenuta —
+                        # il frontend riceve STATE_CHANGED e mostra la pagina
+                        # di conclusion senza voce del moderatore.
+                        # Vedi docs/plans/2026-05-07-no-moderator-mode-design.md §6.4(c).
+                        if moderator_enabled:
+                            await self._execute_forced_conclusion()
 
                 # Svuota coda messaggi pendenti se IDLE
                 await self._flush_pending_tts_messages()
@@ -1481,5 +1526,12 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                             "payload": payload,
                         },
                     )
-                    # Esegue FORCED_CONCLUSION per generare il riepilogo finale
-                    await self._execute_forced_conclusion()
+                    # GUARD mod-OFF (defensive): in mod OFF la coda è
+                    # naturalmente vuota perché l'orchestrator non genera
+                    # messaggi (vedi guard in _handle_end_speak e _trigger_loop).
+                    # Se per qualche motivo arrivasse comunque qui, saltiamo
+                    # il recap LLM finale.
+                    # Vedi docs/plans/2026-05-07-no-moderator-mode-design.md §6.4(d).
+                    if await self._get_moderator_enabled(self.session_id):
+                        # Esegue FORCED_CONCLUSION per generare il riepilogo finale
+                        await self._execute_forced_conclusion()

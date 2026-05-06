@@ -677,3 +677,137 @@ class SessionIndividualRankingStartedAtTests(TestCase):
             host=host,
         )
         self.assertIsNone(session.individual_ranking_started_at)
+
+
+class SessionModeratorEnabledModelTests(TestCase):
+    """Test del campo moderator_enabled (braccio di controllo del design
+    sperimentale within-subject: una sessione del gruppo gira con LLM
+    moderator ON, l'altra con LLM OFF — vedi
+    docs/plans/2026-05-07-no-moderator-mode-design.md)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="host", email="host@example.com", password="pass123"
+        )
+
+    def test_session_default_moderator_enabled_true(self):
+        """Una sessione creata senza il flag eredita default=True
+        (backward-compat con sessioni esistenti pre-feature)."""
+        session = Session.objects.create(
+            title="Test default flag",
+            context="murder_mystery",
+            min_size=3,
+            max_size=3,
+            host=self.user,
+        )
+        self.assertTrue(session.moderator_enabled)
+
+    def test_session_can_be_created_with_moderator_disabled(self):
+        """Il flag accetta False alla creazione."""
+        session = Session.objects.create(
+            title="Test mod off",
+            context="murder_mystery",
+            min_size=3,
+            max_size=3,
+            host=self.user,
+            moderator_enabled=False,
+        )
+        self.assertFalse(session.moderator_enabled)
+
+
+class SessionCreateSerializerModeratorEnabledTests(APITestCase):
+    """POST /api/sessions/ accetta moderator_enabled (write). Default True
+    se omesso. La validazione rifiuta valori non booleani."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="host", email="host@example.com", password="pass123"
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_post_without_flag_defaults_to_true(self):
+        """POST senza moderator_enabled → la sessione creata ha True."""
+        response = self.client.post(
+            "/api/sessions/",
+            {"title": "S1", "context": "murder_mystery"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        session = Session.objects.get(pk=response.data["id"])
+        self.assertTrue(session.moderator_enabled)
+
+    def test_post_with_flag_false_persists_false(self):
+        """POST con moderator_enabled=false → persistenza corretta."""
+        response = self.client.post(
+            "/api/sessions/",
+            {
+                "title": "S2",
+                "context": "murder_mystery",
+                "moderator_enabled": False,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        session = Session.objects.get(pk=response.data["id"])
+        self.assertFalse(session.moderator_enabled)
+
+    def test_post_with_flag_true_explicit_persists_true(self):
+        """POST con moderator_enabled=true esplicito → persistenza corretta."""
+        response = self.client.post(
+            "/api/sessions/",
+            {
+                "title": "S3",
+                "context": "murder_mystery",
+                "moderator_enabled": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        session = Session.objects.get(pk=response.data["id"])
+        self.assertTrue(session.moderator_enabled)
+
+
+class SessionDetailSerializerModeratorEnabledTests(TestCase):
+    """SessionDetailSerializer espone moderator_enabled come read.
+    Il payload è quello usato anche dal broadcast STATE_CHANGED, quindi
+    questi test coprono entrambi i percorsi (GET + WS)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="host", email="host@example.com", password="pass123"
+        )
+
+    def _serialize(self, session):
+        from apps.sessions.serializers import SessionDetailSerializer
+        from rest_framework.test import APIRequestFactory
+
+        factory = APIRequestFactory()
+        request = factory.get("/")
+        request.user = self.user
+        return SessionDetailSerializer(session, context={"request": request}).data
+
+    def test_detail_includes_moderator_enabled_true(self):
+        session = Session.objects.create(
+            title="S",
+            context="murder_mystery",
+            min_size=3,
+            max_size=3,
+            host=self.user,
+            moderator_enabled=True,
+        )
+        data = self._serialize(session)
+        self.assertIn("moderator_enabled", data)
+        self.assertTrue(data["moderator_enabled"])
+
+    def test_detail_includes_moderator_enabled_false(self):
+        session = Session.objects.create(
+            title="S",
+            context="murder_mystery",
+            min_size=3,
+            max_size=3,
+            host=self.user,
+            moderator_enabled=False,
+        )
+        data = self._serialize(session)
+        self.assertIn("moderator_enabled", data)
+        self.assertFalse(data["moderator_enabled"])

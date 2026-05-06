@@ -47,10 +47,12 @@ class SessionCreateSerializer(serializers.ModelSerializer):
             "max_size",
             "host",
             "participants_count",
+            "moderator_enabled",
         )
         extra_kwargs = {
             "min_size": {"required": False},
             "max_size": {"required": False},
+            "moderator_enabled": {"required": False},
         }
 
     def get_host(self, obj: Session):
@@ -164,6 +166,7 @@ class SessionDetailSerializer(serializers.ModelSerializer):
             "ended_at",
             "report_available",
             "votes_summary",
+            "moderator_enabled",
         )
         read_only_fields = fields
 

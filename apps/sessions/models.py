@@ -94,6 +94,17 @@ class Session(models.Model):
         help_text="Dati strutturati del report (partecipazione, Gini, etc.)"
     )
 
+    moderator_enabled = models.BooleanField(
+        default=True,
+        help_text="Se False, la sessione gira in modalità 'no moderator': "
+                  "intro pronunciata regolarmente, ma niente LLM moderation "
+                  "calls né interventi vocali del moderatore durante la "
+                  "discussione e la conclusion. Usato per il braccio di "
+                  "controllo del design sperimentale within-subject "
+                  "(NASA Moon + Lost at Sea con moderatore ON/OFF, "
+                  "ordine controbilanciato). Immutabile dopo creazione."
+    )
+
     class Meta:
         db_table = "session"
         indexes = [
