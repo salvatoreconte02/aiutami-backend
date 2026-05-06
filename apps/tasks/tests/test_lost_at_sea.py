@@ -504,3 +504,24 @@ class LostAtSeaRankingEndpointTests(TestCase):
         self.client.force_authenticate(user=self.outsider)
         resp = self.client.post(self._url("ranking/submit/"))
         self.assertEqual(resp.status_code, 403)
+
+
+# ---------------------------------------------------------------------------
+# Individual ranking phase
+# ---------------------------------------------------------------------------
+
+class LostAtSeaIndividualRankingHooksTests(SimpleTestCase):
+    def setUp(self) -> None:
+        self.task = get_task("lost_at_sea")
+
+    def test_requires_individual_ranking_phase(self) -> None:
+        self.assertTrue(self.task.requires_individual_ranking_phase())
+
+    def test_default_duration_seconds(self) -> None:
+        self.assertEqual(self.task.individual_ranking_duration_seconds(), 480)
+
+    def test_default_individual_ranking_is_las_items(self) -> None:
+        self.assertEqual(self.task.default_individual_ranking(), list(LOST_AT_SEA_ITEMS))
+
+    def test_expected_items_set_is_las_items_set(self) -> None:
+        self.assertEqual(self.task.expected_items_set(), set(LOST_AT_SEA_ITEMS))

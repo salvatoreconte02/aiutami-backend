@@ -1,6 +1,13 @@
 from django.urls import path
 
-from .views import LostAtSeaRankingView, LostAtSeaRankingStatusView, LostAtSeaRankingSubmitView
+from .views import (
+    LostAtSeaRankingView,
+    LostAtSeaRankingStatusView,
+    LostAtSeaRankingSubmitView,
+    LostAtSeaIndividualRankingView,
+    LostAtSeaIndividualRankingSubmitView,
+    LostAtSeaIndividualRankingFinalizeView,
+)
 
 urlpatterns = [
     path(
@@ -17,5 +24,20 @@ urlpatterns = [
         "sessions/<uuid:session_id>/ranking-status/",
         LostAtSeaRankingStatusView.as_view(),
         name="lost_at_sea_ranking_status",
+    ),
+    path(
+        "sessions/<uuid:session_id>/individual-ranking/",
+        LostAtSeaIndividualRankingView.as_view(),
+        name="lost_at_sea_individual_ranking",
+    ),
+    path(
+        "sessions/<uuid:session_id>/individual-ranking/submit/",
+        LostAtSeaIndividualRankingSubmitView.as_view(),
+        name="lost_at_sea_individual_ranking_submit",
+    ),
+    path(
+        "sessions/<uuid:session_id>/individual-ranking/finalize-if-expired/",
+        LostAtSeaIndividualRankingFinalizeView.as_view(),
+        name="lost_at_sea_individual_ranking_finalize",
     ),
 ]

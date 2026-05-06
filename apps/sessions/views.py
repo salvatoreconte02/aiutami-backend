@@ -101,9 +101,15 @@ class SessionStartView(APIView):
         serializer.is_valid(raise_exception=True)
         session = serializer.save()
 
-        TurnManager.set_introducing(session_id=str(session.id))
-        set_intro_pending(session_id=str(session.id))
-        mark_session_started(session_id=session.id)
+        # Side-effects specifici di ACTIVE: preparazione turn-taking + intro
+        # moderatore. NON eseguiti se la sessione è entrata in INDIVIDUAL_RANKING:
+        # quei side-effects verranno eseguiti dalla finalize della fase
+        # individuale (apps/tasks/individual_ranking.py) quando si transita
+        # finalmente ad ACTIVE.
+        if session.state == SessionState.ACTIVE:
+            TurnManager.set_introducing(session_id=str(session.id))
+            set_intro_pending(session_id=str(session.id))
+            mark_session_started(session_id=session.id)
 
         detail_data = SessionDetailSerializer(
             session,

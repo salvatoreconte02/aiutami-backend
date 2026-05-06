@@ -174,6 +174,22 @@ class NasaMoonTask(TaskDefinition):
     def build_report_fallback(self, data: Dict[str, Any]) -> list[str]:
         return nasa_report.build_nasa_report_fallback_lines(data)
 
+    # --- Individual ranking phase ---
+
+    def requires_individual_ranking_phase(self) -> bool:
+        return True
+
+    def default_individual_ranking(self) -> list[str]:
+        return list(NASA_ITEMS)
+
+    def expected_items_set(self) -> set[str]:
+        return set(NASA_ITEMS)
+
+    def individual_ranking_model(self) -> type:
+        # Import lazy: NasaIndividualRanking creato in Task 5
+        from .models import NasaIndividualRanking
+        return NasaIndividualRanking
+
     # --- Submission ---
 
     def all_submissions_received(self, session) -> bool:

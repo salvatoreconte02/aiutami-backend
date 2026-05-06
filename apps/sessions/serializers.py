@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any, Dict, Optional
 
 from django.db import transaction
@@ -59,8 +60,13 @@ class SessionCreateSerializer(serializers.ModelSerializer):
         user = self.context["request"].user
 
         # L'utente non può creare una sessione se è già membro
-        # di una sessione non-chiusa (LOBBY / ACTIVE / CONCLUSION).
-        active_states = {SessionState.LOBBY, SessionState.ACTIVE, SessionState.CONCLUSION}
+        # di una sessione non-chiusa (LOBBY / INDIVIDUAL_RANKING / ACTIVE / CONCLUSION).
+        active_states = {
+            SessionState.LOBBY,
+            SessionState.INDIVIDUAL_RANKING,
+            SessionState.ACTIVE,
+            SessionState.CONCLUSION,
+        }
 
         already_in_active = (
             Session.objects.filter(
@@ -220,13 +226,31 @@ class SessionStartSerializer(serializers.Serializer):
         session: Session = self.instance
         session.start()
         session.full_clean()
-        session.save(update_fields=["state", "started_at"])
-        SessionEvent.objects.create(
-            session=session,
-            type=SessionEventType.STARTED,
-            actor=self.context["request"].user,
-            payload={"started_at": timezone.now().isoformat()},
-        )
+
+        if session.state == SessionState.INDIVIDUAL_RANKING:
+            session.save(update_fields=["state", "individual_ranking_started_at"])
+            task = get_task(session.context)
+            deadline = session.individual_ranking_started_at + timedelta(
+                seconds=task.individual_ranking_duration_seconds()
+            )
+            SessionEvent.objects.create(
+                session=session,
+                type=SessionEventType.STARTED,
+                actor=self.context["request"].user,
+                payload={
+                    "phase": "INDIVIDUAL_RANKING",
+                    "individual_ranking_started_at": session.individual_ranking_started_at.isoformat(),
+                    "phase_deadline_at": deadline.isoformat(),
+                },
+            )
+        else:
+            session.save(update_fields=["state", "started_at"])
+            SessionEvent.objects.create(
+                session=session,
+                type=SessionEventType.STARTED,
+                actor=self.context["request"].user,
+                payload={"started_at": timezone.now().isoformat()},
+            )
         return session
 
 
@@ -281,11 +305,12 @@ class JoinByTokenSerializer(serializers.Serializer):
             raise serializers.ValidationError("Utente già parte della sessione.")
 
         # 3)l’utente non può essere in un’altra sessione non chiusa
-        # (LOBBY, ACTIVE, CONCLUSION)
+        # (LOBBY, INDIVIDUAL_RANKING, ACTIVE, CONCLUSION)
         if SessionParticipant.objects.filter(
             user=user,
             session__state__in=[
                 SessionState.LOBBY,
+                SessionState.INDIVIDUAL_RANKING,
                 SessionState.ACTIVE,
                 SessionState.CONCLUSION,
             ],

@@ -174,6 +174,22 @@ class LostAtSeaTask(TaskDefinition):
     def build_report_fallback(self, data: Dict[str, Any]) -> list[str]:
         return sea_report.build_lost_at_sea_report_fallback_lines(data)
 
+    # --- Individual ranking phase ---
+
+    def requires_individual_ranking_phase(self) -> bool:
+        return True
+
+    def default_individual_ranking(self) -> list[str]:
+        return list(LOST_AT_SEA_ITEMS)
+
+    def expected_items_set(self) -> set[str]:
+        return set(LOST_AT_SEA_ITEMS)
+
+    def individual_ranking_model(self) -> type:
+        # Import lazy: LostAtSeaIndividualRanking creato in Task 6
+        from .models import LostAtSeaIndividualRanking
+        return LostAtSeaIndividualRanking
+
     # --- Submission ---
 
     def all_submissions_received(self, session) -> bool:

@@ -1,6 +1,13 @@
 from django.urls import path
 
-from .views import NasaRankingView, NasaRankingStatusView, NasaRankingSubmitView
+from .views import (
+    NasaRankingView,
+    NasaRankingStatusView,
+    NasaRankingSubmitView,
+    NasaIndividualRankingView,
+    NasaIndividualRankingSubmitView,
+    NasaIndividualRankingFinalizeView,
+)
 
 urlpatterns = [
     path(
@@ -17,5 +24,20 @@ urlpatterns = [
         "sessions/<uuid:session_id>/ranking-status/",
         NasaRankingStatusView.as_view(),
         name="nasa_ranking_status",
+    ),
+    path(
+        "sessions/<uuid:session_id>/individual-ranking/",
+        NasaIndividualRankingView.as_view(),
+        name="nasa_individual_ranking",
+    ),
+    path(
+        "sessions/<uuid:session_id>/individual-ranking/submit/",
+        NasaIndividualRankingSubmitView.as_view(),
+        name="nasa_individual_ranking_submit",
+    ),
+    path(
+        "sessions/<uuid:session_id>/individual-ranking/finalize-if-expired/",
+        NasaIndividualRankingFinalizeView.as_view(),
+        name="nasa_individual_ranking_finalize",
     ),
 ]

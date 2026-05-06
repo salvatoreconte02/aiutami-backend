@@ -1,4 +1,4 @@
-from django.test import TestCase
+from django.test import TestCase, SimpleTestCase
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
 
@@ -655,3 +655,25 @@ class VotingFlowIntegrationTests(APITestCase):
         self.assertTrue(response.data['report_available'])
         self.assertIsNotNone(response.data['votes_summary'])
         self.assertEqual(response.data['votes_summary']['success_rate'], 66)
+
+
+class SessionStateEnumIndividualRankingTests(SimpleTestCase):
+    def test_individual_ranking_state_exists(self) -> None:
+        self.assertEqual(SessionState.INDIVIDUAL_RANKING, "INDIVIDUAL_RANKING")
+
+    def test_individual_ranking_in_choices(self) -> None:
+        labels = dict(SessionState.choices)
+        self.assertIn("INDIVIDUAL_RANKING", labels)
+
+
+class SessionIndividualRankingStartedAtTests(TestCase):
+    def test_field_exists_and_nullable(self) -> None:
+        host = User.objects.create_user(username="host_t3", password="x")
+        session = Session.objects.create(
+            title="T",
+            context="generic",
+            min_size=2,
+            max_size=4,
+            host=host,
+        )
+        self.assertIsNone(session.individual_ranking_started_at)

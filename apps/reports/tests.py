@@ -195,3 +195,128 @@ class ReportDownloadEndpointTests(APITestCase):
         """Unauthenticated request returns 401."""
         response = self.client.get(f"/api/sessions/{self.session.id}/report/")
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class NasaReportContextSynergyTests(TestCase):
+    def test_synergy_gain_computed_when_individual_rankings_exist(self) -> None:
+        from apps.tasks.nasa_moon.models import NasaRanking, NasaIndividualRanking
+        from apps.tasks.nasa_moon.report import collect_nasa_report_context
+        from apps.tasks.nasa_moon.config import NASA_ITEMS, compute_error_score
+
+        # Setup sessione + ranking di gruppo
+        host = User.objects.create_user(username="rep_h", password="x")
+        session = Session.objects.create(
+            title="T", context="nasa_moon_survival",
+            min_size=3, max_size=6, host=host,
+            state=SessionState.CLOSED,
+        )
+        p_host = SessionParticipant.objects.create(
+            session=session, user=host, role=ParticipantRole.HOST,
+        )
+        # group ranking molto buono (uguale all'expert ranking, error 0)
+        from apps.tasks.nasa_moon.config import EXPERT_RANKING
+        sorted_items = sorted(EXPERT_RANKING.keys(), key=lambda k: EXPERT_RANKING[k])
+        NasaRanking.objects.create(
+            session=session, submitted_by=p_host,
+            ranked_items=sorted_items, is_final=True,
+        )
+        # 3 ranking individuali con errori vari (tutti > 0 cosi' min > group_error=0)
+        # Generiamo varianti con piccoli swap rispetto al sorted_items.
+        swapped_a = list(sorted_items)
+        swapped_a[0], swapped_a[1] = swapped_a[1], swapped_a[0]  # swap 2 prime
+        for i, items in enumerate([
+            list(NASA_ITEMS),  # default order: error elevato
+            swapped_a,         # piccolo errore (>0)
+            list(reversed(sorted_items)),  # peggio: error massimo
+        ]):
+            u = User.objects.create_user(username=f"rep_p_{i}", password="x")
+            p = SessionParticipant.objects.create(session=session, user=u)
+            NasaIndividualRanking.objects.create(
+                session=session, participant=p,
+                ranked_items=items, is_submitted=True,
+            )
+
+        ctx = collect_nasa_report_context(session)
+        self.assertIsNotNone(ctx["synergy_gain"])
+        self.assertIsNotNone(ctx["mean_individual_error"])
+        self.assertEqual(ctx["individual_count"], 3)
+        # group_error = 0, mean_individual_error > 0 -> synergy_gain > 0
+        self.assertGreater(ctx["synergy_gain"], 0)
+        self.assertTrue(ctx["assembly_bonus"])  # group < min(individual)
+
+    def test_legacy_session_no_individual_rankings_keeps_none(self) -> None:
+        from apps.tasks.nasa_moon.report import collect_nasa_report_context
+        # Sessione senza individual rankings (legacy o no fase eseguita)
+        host = User.objects.create_user(username="rep_legacy_h", password="x")
+        session = Session.objects.create(
+            title="T", context="nasa_moon_survival",
+            min_size=3, max_size=6, host=host, state=SessionState.CLOSED,
+        )
+        ctx = collect_nasa_report_context(session)
+        self.assertIsNone(ctx["synergy_gain"])
+        self.assertIsNone(ctx["individual_errors"])
+        self.assertIsNone(ctx["assembly_bonus"])
+
+
+class LostAtSeaReportContextSynergyTests(TestCase):
+    def test_synergy_gain_computed_when_individual_rankings_exist(self) -> None:
+        from apps.tasks.lost_at_sea.models import LostAtSeaRanking, LostAtSeaIndividualRanking
+        from apps.tasks.lost_at_sea.report import collect_lost_at_sea_report_context
+
+        # Setup sessione + ranking di gruppo
+        host = User.objects.create_user(username="rep_las_h", password="x")
+        session = Session.objects.create(
+            title="T", context="lost_at_sea",
+            min_size=3, max_size=6, host=host,
+            state=SessionState.CLOSED,
+        )
+        p_host = SessionParticipant.objects.create(
+            session=session, user=host, role=ParticipantRole.HOST,
+        )
+        # group ranking molto buono (uguale all'expert ranking, error 0)
+        from apps.tasks.lost_at_sea.config import EXPERT_RANKING
+        sorted_items = sorted(EXPERT_RANKING.keys(), key=lambda k: EXPERT_RANKING[k])
+        LostAtSeaRanking.objects.create(
+            session=session, submitted_by=p_host,
+            ranked_items=sorted_items, is_final=True,
+        )
+        # 3 ranking individuali con errori vari (tutti > 0 cosi' min > group_error=0)
+        # Nota: LOST_AT_SEA_ITEMS e' gia' in expert order (error 0), quindi
+        # non lo usiamo come ranking individuale: serve sempre un piccolo swap
+        # per avere min(individual_errors) > 0 e assembly_bonus = True.
+        swapped_a = list(sorted_items)
+        swapped_a[0], swapped_a[1] = swapped_a[1], swapped_a[0]  # swap 2 prime
+        swapped_b = list(sorted_items)
+        swapped_b[5], swapped_b[6] = swapped_b[6], swapped_b[5]  # swap a meta'
+        for i, items in enumerate([
+            swapped_a,                       # piccolo errore (=2)
+            swapped_b,                       # piccolo errore (=2)
+            list(reversed(sorted_items)),    # peggio: error massimo
+        ]):
+            u = User.objects.create_user(username=f"rep_las_p_{i}", password="x")
+            p = SessionParticipant.objects.create(session=session, user=u)
+            LostAtSeaIndividualRanking.objects.create(
+                session=session, participant=p,
+                ranked_items=items, is_submitted=True,
+            )
+
+        ctx = collect_lost_at_sea_report_context(session)
+        self.assertIsNotNone(ctx["synergy_gain"])
+        self.assertIsNotNone(ctx["mean_individual_error"])
+        self.assertEqual(ctx["individual_count"], 3)
+        # group_error = 0, mean_individual_error > 0 -> synergy_gain > 0
+        self.assertGreater(ctx["synergy_gain"], 0)
+        self.assertTrue(ctx["assembly_bonus"])  # group < min(individual)
+
+    def test_legacy_session_no_individual_rankings_keeps_none(self) -> None:
+        from apps.tasks.lost_at_sea.report import collect_lost_at_sea_report_context
+        # Sessione senza individual rankings (legacy o no fase eseguita)
+        host = User.objects.create_user(username="rep_las_legacy_h", password="x")
+        session = Session.objects.create(
+            title="T", context="lost_at_sea",
+            min_size=3, max_size=6, host=host, state=SessionState.CLOSED,
+        )
+        ctx = collect_lost_at_sea_report_context(session)
+        self.assertIsNone(ctx["synergy_gain"])
+        self.assertIsNone(ctx["individual_errors"])
+        self.assertIsNone(ctx["assembly_bonus"])

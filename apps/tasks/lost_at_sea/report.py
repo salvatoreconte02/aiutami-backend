@@ -74,14 +74,20 @@ REPORT_LLM_PROMPT = build_lost_at_sea_report_llm_prompt("Italian")
 
 
 def collect_lost_at_sea_report_context(session) -> Dict[str, Any]:
-    """
-    Raccoglie ranking di gruppo e calcola error score per il report.
+    """Raccoglie ranking di gruppo + ranking individuali per il report.
 
-    `synergy_gain` e `assembly_bonus` sono predisposti come None in attesa
-    del flow di submission individuale. Vedi nasa_moon/report.py per il
-    pattern e dettagli sulle metriche empiriche.
+    Calcola synergy_gain e assembly_bonus se ci sono ranking individuali
+    submitted; altrimenti i campi restano None (sessioni legacy).
     """
-    from .models import LostAtSeaRanking
+    from .models import LostAtSeaRanking, LostAtSeaIndividualRanking
+
+    base: Dict[str, Any] = {
+        "synergy_gain": None,
+        "individual_errors": None,
+        "assembly_bonus": None,
+        "mean_individual_error": None,
+        "individual_count": 0,
+    }
 
     try:
         ranking = LostAtSeaRanking.objects.get(session=session)
@@ -100,23 +106,33 @@ def collect_lost_at_sea_report_context(session) -> Dict[str, Any]:
                 "diff": diff,
             })
 
-        return {
+        base.update({
             "ranked_items": ranked_items,
             "error_score": error_score,
             "max_error_score": MAX_ERROR_SCORE,
             "items_detail": items_detail,
             "has_ranking": True,
-            "synergy_gain": None,
-            "individual_errors": None,
-            "assembly_bonus": None,
-        }
+        })
     except LostAtSeaRanking.DoesNotExist:
-        return {
-            "has_ranking": False,
-            "synergy_gain": None,
-            "individual_errors": None,
-            "assembly_bonus": None,
-        }
+        base.update({"has_ranking": False})
+
+    # Synergy gain calc (solo se ci sono ranking individuali submitted)
+    individual_rankings = list(
+        LostAtSeaIndividualRanking.objects.filter(session=session, is_submitted=True)
+    )
+    if individual_rankings and base.get("has_ranking"):
+        individual_errors = [
+            compute_error_score(r.ranked_items) for r in individual_rankings
+        ]
+        group_error = base["error_score"]
+        mean_individual_error = sum(individual_errors) / len(individual_errors)
+        base["individual_errors"] = individual_errors
+        base["mean_individual_error"] = mean_individual_error
+        base["synergy_gain"] = mean_individual_error - group_error
+        base["assembly_bonus"] = group_error < min(individual_errors)
+        base["individual_count"] = len(individual_errors)
+
+    return base
 
 
 def build_lost_at_sea_pdf_sections(session, context: Dict[str, Any], styles: Dict[str, Any]) -> list:
@@ -192,35 +208,46 @@ def build_lost_at_sea_pdf_sections(session, context: Dict[str, Any], styles: Dic
         body_style,
     ))
 
+    # Synergy gain
     synergy = context.get("synergy_gain")
+    mean_ind = context.get("mean_individual_error")
     if synergy is None:
         elements.append(Paragraph(
-            "Synergy gain: <i>N/A &mdash; richiede la fase di ranking individuale "
-            "pre-discussione (in arrivo nella prossima iterazione).</i>",
+            "Synergy gain: <i>N/A &mdash; nessun ranking individuale registrato.</i>",
             body_style,
         ))
     else:
         sign = "+" if synergy >= 0 else ""
+        comment = (
+            "il gruppo ha migliorato rispetto alla media individuale"
+            if synergy > 0
+            else "il gruppo ha peggiorato rispetto alla media individuale (process loss)"
+            if synergy < 0
+            else "il gruppo ha eguagliato la media individuale"
+        )
         elements.append(Paragraph(
             f"Synergy gain: <b>{sign}{synergy:.1f}</b> "
-            f"(differenza tra error medio individuale e error di gruppo, "
-            f"piu' alto = il gruppo migliora di piu' rispetto agli individui)",
+            f"(media individuale {mean_ind:.1f} - error gruppo {error_score} — {comment})",
             body_style,
         ))
 
+    # Assembly bonus
     assembly = context.get("assembly_bonus")
-    if assembly is True:
+    individual_errors = context.get("individual_errors")
+    if assembly is True and individual_errors:
         elements.append(Paragraph(
-            "Assembly bonus: <b>SI</b> &mdash; il gruppo ha fatto meglio "
-            "del miglior partecipante individuale.",
+            f"Assembly bonus: <b>SI</b> &mdash; il gruppo ha fatto meglio "
+            f"del miglior individuo: {error_score} vs {min(individual_errors)}.",
             body_style,
         ))
-    elif assembly is False:
+    elif assembly is False and individual_errors:
         elements.append(Paragraph(
-            "Assembly bonus: <b>NO</b> &mdash; almeno un partecipante "
-            "individualmente ha fatto meglio del gruppo.",
+            f"Assembly bonus: <b>NO</b> &mdash; almeno un partecipante "
+            f"individualmente ha fatto meglio del gruppo "
+            f"({min(individual_errors)} vs {error_score}).",
             body_style,
         ))
+    # Se None, non mostrare nulla
     elements.append(Spacer(1, 12))
 
     # === CONFRONTO CON RANKING ESPERTO ===

@@ -10,6 +10,7 @@ from django.utils import timezone
 
 class SessionState(models.TextChoices):
     LOBBY = "LOBBY", "Lobby"
+    INDIVIDUAL_RANKING = "INDIVIDUAL_RANKING", "Individual ranking"
     ACTIVE = "ACTIVE", "Active"
     CONCLUSION = "CONCLUSION", "Conclusion"
     CLOSED = "CLOSED", "Closed"
@@ -51,7 +52,7 @@ class Session(models.Model):
     # in apps/tasks/registry.py (es. "murder_mystery"). Validato in clean().
     context = models.CharField(max_length=64)
     state = models.CharField(
-        max_length=16, choices=SessionState.choices, default=SessionState.LOBBY
+        max_length=32, choices=SessionState.choices, default=SessionState.LOBBY
     )
 
     # Capienza
@@ -68,6 +69,12 @@ class Session(models.Model):
     # Timeline
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
+    individual_ranking_started_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp di inizio fase INDIVIDUAL_RANKING. NULL per "
+                  "sessioni senza questa fase. Usato per calcolo timer 8 min.",
+    )
     conclusion_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
     final_summary = models.TextField(
@@ -141,13 +148,23 @@ class Session(models.Model):
         return self.participants.count()
 
     def start(self):
-        # Transizione LOBBY -> ACTIVE (minimo partecipanti raggiunto)
+        # Transizione LOBBY -> INDIVIDUAL_RANKING (per task survival) o ACTIVE.
         if self.state != SessionState.LOBBY:
             raise ValidationError("La sessione non è in stato LOBBY.")
         if self.participants_count < self.min_size:
             raise ValidationError("Numero minimo di partecipanti non raggiunto.")
-        self.state = SessionState.ACTIVE
-        self.started_at = timezone.now()
+
+        from apps.tasks.registry import get_task
+        task = get_task(self.context)
+
+        if task.requires_individual_ranking_phase():
+            self.state = SessionState.INDIVIDUAL_RANKING
+            self.individual_ranking_started_at = timezone.now()
+            # started_at resta NULL: verrà impostato quando si transita ad ACTIVE
+            # in _finalize_individual_ranking_phase()
+        else:
+            self.state = SessionState.ACTIVE
+            self.started_at = timezone.now()
 
     # Le transizioni successive (ACTIVE -> CONCLUSION -> CLOSED) sono automatiche
     # e saranno gestite dal servizio applicativo (non nel model).

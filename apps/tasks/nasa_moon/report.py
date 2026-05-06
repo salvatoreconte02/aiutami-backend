@@ -38,10 +38,8 @@ Generate exactly these four sections (use these titles, translated into {languag
 RANKING RESULT
 - Briefly state the group error score and the qualitative evaluation
   (excellent / good / average / poor). One or two sentences.
-- If `synergy_gain` is provided in the input data, comment whether the
-  group's discussion improved over the average individual baseline.
-  If `synergy_gain` is null, do not mention it (the experimental flow
-  is not fully active yet).
+- If `synergy_gain` is provided, comment whether the group's discussion
+  improved over the average individual baseline. If null, do not mention it.
 
 COMPARISON WITH EXPERTS
 - Highlight 2-3 items the group got close to the expert ranking, with the
@@ -79,23 +77,26 @@ REPORT_LLM_PROMPT = build_nasa_report_llm_prompt("Italian")
 
 
 def collect_nasa_report_context(session) -> Dict[str, Any]:
-    """
-    Raccoglie ranking di gruppo e calcola error score per il report.
+    """Raccoglie ranking di gruppo + ranking individuali per il report.
 
-    `synergy_gain` e `assembly_bonus` sono predisposti come None in attesa
-    del flow di submission individuale (LOBBY → INDIVIDUAL_RANKING →
-    ACTIVE → ...). Quando quel flow sara' attivo, qui calcoleremo:
-      - synergy_gain = mean(individual_error) - group_error
-      - assembly_bonus = group_error < min(individual_errors)
+    Calcola synergy_gain e assembly_bonus se ci sono ranking individuali
+    submitted; altrimenti i campi restano None (sessioni legacy).
     """
-    from .models import NasaRanking
+    from .models import NasaRanking, NasaIndividualRanking
+
+    base: Dict[str, Any] = {
+        "synergy_gain": None,
+        "individual_errors": None,
+        "assembly_bonus": None,
+        "mean_individual_error": None,
+        "individual_count": 0,
+    }
 
     try:
         ranking = NasaRanking.objects.get(session=session)
         ranked_items = ranking.ranked_items
         error_score = compute_error_score(ranked_items)
 
-        # Dettaglio per-item
         items_detail = []
         for i, item in enumerate(ranked_items):
             team_rank = i + 1
@@ -108,25 +109,33 @@ def collect_nasa_report_context(session) -> Dict[str, Any]:
                 "diff": diff,
             })
 
-        return {
+        base.update({
             "ranked_items": ranked_items,
             "error_score": error_score,
             "max_error_score": MAX_ERROR_SCORE,
             "items_detail": items_detail,
             "has_ranking": True,
-            # Predisposizione metriche empiriche (popolate quando avremo
-            # il flow di ranking individuale pre-discussione)
-            "synergy_gain": None,
-            "individual_errors": None,  # list[float] | None
-            "assembly_bonus": None,     # bool | None
-        }
+        })
     except NasaRanking.DoesNotExist:
-        return {
-            "has_ranking": False,
-            "synergy_gain": None,
-            "individual_errors": None,
-            "assembly_bonus": None,
-        }
+        base.update({"has_ranking": False})
+
+    # Synergy gain calc (solo se ci sono ranking individuali submitted)
+    individual_rankings = list(
+        NasaIndividualRanking.objects.filter(session=session, is_submitted=True)
+    )
+    if individual_rankings and base.get("has_ranking"):
+        individual_errors = [
+            compute_error_score(r.ranked_items) for r in individual_rankings
+        ]
+        group_error = base["error_score"]
+        mean_individual_error = sum(individual_errors) / len(individual_errors)
+        base["individual_errors"] = individual_errors
+        base["mean_individual_error"] = mean_individual_error
+        base["synergy_gain"] = mean_individual_error - group_error
+        base["assembly_bonus"] = group_error < min(individual_errors)
+        base["individual_count"] = len(individual_errors)
+
+    return base
 
 
 def build_nasa_pdf_sections(session, context: Dict[str, Any], styles: Dict[str, Any]) -> list:
@@ -202,38 +211,46 @@ def build_nasa_pdf_sections(session, context: Dict[str, Any], styles: Dict[str, 
         body_style,
     ))
 
-    # Synergy gain (placeholder finche non c'e' il flow di ranking individuale)
+    # Synergy gain
     synergy = context.get("synergy_gain")
+    mean_ind = context.get("mean_individual_error")
     if synergy is None:
         elements.append(Paragraph(
-            "Synergy gain: <i>N/A &mdash; richiede la fase di ranking individuale "
-            "pre-discussione (in arrivo nella prossima iterazione).</i>",
+            "Synergy gain: <i>N/A &mdash; nessun ranking individuale registrato.</i>",
             body_style,
         ))
     else:
         sign = "+" if synergy >= 0 else ""
+        comment = (
+            "il gruppo ha migliorato rispetto alla media individuale"
+            if synergy > 0
+            else "il gruppo ha peggiorato rispetto alla media individuale (process loss)"
+            if synergy < 0
+            else "il gruppo ha eguagliato la media individuale"
+        )
         elements.append(Paragraph(
             f"Synergy gain: <b>{sign}{synergy:.1f}</b> "
-            f"(differenza tra error medio individuale e error di gruppo, "
-            f"piu' alto = il gruppo migliora di piu' rispetto agli individui)",
+            f"(media individuale {mean_ind:.1f} - error gruppo {error_score} — {comment})",
             body_style,
         ))
 
-    # Assembly bonus (placeholder)
+    # Assembly bonus
     assembly = context.get("assembly_bonus")
-    if assembly is True:
+    individual_errors = context.get("individual_errors")
+    if assembly is True and individual_errors:
         elements.append(Paragraph(
-            "Assembly bonus: <b>SI</b> &mdash; il gruppo ha fatto meglio "
-            "del miglior partecipante individuale.",
+            f"Assembly bonus: <b>SI</b> &mdash; il gruppo ha fatto meglio "
+            f"del miglior individuo: {error_score} vs {min(individual_errors)}.",
             body_style,
         ))
-    elif assembly is False:
+    elif assembly is False and individual_errors:
         elements.append(Paragraph(
-            "Assembly bonus: <b>NO</b> &mdash; almeno un partecipante "
-            "individualmente ha fatto meglio del gruppo.",
+            f"Assembly bonus: <b>NO</b> &mdash; almeno un partecipante "
+            f"individualmente ha fatto meglio del gruppo "
+            f"({min(individual_errors)} vs {error_score}).",
             body_style,
         ))
-    # Se None, non mostriamo nulla (predisposto per futuro)
+    # Se None, non mostrare nulla
     elements.append(Spacer(1, 12))
 
     # === CONFRONTO CON RANKING ESPERTO ===

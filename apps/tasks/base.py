@@ -265,5 +265,39 @@ class TaskDefinition(ABC):
         """
         return None
 
+    # --- Fase pre-discussione: ranking individuale ---
+    # I task survival (NASA Moon, Lost at Sea) richiedono che ogni
+    # partecipante sottometta un ranking individuale prima della discussione
+    # di gruppo, per il calcolo del synergy_gain (Hall 1962, Hall & Watson 1970).
+    # Default: nessuna fase pre-discussione (generic, murder_mystery).
+
+    def requires_individual_ranking_phase(self) -> bool:
+        """True se il task richiede una fase INDIVIDUAL_RANKING tra LOBBY
+        e ACTIVE. Default False."""
+        return False
+
+    def individual_ranking_duration_seconds(self) -> int:
+        """Durata massima della fase INDIVIDUAL_RANKING in secondi. Default
+        480 (8 min). Significativo solo se requires_individual_ranking_phase
+        è True."""
+        return 480
+
+    def individual_ranking_model(self) -> type | None:
+        """Classe del modello Django che persiste i ranking individuali per
+        questo task. Default None. I task con fase pre-discussione devono
+        ritornare la classe concreta (es. NasaIndividualRanking)."""
+        return None
+
+    def default_individual_ranking(self) -> list[str]:
+        """Ranking di default (lista ordinata di item) usato per partecipanti
+        che non hanno mai toccato la pagina alla scadenza del timer.
+        Default lista vuota."""
+        return []
+
+    def expected_items_set(self) -> set[str]:
+        """Set di item validi attesi nel ranking individuale (validazione PUT).
+        Default set vuoto."""
+        return set()
+
     def __repr__(self) -> str:
         return f"<TaskDefinition key={self.key!r}>"
