@@ -14,6 +14,7 @@ from aiortc import (
     RTCConfiguration,
     RTCIceServer,
 )
+from aiortc.mediastreams import MediaStreamError
 from aiortc.sdp import candidate_from_sdp
 
 from av.audio.resampler import AudioResampler
@@ -340,6 +341,17 @@ class WebRTCConsumer(AsyncJsonWebsocketConsumer):
 
                 except asyncio.CancelledError:
                     logger.debug("[WebRTC] Reader cancelled user=%s session=%s", self.user.id, self.session_id)
+                except MediaStreamError:
+                    # Disconnect del peer remoto: il track è stato chiuso
+                    # (browser tab close, network drop, ecc.). Non è un
+                    # errore — la disconnessione vera e propria viene
+                    # gestita da `connectionstatechange`. Logghiamo INFO
+                    # e usciamo senza propagare per non contribuire al
+                    # cascade di cleanup.
+                    logger.info(
+                        "[WebRTC] Reader: track closed (MediaStreamError) user=%s session=%s",
+                        self.user.id, self.session_id,
+                    )
                 except Exception:
                     logger.exception("[WebRTC] Reader error user=%s session=%s", self.user.id, self.session_id)
                 finally:

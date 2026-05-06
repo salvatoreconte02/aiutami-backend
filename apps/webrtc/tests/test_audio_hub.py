@@ -179,3 +179,126 @@ class TestAudioHubDrain(unittest.TestCase):
             mock_track_2.wait_until_drained.assert_awaited_once_with(timeout=5.0)
 
         asyncio.get_event_loop().run_until_complete(_run())
+
+
+class AudioHubDictMutationTests(unittest.TestCase):
+    """
+    Regression: a peer disconnect (which removes its entry from hub.peers)
+    must not break ongoing iteration over self.peers in the broadcast methods.
+    Pilot logs showed that during a moderator TTS, when one participant
+    disconnected mid-broadcast the loop raised
+    `RuntimeError: dictionary changed size during iteration` and the
+    remaining listeners stopped hearing the moderator.
+    """
+
+    def test_inject_ai_audio_resilient_to_unregister_during_iteration(self) -> None:
+        hub = SessionAudioHub(session_id="test-session")
+        peer1_track = MagicMock()
+        peer2_track = MagicMock()
+        peer3_track = MagicMock()
+
+        hub.register_peer(1, peer1_track)
+        hub.register_peer(2, peer2_track)
+        hub.register_peer(3, peer3_track)
+        hub.current_speaker_user_id = AI_MODERATOR_ID
+
+        # Peer 1's enqueue triggers peer 2 unregister mid-loop
+        peer1_track.enqueue.side_effect = lambda **_: hub.unregister_peer(2)
+
+        hub.inject_ai_audio(b"\x00" * 320, samples=160, sample_rate=24000)
+
+        # Peer 1 received (it was first in iteration), peer 3 should still receive
+        # (snapshot ensures iteration completes even with concurrent mutation).
+        peer1_track.enqueue.assert_called_once()
+        peer3_track.enqueue.assert_called_once()
+
+    def test_inject_ai_audio_one_peer_exception_does_not_affect_others(self) -> None:
+        hub = SessionAudioHub(session_id="test-session")
+        peer1_track = MagicMock()
+        peer1_track.enqueue.side_effect = RuntimeError("simulated peer 1 failure")
+        peer2_track = MagicMock()
+        peer3_track = MagicMock()
+
+        hub.register_peer(1, peer1_track)
+        hub.register_peer(2, peer2_track)
+        hub.register_peer(3, peer3_track)
+        hub.current_speaker_user_id = AI_MODERATOR_ID
+
+        hub.inject_ai_audio(b"\x00" * 320, samples=160, sample_rate=24000)
+
+        peer1_track.enqueue.assert_called_once()
+        peer2_track.enqueue.assert_called_once()
+        peer3_track.enqueue.assert_called_once()
+
+    def test_forward_pcm_from_speaker_resilient_to_unregister(self) -> None:
+        hub = SessionAudioHub(session_id="test-session")
+        speaker_track = MagicMock()
+        listener1_track = MagicMock()
+        listener2_track = MagicMock()
+
+        hub.register_peer(10, speaker_track)
+        hub.register_peer(11, listener1_track)
+        hub.register_peer(12, listener2_track)
+        hub.set_speaker(10)
+
+        # Listener1 enqueue removes listener2 mid-loop
+        listener1_track.enqueue.side_effect = lambda **_: hub.unregister_peer(12)
+
+        hub.forward_pcm_from_speaker(
+            from_user_id=10, pcm=b"\x00" * 320, samples=160, sample_rate=24000,
+        )
+
+        # Speaker is excluded (no echo)
+        speaker_track.enqueue.assert_not_called()
+        listener1_track.enqueue.assert_called_once()
+        # Iteration must complete without RuntimeError
+
+    def test_forward_pcm_from_speaker_one_listener_exception_isolated(self) -> None:
+        hub = SessionAudioHub(session_id="test-session")
+        speaker_track = MagicMock()
+        listener1_track = MagicMock()
+        listener1_track.enqueue.side_effect = RuntimeError("listener 1 boom")
+        listener2_track = MagicMock()
+
+        hub.register_peer(10, speaker_track)
+        hub.register_peer(11, listener1_track)
+        hub.register_peer(12, listener2_track)
+        hub.set_speaker(10)
+
+        hub.forward_pcm_from_speaker(
+            from_user_id=10, pcm=b"\x00" * 320, samples=160, sample_rate=24000,
+        )
+
+        listener1_track.enqueue.assert_called_once()
+        listener2_track.enqueue.assert_called_once()
+
+    def test_mark_ai_stream_end_resilient_to_unregister(self) -> None:
+        hub = SessionAudioHub(session_id="test-session")
+        peer1_track = MagicMock()
+        peer2_track = MagicMock()
+        peer3_track = MagicMock()
+
+        hub.register_peer(1, peer1_track)
+        hub.register_peer(2, peer2_track)
+        hub.register_peer(3, peer3_track)
+
+        peer1_track.mark_end_of_stream.side_effect = lambda: hub.unregister_peer(2)
+
+        hub.mark_ai_stream_end()
+
+        peer1_track.mark_end_of_stream.assert_called_once()
+        peer3_track.mark_end_of_stream.assert_called_once()
+
+    def test_mark_ai_stream_end_one_peer_exception_isolated(self) -> None:
+        hub = SessionAudioHub(session_id="test-session")
+        peer1_track = MagicMock()
+        peer1_track.mark_end_of_stream.side_effect = RuntimeError("peer 1 boom")
+        peer2_track = MagicMock()
+
+        hub.register_peer(1, peer1_track)
+        hub.register_peer(2, peer2_track)
+
+        hub.mark_ai_stream_end()
+
+        peer1_track.mark_end_of_stream.assert_called_once()
+        peer2_track.mark_end_of_stream.assert_called_once()

@@ -103,14 +103,17 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
     async def disconnect(self, code):
         """
         Rimuove l'utente dal gruppo WS.
+
+        NOTA: NON fermiamo il background task dei trigger temporali qui.
+        Il trigger loop è *session-scoped* (uno per sessione, condiviso fra
+        tutti i TurnsConsumer della sessione): se lo cancellassimo al
+        primo disconnect, gli altri partecipanti smetterebbero di
+        ricevere i messaggi del moderatore (e i trigger time-based
+        verrebbero a mancare). Il loop si auto-termina quando la sessione
+        passa a CONCLUSION/CLOSED (vedi `_trigger_loop`).
         """
         if hasattr(self, "group_name"):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
-
-        # Ferma il background task per i trigger temporali
-        
-        if hasattr(self, "session_id"):
-            await self._maybe_stop_trigger_task()
 
     async def receive_json(self, content, **kwargs):
         """
@@ -1108,6 +1111,24 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 except Exception as e:
                     logger.warning("[TRIGGER_LOOP][GET_STATE_ERROR] session=%s error=%s", session_id, e)
                     continue
+
+                # Self-exit on terminal session state. The loop is no
+                # longer cancelled by per-user disconnects (vedi
+                # `disconnect`); l'unico modo pulito di terminarlo è
+                # rilevare che la sessione è finita.
+                # Lock attorno al pop per evitare race con
+                # `_maybe_start_trigger_task` (che legge il dict sotto lo
+                # stesso lock): senza, una nuova WS che si connette mentre
+                # noi siamo a metà self-exit potrebbe trovare lo slot vuoto
+                # e creare un secondo loop concorrente.
+                if session_phase in ("CONCLUSION", "CLOSED"):
+                    logger.info(
+                        "[TRIGGER_LOOP][EXIT_TERMINAL_STATE] session=%s state=%s",
+                        session_id, session_phase,
+                    )
+                    async with self._get_trigger_lock():
+                        self._trigger_tasks.pop(session_id, None)
+                    return
 
                 logger.debug("[TRIGGER_LOOP][PHASE] session=%s phase=%s", session_id, session_phase)
 

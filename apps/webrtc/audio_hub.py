@@ -70,9 +70,19 @@ class SessionAudioHub:
         if self.current_speaker_user_id != AI_MODERATOR_ID:
             return
 
-        # Forward diretto a tutti i peer (come forward_pcm_from_speaker)
-        for uid, peer in self.peers.items():
-            peer.outbound_track.enqueue(pcm=pcm_chunk, samples=samples, sample_rate=sample_rate)
+        # Forward diretto a tutti i peer (come forward_pcm_from_speaker).
+        # Iteriamo su uno snapshot per essere immuni a `unregister_peer()`
+        # chiamato da un altro coroutine (es. cleanup di un peer disconnesso)
+        # durante il broadcast. Errori per-peer sono isolati per non
+        # interrompere la consegna agli altri ascoltatori.
+        for uid, peer in list(self.peers.items()):
+            try:
+                peer.outbound_track.enqueue(pcm=pcm_chunk, samples=samples, sample_rate=sample_rate)
+            except Exception:
+                logger.exception(
+                    "[AudioHub] inject_ai_audio failed for peer %s session=%s",
+                    uid, self.session_id,
+                )
 
     def get_outbound_track_for_peer(self, user_id: int) -> Optional[ForwardingAudioTrack]:
         """
@@ -94,22 +104,47 @@ class SessionAudioHub:
         """
         Inoltra PCM (s16 mono) a tutti tranne lo speaker.
         Viene chiamato dal consumer che riceve i frame.
+
+        Iteriamo su uno snapshot per essere immuni a `unregister_peer()`
+        chiamato da un altro coroutine durante il forwarding.
         """
         if self.current_speaker_user_id != from_user_id:
             return
 
-        for uid, peer in self.peers.items():
+        for uid, peer in list(self.peers.items()):
             if uid == from_user_id:
                 continue  # evita echo
-            peer.outbound_track.enqueue(pcm=pcm, samples=samples, sample_rate=sample_rate)
+            try:
+                peer.outbound_track.enqueue(pcm=pcm, samples=samples, sample_rate=sample_rate)
+            except Exception:
+                logger.exception(
+                    "[AudioHub] forward_pcm_from_speaker failed for peer %s session=%s",
+                    uid, self.session_id,
+                )
 
     def mark_ai_stream_end(self) -> None:
-        """Signal end-of-stream on all peer tracks."""
-        for uid, peer in self.peers.items():
-            peer.outbound_track.mark_end_of_stream()
+        """Signal end-of-stream on all peer tracks.
+
+        Iteriamo su uno snapshot per essere immuni a `unregister_peer()`
+        chiamato da un altro coroutine durante il segnale di fine stream.
+        """
+        for uid, peer in list(self.peers.items()):
+            try:
+                peer.outbound_track.mark_end_of_stream()
+            except Exception:
+                logger.exception(
+                    "[AudioHub] mark_ai_stream_end failed for peer %s session=%s",
+                    uid, self.session_id,
+                )
 
     async def wait_ai_playout(self, timeout: float = 10.0) -> None:
-        """Wait for all peers to finish playing AI audio."""
+        """Wait for all peers to finish playing AI audio.
+
+        La generator expression viene materializzata in lista da `gather`
+        PRIMA della prima `await`, quindi un `unregister_peer` concorrente
+        durante il wait non altera l'iterazione (snapshot implicita).
+        `return_exceptions=True` isola anche fallimenti per-peer.
+        """
         if not self.peers:
             return
         await asyncio.gather(
