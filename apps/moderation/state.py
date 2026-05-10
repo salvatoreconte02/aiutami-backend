@@ -73,20 +73,19 @@ def _fetch_session_meta(
 ) -> Tuple[list[str], Optional[datetime]]:
     """
     Legge dalla DB sessione e partecipanti. Ritorna (names, started_at).
-    Usa display_name se presente, altrimenti username (stessa logica del
-    turn consumer). Fallback graceful a ([], None) se l'accesso fallisce.
+    Usa apps.accounts.utils.display_name_for_user per il naming dei
+    partecipanti (first_name → username). Fallback graceful a ([], None)
+    se l'accesso fallisce.
     """
     try:
         from apps.sessions.models import Session, SessionParticipant
+        from apps.accounts.utils import display_name_for_user
 
         session = Session.objects.only("started_at").get(id=session_id)
         participants = SessionParticipant.objects.filter(
             session_id=session_id
         ).select_related("user")
-        names = [
-            getattr(p.user, "display_name", None) or p.user.get_username()
-            for p in participants
-        ]
+        names = [display_name_for_user(p.user) for p in participants]
         # Django ORM ritorna datetime tz-aware (USE_TZ=True). Tutti gli
         # altri timestamp moderation sono naive (datetime.utcnow). Strippa
         # la tz per coerenza ed evitare TypeError in sottrazioni.

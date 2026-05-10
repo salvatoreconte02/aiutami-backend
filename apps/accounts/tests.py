@@ -106,3 +106,64 @@ class MeEndpointConsentTests(TestCase):
         response = self.client.get("/api/accounts/me/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data["consent_accepted_at"])
+
+
+class DisplayNameForUserTests(TestCase):
+    """display_name_for_user(user): nome con cui il moderatore AI chiama
+    il partecipante in TTS.
+
+    Priorità: first_name → username. Stringhe vuote/whitespace-only su
+    first_name → fallback a username (evita di rivolgersi al partecipante
+    con stringa vuota o spazi).
+
+    Vedi pilot log 2026-05-04 (docs/log/log_pilot.txt): il moderatore si
+    rivolgeva ai partecipanti con username corrotti come "Tschoe" e
+    "Salvcon" perché tutti i call site usavano user.get_username() come
+    fallback su un display_name inesistente sull'User di Django.
+    """
+
+    def test_returns_first_name_when_set(self):
+        from apps.accounts.utils import display_name_for_user
+        u = User.objects.create_user(
+            username="thomas123",
+            first_name="Thomas",
+            last_name="Cho",
+            email="t@e.com",
+            password="p",
+        )
+        self.assertEqual(display_name_for_user(u), "Thomas")
+
+    def test_returns_username_when_first_name_empty(self):
+        from apps.accounts.utils import display_name_for_user
+        u = User.objects.create_user(
+            username="thomas123", email="t@e.com", password="p"
+        )
+        # first_name default è "" su Django User
+        self.assertEqual(u.first_name, "")
+        self.assertEqual(display_name_for_user(u), "thomas123")
+
+    def test_returns_username_when_first_name_is_only_whitespace(self):
+        from apps.accounts.utils import display_name_for_user
+        u = User.objects.create_user(
+            username="thomas123",
+            first_name="   ",
+            email="t@e.com",
+            password="p",
+        )
+        self.assertEqual(display_name_for_user(u), "thomas123")
+
+    def test_strips_first_name(self):
+        """Nome 'Thomas ' (con spazi) → 'Thomas' senza spazi."""
+        from apps.accounts.utils import display_name_for_user
+        u = User.objects.create_user(
+            username="thomas123",
+            first_name="  Thomas  ",
+            email="t@e.com",
+            password="p",
+        )
+        self.assertEqual(display_name_for_user(u), "Thomas")
+
+    def test_returns_question_mark_when_user_is_none(self):
+        """Difensiva: se passato None, ritorna '?' senza esplodere."""
+        from apps.accounts.utils import display_name_for_user
+        self.assertEqual(display_name_for_user(None), "?")

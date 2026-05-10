@@ -144,11 +144,12 @@ class MurderMysteryTask(TaskDefinition):
 
     def submission_summary(self, session):
         from .models import SessionVote, MURDER_MYSTERY_GUILTY
+        from apps.accounts.utils import display_name_for_user
         votes = SessionVote.objects.filter(session=session).select_related("participant__user")
         results = []
         correct_count = 0
         for vote in votes:
-            username = getattr(vote.participant.user, "display_name", None) or vote.participant.user.get_username()
+            username = display_name_for_user(vote.participant.user)
             is_correct = vote.suspect_chosen == MURDER_MYSTERY_GUILTY
             if is_correct:
                 correct_count += 1

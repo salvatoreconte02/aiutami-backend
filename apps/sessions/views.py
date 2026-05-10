@@ -174,8 +174,9 @@ class SessionReadyToConcludeView(APIView):
         # Messaggio accodato per evitare errori "No handler" su consumer WS
         if session.state == SessionState.ACTIVE:
             from apps.tasks.registry import get_task
+            from apps.accounts.utils import display_name_for_user
 
-            user_name = getattr(request.user, "display_name", None) or request.user.get_username()
+            user_name = display_name_for_user(request.user)
             task = get_task(session.context)
             result = generate_ready_to_conclude_message(
                 user_name,

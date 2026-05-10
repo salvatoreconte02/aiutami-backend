@@ -240,9 +240,8 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
             await self._mark_any_activity()
             await self._mark_user_spoke(user.id)
             # Registra l'inizio del turno per il calcolo dello speaking time
-            speaker_name = (
-                getattr(user, "display_name", None) or user.get_username()
-            )
+            from apps.accounts.utils import display_name_for_user
+            speaker_name = display_name_for_user(user)
             from apps.moderation.service import ModerationService
             await database_sync_to_async(
                 ModerationService.record_human_turn_start
@@ -396,8 +395,9 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 last_turn_text = content.get("transcript", "") or ""
                 last_turn_text = str(last_turn_text).strip()
 
-            # Nome parlante (display_name se presente, altrimenti username)
-            speaker_name = getattr(user, "display_name", None) or user.get_username()
+            # Nome parlante usato dal moderatore AI (first_name → username)
+            from apps.accounts.utils import display_name_for_user
+            speaker_name = display_name_for_user(user)
 
             # Aggiunge il turno umano al transcript della sessione
             if last_turn_text:

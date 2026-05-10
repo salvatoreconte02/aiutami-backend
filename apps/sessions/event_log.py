@@ -79,13 +79,15 @@ def _resolve_speaker_user_id(speaker_name: Optional[str], session_id) -> Optiona
     try:
         from apps.sessions.models import SessionParticipant
 
-        # Match prima su display_name, poi su username
+        # Match contro lo stesso display_name che il moderatore avrebbe
+        # usato per identificare il partecipante (first_name → username).
+        from apps.accounts.utils import display_name_for_user
+
         candidates = SessionParticipant.objects.filter(
             session_id=session_id
         ).select_related("user")
         for p in candidates:
-            display = getattr(p.user, "display_name", None) or p.user.get_username()
-            if display == speaker_name:
+            if display_name_for_user(p.user) == speaker_name:
                 return p.user_id
     except Exception:
         logger.exception(

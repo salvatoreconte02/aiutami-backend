@@ -677,7 +677,7 @@ class TimeBasedTriggersTTSTests(TestCase):
         # Mock participant
         mock_user = MagicMock()
         mock_user.id = 1
-        mock_user.display_name = "TestUser"
+        mock_user.first_name = "TestUser"
         mock_user.get_username.return_value = "testuser"
 
         mock_participant_obj = MagicMock()
@@ -1810,7 +1810,7 @@ class InactiveUserTests(TestCase):
         # Setup participant
         mock_user = MagicMock()
         mock_user.id = 1
-        mock_user.display_name = "TestUser"
+        mock_user.first_name = "TestUser"
         mock_user.get_username.return_value = "testuser"
 
         mock_participant_obj = MagicMock()
@@ -1847,7 +1847,7 @@ class InactiveUserTests(TestCase):
 
         mock_user = MagicMock()
         mock_user.id = 1
-        mock_user.display_name = "TestUser"
+        mock_user.first_name = "TestUser"
         mock_user.get_username.return_value = "testuser"
 
         mock_participant_obj = MagicMock()

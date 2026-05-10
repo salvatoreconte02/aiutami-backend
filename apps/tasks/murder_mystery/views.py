@@ -77,14 +77,14 @@ class SessionVoteView(APIView):
             )
             results = []
             correct_count = 0
+            from apps.accounts.utils import display_name_for_user
             for vote in votes:
                 is_correct = vote.suspect_chosen == MURDER_MYSTERY_GUILTY
                 if is_correct:
                     correct_count += 1
                 results.append({
                     "user_id": vote.participant.user_id,
-                    "username": getattr(vote.participant.user, "display_name", None)
-                               or vote.participant.user.get_username(),
+                    "username": display_name_for_user(vote.participant.user),
                     "chose": vote.suspect_chosen,
                     "correct": is_correct,
                 })

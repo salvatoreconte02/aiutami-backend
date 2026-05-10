@@ -265,8 +265,8 @@ def _get_next_reserved_speaker_name(
     except User.DoesNotExist:
         return None
 
-    display_name = getattr(user, "display_name", None) or user.get_username()
-    return display_name
+    from apps.accounts.utils import display_name_for_user
+    return display_name_for_user(user)
 
 
 def _get_ready_to_conclude_status(
@@ -388,7 +388,8 @@ def _collect_time_based_static_messages(
 
             # Livello 1: Avviso testuale privato (5 min, ma non oltre 10 min)
             if INACTIVE_TEXT_THRESHOLD <= elapsed_text < INACTIVE_USER_THRESHOLD:
-                display_name = getattr(p.user, "display_name", None) or p.user.get_username()
+                from apps.accounts.utils import display_name_for_user
+                display_name = display_name_for_user(p.user)
                 messages.append(StaticMessage(
                     text=INACTIVE_TEXT_MESSAGE,
                     use_tts=False,
@@ -421,7 +422,8 @@ def _collect_time_based_static_messages(
                 continue
 
             if elapsed_voice >= INACTIVE_USER_THRESHOLD:
-                display_name = getattr(p.user, "display_name", None) or p.user.get_username()
+                from apps.accounts.utils import display_name_for_user
+                display_name = display_name_for_user(p.user)
                 messages.append(StaticMessage(
                     text=random.choice(INACTIVE_VOICE_MESSAGES).format(nome=display_name),
                     use_tts=True,

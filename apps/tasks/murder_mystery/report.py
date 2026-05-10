@@ -77,10 +77,8 @@ def collect_mm_report_context(session) -> Dict[str, Any]:
     votes_data = []
     correct_count = 0
     for vote in votes:
-        username = (
-            getattr(vote.participant.user, "display_name", None)
-            or vote.participant.user.get_username()
-        )
+        from apps.accounts.utils import display_name_for_user
+        username = display_name_for_user(vote.participant.user)
         is_correct = vote.suspect_chosen == MURDER_MYSTERY_GUILTY
         if is_correct:
             correct_count += 1
@@ -139,10 +137,8 @@ def build_mm_pdf_sections(session, context: Dict[str, Any], styles: Dict[str, An
     elements.append(Paragraph("VOTI", section_style))
     vote_data = [["Partecipante", "Scelta", "Risultato"]]
     for vote in votes:
-        username = (
-            getattr(vote.participant.user, "display_name", None)
-            or vote.participant.user.get_username()
-        )
+        from apps.accounts.utils import display_name_for_user
+        username = display_name_for_user(vote.participant.user)
         result = "Corretto" if vote.suspect_chosen == MURDER_MYSTERY_GUILTY else "Sbagliato"
         vote_data.append([username, vote.suspect_chosen, result])
 
