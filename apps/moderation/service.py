@@ -385,12 +385,49 @@ class ModerationService:
         """
         Registra l'istante di inizio di un turno umano. Chiamato dal turn
         consumer quando state transita a HUMAN_SPEAKING. Il delta verrà
-        accumulato in speaking_time_per_participant in handle_human_turn_ended.
+        accumulato in speaking_time_per_participant via
+        record_human_turn_end (o handle_human_turn_ended, idempotente).
         """
         if not speaker_name:
             return
         state = load_moderation_state(session_id)
         state.current_turn_started_at = datetime.utcnow()
+        save_moderation_state(session_id, state)
+
+    @classmethod
+    def record_human_turn_end(
+        cls,
+        *,
+        session_id: int | str,
+        speaker_name: Optional[str],
+    ) -> None:
+        """
+        Accumula lo speaking_time del turno appena terminato e resetta
+        current_turn_started_at.
+
+        Chiamato dal turn consumer in `_handle_end_speak` **prima** del
+        guard mod-OFF: garantisce che lo speaking_time venga accumulato
+        anche quando la pipeline LLM viene saltata (no-moderator mode).
+
+        Idempotente: se chiamata di nuovo dopo che current_turn_started_at
+        è già None (es. da handle_human_turn_ended in mod ON), no-op.
+        Coerente con lo stesso blocco in handle_human_turn_ended che ora
+        risulta no-op se questa funzione è stata chiamata prima.
+        """
+        if not speaker_name:
+            return
+        state = load_moderation_state(session_id)
+        if state.current_turn_started_at is None:
+            return
+        delta_seconds = (
+            datetime.utcnow() - state.current_turn_started_at
+        ).total_seconds()
+        if delta_seconds > 0:
+            state.speaking_time_per_participant[speaker_name] = (
+                state.speaking_time_per_participant.get(speaker_name, 0.0)
+                + delta_seconds
+            )
+        state.current_turn_started_at = None
         save_moderation_state(session_id, state)
 
     @classmethod

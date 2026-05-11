@@ -190,6 +190,55 @@ class EndSpeakModeratorDisabledTests(TestCase):
 
         asyncio.new_event_loop().run_until_complete(_run())
 
+    def test_end_speak_records_speaking_time_even_when_moderator_disabled(self):
+        """Bug fix critico: in mod OFF il guard saltava la pipeline LLM,
+        quindi handle_human_turn_ended NON veniva mai chiamato e
+        speaking_time_per_participant restava sempre vuoto. Risultato:
+        Gini index calcolato a 0 in modalità control → metrica di
+        participation balance comparativa INUTILIZZABILE.
+
+        Fix: record_human_turn_end DEVE essere chiamata in _handle_end_speak
+        PRIMA del guard mod-OFF, indipendentemente da moderator_enabled.
+        """
+
+        async def _run():
+            consumer = self._make_consumer()
+
+            mock_end_result = MagicMock()
+            mock_end_result.success = True
+            mock_end_result.events = []
+            mock_end_result.to_state_dict = MagicMock(return_value={})
+
+            with patch(
+                "apps.turns.services.TurnManager.end_speak",
+                return_value=mock_end_result,
+            ), patch.object(
+                TurnsConsumer, "_ensure_session_active",
+                new=AsyncMock(return_value=True),
+            ), patch.object(
+                TurnsConsumer, "_mark_any_activity",
+                new=AsyncMock(),
+            ), patch.object(
+                TurnsConsumer, "_broadcast_events",
+                new=AsyncMock(),
+            ), patch.object(
+                TurnsConsumer, "_get_moderator_enabled",
+                new=AsyncMock(return_value=False),
+            ), patch(
+                "apps.moderation.service.ModerationService.record_human_turn_end"
+            ) as mock_record_end:
+                await consumer._handle_end_speak({"transcript": "hello"})
+
+                # CHIAVE: anche in mod OFF, record_human_turn_end DEVE
+                # essere stato chiamato (così speaking_time si accumula).
+                mock_record_end.assert_called_once()
+                # Verifica kwargs
+                call = mock_record_end.call_args
+                self.assertEqual(call.kwargs["session_id"], "sess-mod-off")
+                self.assertEqual(call.kwargs["speaker_name"], "speaker")
+
+        asyncio.new_event_loop().run_until_complete(_run())
+
 
 class EndSpeakModeratorEnabledRegressionTests(TestCase):
     """Regression: mod ON deve continuare a chiamare l'orchestrator."""

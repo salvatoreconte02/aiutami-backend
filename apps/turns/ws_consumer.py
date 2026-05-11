@@ -359,6 +359,21 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         # Verrà aperta DOPO la moderazione (in ai_end se l'AI parla,
         # oppure manualmente alla fine di questo metodo se l'AI non parla).
 
+        # Accumula lo speaking_time del turno appena chiuso PRIMA di
+        # qualunque guard: deve avvenire anche in mod-OFF, altrimenti
+        # state.speaking_time_per_participant resta sempre vuoto e il
+        # Gini index calcolato a fine sessione è sempre 0 in modalità
+        # control (rompe la metrica di participation balance comparativa
+        # tra le due condizioni del within-subject experiment).
+        # Successiva chiamata di handle_human_turn_ended (in mod ON) sul
+        # blocco speaking_time è idempotente (current_turn_started_at=None).
+        from apps.moderation.service import ModerationService
+        from apps.accounts.utils import display_name_for_user
+        speaker_name_for_metrics = display_name_for_user(user)
+        await database_sync_to_async(
+            ModerationService.record_human_turn_end
+        )(session_id=self.session_id, speaker_name=speaker_name_for_metrics)
+
         # GUARD mod-OFF: la sessione gira senza moderatore AI.
         # Il turno umano è chiuso (step 1) e gli eventi sono già stati
         # broadcast. Si esce qui senza entrare nella pipeline di

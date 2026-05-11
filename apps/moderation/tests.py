@@ -1345,6 +1345,89 @@ class SpeakingTimeAccumulationTests(TestCase):
         loaded = load_moderation_state(session_id)
         self.assertIsNone(loaded.current_turn_started_at)
 
+    def test_record_human_turn_end_accumulates_speaking_time(self):
+        """record_human_turn_end deve accumulare il delta (now - started_at)
+        in speaking_time_per_participant. Permette di accumulare il tempo
+        anche in modalità no-moderator, dove handle_human_turn_ended NON
+        viene chiamato (il guard mod-OFF salta la pipeline LLM).
+        """
+        from datetime import datetime, timedelta
+        session_id = "test-record-end"
+        state = ModerationState.initial(participants=["Mario"])
+        # Simula che il turno è iniziato 5 secondi fa
+        state.current_turn_started_at = datetime.utcnow() - timedelta(seconds=5)
+        save_moderation_state(session_id, state)
+
+        ModerationService.record_human_turn_end(
+            session_id=session_id, speaker_name="Mario"
+        )
+
+        loaded = load_moderation_state(session_id)
+        # Speaking time accumulato (con piccola tolleranza per esecuzione test)
+        self.assertIn("Mario", loaded.speaking_time_per_participant)
+        self.assertGreaterEqual(loaded.speaking_time_per_participant["Mario"], 4.0)
+        self.assertLessEqual(loaded.speaking_time_per_participant["Mario"], 6.0)
+        # current_turn_started_at deve essere reset a None (turno chiuso)
+        self.assertIsNone(loaded.current_turn_started_at)
+
+    def test_record_human_turn_end_idempotent_if_no_start(self):
+        """Se current_turn_started_at è None (nessun turno iniziato), no-op."""
+        session_id = "test-record-end-no-start"
+        state = ModerationState.initial()
+        state.current_turn_started_at = None
+        save_moderation_state(session_id, state)
+
+        # Non deve sollevare eccezioni né accumulare nulla
+        ModerationService.record_human_turn_end(
+            session_id=session_id, speaker_name="Mario"
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertNotIn("Mario", loaded.speaking_time_per_participant)
+
+    def test_record_human_turn_end_skipped_if_no_speaker(self):
+        """Chiamato con speaker_name=None: no-op (nessuna eccezione, nessun update)."""
+        from datetime import datetime, timedelta
+        session_id = "test-record-end-no-speaker"
+        state = ModerationState.initial()
+        state.current_turn_started_at = datetime.utcnow() - timedelta(seconds=5)
+        save_moderation_state(session_id, state)
+
+        ModerationService.record_human_turn_end(
+            session_id=session_id, speaker_name=None
+        )
+
+        loaded = load_moderation_state(session_id)
+        self.assertEqual(loaded.speaking_time_per_participant, {})
+
+    def test_record_human_turn_end_accumulates_multiple_turns(self):
+        """Più turni dello stesso speaker → speaking_time si somma."""
+        from datetime import datetime, timedelta
+        session_id = "test-record-end-multi"
+        state = ModerationState.initial(participants=["Mario"])
+        save_moderation_state(session_id, state)
+
+        # Primo turno: 3 secondi
+        state = load_moderation_state(session_id)
+        state.current_turn_started_at = datetime.utcnow() - timedelta(seconds=3)
+        save_moderation_state(session_id, state)
+        ModerationService.record_human_turn_end(
+            session_id=session_id, speaker_name="Mario"
+        )
+
+        # Secondo turno: 4 secondi
+        state = load_moderation_state(session_id)
+        state.current_turn_started_at = datetime.utcnow() - timedelta(seconds=4)
+        save_moderation_state(session_id, state)
+        ModerationService.record_human_turn_end(
+            session_id=session_id, speaker_name="Mario"
+        )
+
+        loaded = load_moderation_state(session_id)
+        # Totale ~7 secondi (3 + 4)
+        self.assertGreaterEqual(loaded.speaking_time_per_participant["Mario"], 6.5)
+        self.assertLessEqual(loaded.speaking_time_per_participant["Mario"], 7.5)
+
 
 class AIInterventionCountModeTests(TestCase):
     def setUp(self):
