@@ -811,3 +811,133 @@ class SessionDetailSerializerModeratorEnabledTests(TestCase):
         data = self._serialize(session)
         self.assertIn("moderator_enabled", data)
         self.assertFalse(data["moderator_enabled"])
+
+
+class JoinByTokenRejoinTests(APITestCase):
+    """POST /api/sessions/join_by_token/ deve permettere a un partecipante
+    già parte della sessione di rientrare quando la sessione non è in
+    LOBBY (INDIVIDUAL_RANKING, ACTIVE, CONCLUSION). Caso reale: pilot
+    2026-05-11, Thomas si è disconnesso durante INDIVIDUAL_RANKING e non
+    riusciva a rientrare cliccando il link di invito.
+
+    Per il nuovo utente (non ancora SessionParticipant), il vincolo "solo
+    LOBBY" resta valido — non vogliamo che gente si infili a discussione
+    iniziata."""
+
+    def setUp(self) -> None:
+        from apps.sessions.models import Invitation
+
+        self.host = User.objects.create_user(
+            username="host_rejoin", email="host@e.com", password="p"
+        )
+        self.peer = User.objects.create_user(
+            username="peer_rejoin", email="peer@e.com", password="p"
+        )
+        self.outsider = User.objects.create_user(
+            username="outsider", email="out@e.com", password="p"
+        )
+
+        self.session = Session.objects.create(
+            title="S", context="lost_at_sea",
+            min_size=3, max_size=6, host=self.host,
+        )
+        SessionParticipant.objects.create(
+            session=self.session, user=self.host, role=ParticipantRole.HOST
+        )
+        self.peer_participant = SessionParticipant.objects.create(
+            session=self.session, user=self.peer, role=ParticipantRole.PARTICIPANT
+        )
+        self.invitation = Invitation.objects.create(session=self.session)
+
+    def _post_join(self, user) -> "Response":
+        self.client.force_authenticate(user=user)
+        return self.client.post(
+            "/api/sessions/join_by_token/",
+            data={"token": self.invitation.token},
+            format="json",
+        )
+
+    def _set_state(self, state: str) -> None:
+        self.session.state = state
+        self.session.save(update_fields=["state"])
+
+    # --- Rejoin: partecipante già in sessione, stati non-CLOSED ---
+
+    def test_rejoin_in_individual_ranking_returns_200(self):
+        self._set_state(SessionState.INDIVIDUAL_RANKING)
+        resp = self._post_join(self.peer)
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertEqual(resp.data["session"]["id"], str(self.session.id))
+        self.assertEqual(resp.data["me"]["role"], ParticipantRole.PARTICIPANT)
+
+    def test_rejoin_in_active_returns_200(self):
+        self._set_state(SessionState.ACTIVE)
+        resp = self._post_join(self.peer)
+        self.assertEqual(resp.status_code, 201, resp.content)
+
+    def test_rejoin_in_conclusion_returns_200(self):
+        self._set_state(SessionState.CONCLUSION)
+        resp = self._post_join(self.peer)
+        self.assertEqual(resp.status_code, 201, resp.content)
+
+    def test_rejoin_is_idempotent_no_duplicate_participant(self):
+        """Il rejoin NON deve creare un nuovo SessionParticipant: rimaniamo
+        a 2 partecipanti dopo la POST."""
+        self._set_state(SessionState.INDIVIDUAL_RANKING)
+        before = SessionParticipant.objects.filter(session=self.session).count()
+        self._post_join(self.peer)
+        after = SessionParticipant.objects.filter(session=self.session).count()
+        self.assertEqual(before, after)
+
+    # --- Rejoin: caso bloccato (sessione finita) ---
+
+    def test_rejoin_in_closed_returns_400(self):
+        """Sessione CLOSED: non si rientra, è finita."""
+        self._set_state(SessionState.CLOSED)
+        resp = self._post_join(self.peer)
+        self.assertEqual(resp.status_code, 400)
+
+    # --- Regression: primo join (utente non ancora SessionParticipant) ---
+
+    def test_first_join_in_lobby_succeeds(self):
+        """Un nuovo utente in LOBBY può entrare (comportamento storico)."""
+        # session è in LOBBY di default
+        resp = self._post_join(self.outsider)
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertTrue(
+            SessionParticipant.objects.filter(
+                session=self.session, user=self.outsider
+            ).exists()
+        )
+
+    def test_first_join_in_individual_ranking_blocked(self):
+        """Un NUOVO utente NON deve entrare durante INDIVIDUAL_RANKING."""
+        self._set_state(SessionState.INDIVIDUAL_RANKING)
+        resp = self._post_join(self.outsider)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_first_join_in_active_blocked(self):
+        """Un NUOVO utente NON deve entrare durante ACTIVE."""
+        self._set_state(SessionState.ACTIVE)
+        resp = self._post_join(self.outsider)
+        self.assertEqual(resp.status_code, 400)
+
+    # --- Regression: edge cases ---
+
+    def test_rejoin_allowed_even_if_user_appears_busy_in_same_session(self):
+        """Il check 'utente in altra sessione non chiusa' (riga 3 della
+        vecchia validate) non deve impedire il rejoin nella PROPRIA
+        sessione — anche se peer figura come 'impegnato' è in QUESTA
+        sessione che vuole rientrare."""
+        self._set_state(SessionState.ACTIVE)
+        resp = self._post_join(self.peer)
+        self.assertEqual(resp.status_code, 201, resp.content)
+
+    def test_invalid_token_returns_400(self):
+        self.client.force_authenticate(user=self.outsider)
+        resp = self.client.post(
+            "/api/sessions/join_by_token/",
+            data={"token": "non-existent-token"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)

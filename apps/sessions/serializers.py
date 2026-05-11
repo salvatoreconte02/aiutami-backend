@@ -299,16 +299,31 @@ class JoinByTokenSerializer(serializers.Serializer):
         session = invitation.session
         user = self.context["request"].user
 
-        # 1) La sessione target deve essere LOBBY
+        # 0) Caso rejoin: l'utente è già SessionParticipant di QUESTA sessione.
+        # Permettiamo il rientro idempotente in qualunque stato non terminale
+        # (INDIVIDUAL_RANKING, ACTIVE, CONCLUSION) — uso reale: l'app del
+        # partecipante crasha o il telefono cambia rete e lui riapre il link
+        # di invito dal Whatsapp. Senza questo bypass, il check sotto "stato
+        # non LOBBY" blocca il rientro e l'utente resta fuori per il resto
+        # della sessione.
+        existing = SessionParticipant.objects.filter(
+            session=session, user=user
+        ).first()
+        if existing is not None:
+            if session.state == SessionState.CLOSED:
+                raise serializers.ValidationError("La sessione è chiusa.")
+            self._session = session
+            self._invitation = invitation
+            self._existing_participant = existing
+            return attrs
+
+        # 1) La sessione target deve essere LOBBY (solo per nuovi utenti)
         if session.state != SessionState.LOBBY:
             raise serializers.ValidationError("La sessione non è in stato LOBBY.")
 
-        # 2) Utente già parte di questa sessione?
-        if SessionParticipant.objects.filter(session=session, user=user).exists():
-            raise serializers.ValidationError("Utente già parte della sessione.")
-
-        # 3)l’utente non può essere in un’altra sessione non chiusa
-        # (LOBBY, INDIVIDUAL_RANKING, ACTIVE, CONCLUSION)
+        # 2) l'utente non può essere in un'altra sessione non chiusa
+        # (LOBBY, INDIVIDUAL_RANKING, ACTIVE, CONCLUSION). Il caso rejoin
+        # sulla stessa sessione è già stato gestito sopra.
         if SessionParticipant.objects.filter(
             user=user,
             session__state__in=[
@@ -322,7 +337,7 @@ class JoinByTokenSerializer(serializers.Serializer):
                 "L'utente è già impegnato in un'altra sessione non chiusa."
             )
 
-        # 4) Capienza della lobby
+        # 3) Capienza della lobby
         if session.participants_count >= session.max_size:
             raise serializers.ValidationError("Sessione piena.")
 
@@ -332,6 +347,12 @@ class JoinByTokenSerializer(serializers.Serializer):
 
     @transaction.atomic
     def create(self, validated_data: Dict[str, Any]) -> SessionParticipant:
+        # Rejoin idempotente: utente già SessionParticipant — riusa l'oggetto
+        # senza creare nuovi record né emettere un nuovo JOINED event.
+        existing = getattr(self, "_existing_participant", None)
+        if existing is not None:
+            return existing
+
         session: Session = self._session
         user = self.context["request"].user
         sp = SessionParticipant.objects.create(
