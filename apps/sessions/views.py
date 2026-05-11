@@ -171,8 +171,15 @@ class SessionReadyToConcludeView(APIView):
         total_count = qs.count()
         ready_count = qs.filter(ready_to_conclude=True).count()
 
-        # Messaggio accodato per evitare errori "No handler" su consumer WS
-        if session.state == SessionState.ACTIVE:
+        # Messaggio accodato per evitare errori "No handler" su consumer WS.
+        # GUARD mod-OFF: in modalità "no moderator" non accodiamo l'annuncio
+        # vocale. Il frontend transita comunque a CONCLUSION via lo
+        # STATE_CHANGED broadcast più sotto (quando tutti i partecipanti
+        # sono pronti). Visto in produzione 2026-05-11: la view accodava
+        # i messaggi "X ha indicato di essere pronto…" / "Tutti hanno
+        # deciso…" anche in mod OFF, contaminando il braccio di controllo.
+        # Vedi docs/plans/2026-05-07-no-moderator-mode-design.md §6.4.
+        if session.state == SessionState.ACTIVE and session.moderator_enabled:
             from apps.tasks.registry import get_task
             from apps.accounts.utils import display_name_for_user
 

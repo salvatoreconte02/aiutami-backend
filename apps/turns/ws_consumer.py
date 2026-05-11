@@ -748,6 +748,22 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
 
         from apps.turns.services import TurnManager
 
+        # GUARD mod-OFF: il polling turns.ping dal frontend è un quarto
+        # callsite che chiama evaluate_time_based_triggers oltre a
+        # _trigger_loop. Senza guard, i messaggi statici (NO_PUSH,
+        # INACTIVE_VOICE, TIMER_25) venivano eseguiti/accodati anche
+        # quando la sessione era in modalità "no moderator" — bug visto
+        # in produzione 2026-05-11.
+        # Vedi docs/plans/2026-05-07-no-moderator-mode-design.md §6.4.
+        if not await self._get_moderator_enabled(self.session_id):
+            await self.send_json(
+                {
+                    "type": "turns.ping_ok",
+                    "payload": {"has_messages": False},
+                }
+            )
+            return
+
         trig_result = await database_sync_to_async(evaluate_time_based_triggers)(
             session_id=self.session_id,
             session_phase=session_phase,
@@ -1521,9 +1537,19 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         if state and state.state != "IDLE":
             return
 
+        # GUARD mod-OFF (defense in depth): se in mod OFF un messaggio è
+        # comunque finito in coda — per un callsite con guard mancante o
+        # un fix futuro non ancora applicato — non vogliamo parlarlo.
+        # Il primo guard di linea sta a monte (chi accoda), questo è la
+        # rete di sicurezza che evita che la voce del moderatore
+        # contamini la condizione di controllo.
+        # Vedi docs/plans/2026-05-07-no-moderator-mode-design.md §6.4.
+        moderator_enabled = await self._get_moderator_enabled(self.session_id)
+
         pending = dequeue_all_messages(self.session_id)
         for msg in pending:
-            await self._execute_tts_message(msg.text)
+            if moderator_enabled:
+                await self._execute_tts_message(msg.text)
 
             # Se il messaggio aveva trigger_conclusion=True, transiziona a CONCLUSION
             if msg.trigger_conclusion:
@@ -1547,6 +1573,6 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                     # Se per qualche motivo arrivasse comunque qui, saltiamo
                     # il recap LLM finale.
                     # Vedi docs/plans/2026-05-07-no-moderator-mode-design.md §6.4(d).
-                    if await self._get_moderator_enabled(self.session_id):
+                    if moderator_enabled:
                         # Esegue FORCED_CONCLUSION per generare il riepilogo finale
                         await self._execute_forced_conclusion()
