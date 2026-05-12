@@ -1,0 +1,62 @@
+\chapter{Implementation}
+\label{ch:implementation}
+
+% Structure mirrors the host lab's thesis format (3 sections):
+%   4.1 Technologies
+%   4.2 Software Architecture
+%   4.3 UML Flow diagrams
+
+This chapter documents how the design decisions of
+Chapter~\ref{ch:requirements-design} were realised in working software.
+Section~\ref{sec:impl-technologies} surveys the technology stack.
+Section~\ref{sec:impl-architecture} describes the software architecture
+of AIutami, with emphasis on the backend split into purpose-specific
+Django apps. Section~\ref{sec:impl-uml} presents the UML diagrams that
+capture the runtime behaviour of the most relevant subsystems
+(turn-taking, audio forwarding, moderation pipeline, session
+lifecycle).
+
+\section{Technologies}
+\label{sec:impl-technologies}
+% TODO. Suggested coverage:
+%   - Backend framework: Django + Daphne (ASGI), Channels for WebSockets
+%   - Real-time audio: aiortc (WebRTC server-side), STUN/TURN considerations
+%   - AI services: OpenAI Realtime (STT), OpenAI gpt-4o-mini (LLM),
+%                  OpenAI gpt-4o-mini-tts (TTS)
+%   - Persistence: PostgreSQL 16 (sessions, participants, votes, events),
+%                  Redis 7 (turn state, ASR cache, moderation state)
+%   - Frontend (separate repo): React + Vite + Tailwind, mobile-first PWA
+%   - Deploy: Docker Compose, Nginx host-level, Let's Encrypt HTTPS
+%   - Reporting: ReportLab (PDF), per-task report templates
+% Justify each choice briefly (why Daphne over uvicorn, why aiortc over
+% mediasoup, etc.).
+
+\section{Software Architecture}
+\label{sec:impl-architecture}
+% TODO. Suggested coverage:
+%   - High-level diagram (web/db/redis containers + WebRTC ports + nginx host)
+%   - Django app split (apps/sessions, apps/turns, apps/asr, apps/tts,
+%     apps/moderation, apps/webrtc, apps/reports, apps/tasks)
+%   - Session lifecycle: LOBBY -> INDIVIDUAL_RANKING -> ACTIVE -> CONCLUSION -> CLOSED
+%   - Task plugin system (registry, base.py, four implementations)
+%   - WebSocket endpoints: /ws/sessions/, /ws/turns/, /ws/webrtc/
+%   - Turn-taking state machine (IDLE / HUMAN_SPEAKING / AI_SPEAKING /
+%     AI_INTRODUCING) and reservation window
+%   - Audio forwarding hub (no mixing, per-peer outbound queue,
+%     backpressure via drop chunk)
+%   - ASR pipeline (gating, OpenAI Realtime WebSocket, transcript persistence)
+%   - TTS pipeline (gpt-4o-mini-tts, resample 24k->48k)
+%   - Moderation orchestrator (triggers, LLM, intervention decisions)
+%   - No-moderator mode (control arm) — guards in coordinator only
+%   - GDPR consent flow, GDPR-compliant data retention
+
+\section{UML Flow Diagrams}
+\label{sec:impl-uml}
+% TODO. Suggested diagrams:
+%   - Sequence diagram: human turn lifecycle (frontend -> turns WS -> ASR ->
+%     moderation orchestrator -> optional TTS -> back to IDLE)
+%   - State diagram: TurnManager states + reservation window
+%   - Sequence diagram: AI moderator intervention triggered by NO_PUSH timer
+%   - Sequence diagram: forced conclusion at TIMER_30 expiry
+%   - Activity diagram: session lifecycle with task-specific branches
+%     (individual ranking phase only for survival tasks)

@@ -1,16 +1,16 @@
 % ============================================================
-%  \subsection: Multi-Party Conversational AI
-%  \subsection: Research Gaps
-%  \subsection: Positioning of AIutami
+%  \section: Multi-Party Conversational AI
+%  \section: Research Gaps
+%  \section: Positioning of AIutami
 %  Parent: \section{State of the Art}
 % ============================================================
 
-\subsection{Multi-Party Conversational AI}
-\label{subsec:multiparty-ca}
+\section{Multi-Party Conversational AI}
+\label{sec:multiparty-ca}
 
 % ----------------------------------------------------------
-\subsubsection{Why Multi-Party Is Different}
-\label{sssec:multiparty-why}
+\subsection{Why Multi-Party Is Different}
+\label{subsec:multiparty-why}
 
 Nearly all conversational agents in widespread use today---Siri, Alexa,
 ChatGPT, GPT-4o voice mode---are engineered for \emph{dyadic} interaction: a
@@ -42,8 +42,8 @@ concludes with an analysis of the technical obstacles that explain why most
 multi-party research has remained text-based.
 
 % ----------------------------------------------------------
-\subsubsection{Taxonomies of Multi-Party Conversational AI}
-\label{sssec:multiparty-taxonomies}
+\subsection{Taxonomies of Multi-Party Conversational AI}
+\label{subsec:multiparty-taxonomies}
 
 Three taxonomies, originating from different research communities, provide
 complementary lenses through which multi-party conversational AI can be
@@ -133,14 +133,14 @@ These three properties impose concrete constraints on system design.  In
 text-based environments, visibility can be achieved through distinct usernames
 or badges, ignorability through message threading, and accountability through
 explicit @-mentions.  In speech-based environments, as we discuss in
-Section~\ref{sssec:gaps}, all three properties take on fundamentally different
+Section~\ref{sec:gaps}, all three properties take on fundamentally different
 meanings: the agent's voice is inherently visible (it occupies a shared audio
 channel), difficult to ignore (one cannot scroll past a spoken utterance), and
 hard to make accountable without explicit turn-assignment mechanisms.
 
 % ----------------------------------------------------------
-\subsubsection{Existing Multi-Party Systems}
-\label{sssec:multiparty-systems}
+\subsection{Existing Multi-Party Systems}
+\label{subsec:multiparty-systems}
 
 Despite the extensive theoretical groundwork laid by the taxonomies above, the
 number of systems that actually implement a multi-party conversational agent
@@ -234,13 +234,13 @@ scalability.
 Table~\ref{tab:multiparty-comparison} provides a systematic comparison of all
 five systems, together with AIutami, across ten dimensions that capture the
 essential design choices identified by the taxonomies in
-Section~\ref{sssec:multiparty-taxonomies}.
+Section~\ref{subsec:multiparty-taxonomies}.
 
 \begin{table}[ht]
   \centering
   \caption{Comparison of multi-party conversational AI systems.  AIutami is
     included for reference and discussed in detail in
-    Section~\ref{subsec:positioning}.}
+    Section~\ref{sec:positioning}.}
   \label{tab:multiparty-comparison}
   \footnotesize
   \setlength{\tabcolsep}{3.5pt}
@@ -324,8 +324,8 @@ Section~\ref{sssec:multiparty-taxonomies}.
 \end{table}
 
 % ----------------------------------------------------------
-\subsubsection{Technical Challenges of Multi-Party Speech}
-\label{sssec:multiparty-technical}
+\subsection{Technical Challenges of Multi-Party Speech}
+\label{subsec:multiparty-technical}
 
 The paucity of speech-based multi-party systems is not accidental: it reflects
 the severity of the technical challenges that speech introduces relative to
@@ -375,8 +375,8 @@ operated exclusively in the text modality.
 
 
 % ============================================================
-\subsection{Research Gaps}
-\label{subsec:gaps}
+\section{Research Gaps}
+\label{sec:gaps}
 
 The preceding sections have traced three research threads---speech-based
 architectures, turn-taking models, and multi-party conversational
@@ -385,8 +385,8 @@ This subsection consolidates the gaps that emerge at their intersection,
 identifying eight open problems that delineate opportunities for future work.
 
 % ----------------------------------------------------------
-\subsubsection{Gap~1: Multi-Party Speech-Based AI---the Nearly Empty Quadrant}
-\label{sssec:gap1}
+\subsection{Gap~1: Multi-Party Speech-Based AI---the Nearly Empty Quadrant}
+\label{subsec:gap1}
 
 The most prominent gap in the literature is the near-absence of systems that
 combine speech-based interaction with multi-party group dynamics and an active
@@ -403,8 +403,8 @@ systematically distinguish between text-based and speech-based multi-party
 agents, signalling that the speech dimension is underrepresented in the field.
 
 % ----------------------------------------------------------
-\subsubsection{Gap~2: End-to-End and Half-Cascade Architectures for Multi-Party}
-\label{sssec:gap2}
+\subsection{Gap~2: End-to-End and Half-Cascade Architectures for Multi-Party}
+\label{subsec:gap2}
 
 All recent speech-to-speech models---Moshi~\cite{defossez2024moshi},
 GPT-4o, LLaMA-Omni~\cite{fang2024llamaomni},
@@ -418,8 +418,8 @@ support remains the cascaded STT--LLM--TTS pipeline, as employed by both
 Addlesee et al.~\cite{addlesee2024ari} and AIutami.
 
 % ----------------------------------------------------------
-\subsubsection{Gap~3: Design Taxonomy for Multi-Party Speech}
-\label{sssec:gap3}
+\subsection{Gap~3: Design Taxonomy for Multi-Party Speech}
+\label{subsec:gap3}
 
 Houde et al.'s design taxonomy~\cite{houde2025koala} was developed and
 validated exclusively on Slack, a text-based platform.  Transposing it to
@@ -441,8 +441,8 @@ taxonomy specific to speech, nor does it address the latency and sequentiality
 constraints of the vocal modality.
 
 % ----------------------------------------------------------
-\subsubsection{Gap~4: Audio-Only Addressee Detection in Groups with $N > 2$}
-\label{sssec:gap4}
+\subsection{Gap~4: Audio-Only Addressee Detection in Groups with $N > 2$}
+\label{subsec:gap4}
 
 Addressee detection---determining to whom an utterance is directed---is a
 prerequisite for appropriate agent behaviour in multi-party settings.  Current
@@ -459,8 +459,8 @@ requires an eight-camera motion-capture setup---far removed from the
 constraints of a typical web-based deployment.
 
 % ----------------------------------------------------------
-\subsubsection{Gap~5: Dynamic Agent Control in Speech Contexts}
-\label{sssec:gap5}
+\subsection{Gap~5: Dynamic Agent Control in Speech Contexts}
+\label{subsec:gap5}
 
 Houde et al.~\cite{houde2025koala} demonstrate that users strongly prefer the
 ability to adjust agent behaviour during a session rather than only before it
@@ -474,8 +474,8 @@ input (if video is available), a parallel web interface, or keyword-triggered
 control commands---have not been explored in the literature.
 
 % ----------------------------------------------------------
-\subsubsection{Gap~6: Incomplete Utterance Handling in Multi-Party Speech}
-\label{sssec:gap6}
+\subsection{Gap~6: Incomplete Utterance Handling in Multi-Party Speech}
+\label{subsec:gap6}
 
 Addlesee et al.~\cite{addlesee2024ari} introduce incremental Clarification
 Requests (iCR) to handle incomplete utterances from patients with dementia.  In
@@ -488,8 +488,8 @@ currently implements recovery strategies---such as iCR, utterance-continuation
 detection, or endpointing rollback---for the general case.
 
 % ----------------------------------------------------------
-\subsubsection{Gap~7: Benchmarks for Multi-Party Speech-Based CA}
-\label{sssec:gap7}
+\subsection{Gap~7: Benchmarks for Multi-Party Speech-Based CA}
+\label{subsec:gap7}
 
 The field lacks a shared evaluation infrastructure for multi-party speech-based
 conversational agents.  There is no standard dataset, no common benchmark, and
@@ -507,8 +507,8 @@ benchmarks for multi-modal settings; (iii)~lack of realistic
 metrics/simulations for evaluation.''
 
 % ----------------------------------------------------------
-\subsubsection{Gap~8: Amplified Proactivity Risk in Speech}
-\label{sssec:gap8}
+\subsection{Gap~8: Amplified Proactivity Risk in Speech}
+\label{subsec:gap8}
 
 Houde et al.~\cite{houde2025koala} show that even in text, a proactive agent
 was perceived as a ``pedantic student who wouldn't create space for others.''
@@ -524,12 +524,12 @@ studied in speech-based multi-party settings.
 
 
 % ============================================================
-\subsection{Positioning of AIutami}
-\label{subsec:positioning}
+\section{Positioning of AIutami}
+\label{sec:positioning}
 
 % ----------------------------------------------------------
-\subsubsection{The Research Landscape as a 2$\times$2 Matrix}
-\label{sssec:matrix}
+\subsection{The Research Landscape as a 2$\times$2 Matrix}
+\label{subsec:matrix}
 
 The preceding review reveals a pronounced asymmetry in the literature.
 Table~\ref{tab:positioning-matrix} organises the surveyed systems along two
@@ -573,8 +573,8 @@ $N$ concurrent human participants, (iii)~an active AI moderator role,
 combination within a single platform.
 
 % ----------------------------------------------------------
-\subsubsection{How AIutami Addresses Known Challenges}
-\label{sssec:aiutami-solutions}
+\subsection{How AIutami Addresses Known Challenges}
+\label{subsec:aiutami-solutions}
 
 AIutami's architecture incorporates design decisions that directly address
 several of the technical and design challenges identified in the literature.
@@ -645,8 +645,8 @@ after a human finishes speaking, providing a temporal buffer that reduces the
 al.~\cite{houde2025koala}.
 
 % ----------------------------------------------------------
-\subsubsection{Limitations and Open Directions}
-\label{sssec:aiutami-limitations}
+\subsection{Limitations and Open Directions}
+\label{subsec:aiutami-limitations}
 
 The current design of AIutami leaves several gaps unaddressed, each of which
 represents a potential direction for future work.
@@ -694,7 +694,7 @@ literature that motivates them.
 \end{table}
 
 These limitations are not incidental: they correspond directly to
-Gaps~4--8 identified in Section~\ref{subsec:gaps} and represent the most
+Gaps~4--8 identified in Section~\ref{sec:gaps} and represent the most
 promising avenues for extending the current system.  The explicit turn-taking
 model, while effective, sacrifices conversational naturalness; future work might
 relax it by integrating predictive turn-taking signals.  The absence of

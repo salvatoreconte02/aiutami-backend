@@ -16,3 +16,6 @@ db.sqlite3
 CLAUDE.md
 
 .DS_Store
+
+# Thesis: file binari/zip che non devono mai finire in git
+thesis*.zip

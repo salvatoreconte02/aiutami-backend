@@ -1,0 +1,76 @@
+\chapter{Requirements \& Design}
+\label{ch:requirements-design}
+
+% Structure mirrors the host lab's thesis format (7 sections):
+%   3.1 State Of The Art Informed Requirements
+%   3.2 User Centered Requirements
+%   3.3 Design Requirements Consolidation
+%   3.4 User Experience (UX) Design
+%   3.5 User Interface (UI) Design
+%   3.6 Moderator Agent Design   (= "Assistant Design" in the host-lab format)
+%   3.7 Use Case
+
+This chapter presents the requirements that drove the design of AIutami
+and the resulting design choices. The requirements are first derived
+from the literature gaps surfaced in Chapter~\ref{ch:state-of-the-art}
+(Section~\ref{sec:rd-sota-req}) and from user-centred enquiry with
+target participants and the supervising lab
+(Section~\ref{sec:rd-user-req}). Section~\ref{sec:rd-consolidation}
+consolidates the two streams into a unified requirement list.
+Sections~\ref{sec:rd-ux},~\ref{sec:rd-ui},
+and~\ref{sec:rd-moderator-agent} describe respectively the user
+experience, the user interface, and the moderator agent design.
+Section~\ref{sec:rd-use-case} closes the chapter with a representative
+use case that walks through a full group session.
+
+\section{State Of The Art Informed Requirements}
+\label{sec:rd-sota-req}
+% TODO: requirements derived from the gaps surfaced in Chapter 2.
+% Examples:
+%  - Support N participants in real-time speech (multi-party, not dyadic)
+%  - Explicit turn-taking (mitigate multi-party scalability problem)
+%  - Pluggable task layer (NASA Moon, Lost at Sea, Murder Mystery, Generic)
+%  - Comparable control arm (moderator OFF) for empirical evaluation
+
+\section{User Centered Requirements}
+\label{sec:rd-user-req}
+% TODO: requirements gathered from informal feedback with the host lab and
+% from the pilot participants (tutors). Examples:
+%  - Mobile-friendly UI (participants often join from phones)
+%  - Robust rejoin after disconnect (mobile networks are unstable)
+%  - Visible turn indicator (no doubt about who is speaking)
+%  - GDPR-compliant data collection (Italian university study)
+
+\section{Design Requirements Consolidation}
+\label{sec:rd-consolidation}
+% TODO: merge SOTA-derived + user-derived into a single numbered list
+% (R1, R2, ...). Cite each one back to its source section.
+
+\section{User Experience (UX) Design}
+\label{sec:rd-ux}
+% TODO: describe the user journey:
+% Lobby -> Individual ranking (NASA/LAS only) -> Group discussion (ACTIVE)
+% -> Group ranking submission -> Conclusion -> Report.
+% Mention design choices: avatar of moderator, ready-to-conclude button,
+% participation indicators, etc.
+
+\section{User Interface (UI) Design}
+\label{sec:rd-ui}
+% TODO: describe the screens (lobby, ranking, session, conclusion, report).
+% Include wireframes / screenshots. Discuss accessibility choices.
+
+\section{Moderator Agent Design}
+\label{sec:rd-moderator-agent}
+% TODO: design rationale for the AI moderator:
+%  - Goals: neutrality, minimal intrusion, fairness
+%  - Trigger taxonomy: NO_PUSH, INACTIVE_VOICE, TIMER_25/30, soft (LLM)
+%  - Intervention categories: questioning, summarising, redirecting, time-keeping
+%  - Forced conclusion recap
+%  - Prompt engineering decisions
+
+\section{Use Case}
+\label{sec:rd-use-case}
+% TODO: walk through one representative session (e.g. Lost at Sea, 4 participants,
+% moderator ON). Step-by-step narrative covering lobby join, intro, individual
+% ranking, group discussion with one or two AI interventions, ready-to-conclude
+% flow, and report generation.
