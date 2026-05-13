@@ -1,29 +1,14 @@
 \chapter{State Of The Art}
 \label{ch:state-of-the-art}
 
-This chapter surveys the research landscape relevant to the design of
-speech-based conversational agents that participate in multi-party group
-interactions. The discussion is organised along four thematic axes.
-Section~\ref{sec:speech-architectures} reviews the architectural
-families for building speech-based conversational systems---cascaded,
-half-cascade, and end-to-end---and compares their trade-offs.
-Section~\ref{sec:turntaking} examines turn-taking mechanisms, from
-foundational linguistic models to recent machine-learning approaches,
-with particular attention to the challenges introduced by multi-party
-settings. Section~\ref{sec:vad-vap} covers Voice Activity Detection and
-Voice Activity Projection, the low-level perceptual building blocks that
-underpin turn management. Section~\ref{sec:multiparty-ca} presents
-multi-party conversational AI as an integrating theme, reviewing
-taxonomies, existing systems, and technical challenges. Finally,
-Section~\ref{sec:gaps} identifies eight research gaps at the
-intersection of these threads, and Section~\ref{sec:positioning}
-discusses the positioning of AIutami within the resulting landscape.
+This chapter surveys the research landscape relevant to the design of speech-based conversational agents for multi-party group interactions. Section~\ref{sec:speech-architectures} reviews the architectural families for speech-based conversational systems (cascaded, half-cascade, end-to-end) and compares their trade-offs. Section~\ref{sec:turntaking} examines turn-taking, from foundational linguistic models to recent machine-learning approaches, with attention to the multi-party setting. Section~\ref{sec:vad-vap} covers Voice Activity Detection and Voice Activity Projection, the low-level perceptual building blocks of turn management. Section~\ref{sec:multiparty-ca} presents multi-party conversational AI as a field, reviewing the main taxonomies and the technical obstacles that have kept the research largely text-based. Section~\ref{sec:ai-roles} surveys the spectrum of roles that AI agents can play in group conversation, from peer participants to full moderators. Section~\ref{sec:group-decision-making} connects this body of work to the broader literature on group decision-making and to the survival-task paradigm used to study it empirically. Section~\ref{sec:discussion} closes the chapter by drawing together the recurring gaps that emerge across these threads.
 
-% --- Speech-Based Conversational Architectures ---
 \input{Chapters/02_state_of_the_art/sec_speech_architectures}
 
-% --- Turn-Taking in Spoken Dialogue & VAD / VAP ---
 \input{Chapters/02_state_of_the_art/sec_turntaking_vadvap}
 
-% --- Multi-Party CA, Research Gaps, Positioning ---
 \input{Chapters/02_state_of_the_art/sec_multiparty}
+
+\input{Chapters/02_state_of_the_art/sec_group_decision_making}
+
+\input{Chapters/02_state_of_the_art/sec_discussion}
