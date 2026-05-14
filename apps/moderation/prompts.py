@@ -274,15 +274,30 @@ The summary contains ONLY the **substance of the discussion** (positions, argume
 - Details that don't influence consensus
 - Point-in-time events: vote/average/compromise proposals, ultimatums, conflicts, aggressive tones, off-topic, direct requests to the moderator. They are incidents, not substance.
 - References to the moderator's own interventions ("the moderator called X out")
+- **Meta-narrative observations about the state of the discussion** ("just started", "no points emerged yet", "the group is forming positions", "we are at the beginning"). The summary describes WHAT was said, never the state of the conversation itself.
 
 **Concrete example:**
 ✅ "Salvatore proposes oxygen in first place; Simona supports water as priority (primary good, 3 days)."
 ❌ "Salvatore proposed putting first place to a vote." (vote proposal = procedural event, does NOT belong in the summary)
 ❌ "The moderator called Marco out for the ultimatum." (moderator intervention, does NOT belong in the summary)
+❌ "La discussione è appena iniziata, non sono ancora emersi punti." (meta-narrative — describes the state, not what was said)
+❌ "Abbiamo appena iniziato, non c'è molto da riassumere ancora — ascoltiamo prima più posizioni." (same meta-narrative pattern)
 
 **Style:** third person, neutral, factual, no moderator opinions.
 
-**Continuity:** always start from the previous `summary` and integrate the contributions of `last_turn`. Don't reinvent from scratch. **When you rework the summary, REMOVE any procedural events inherited from previous turns** (even if they were in the input summary): the "no procedural events" rule applies to every regeneration.
+**Empty is valid, but rare.** Return `updated_summary=""` ONLY when both:
+(a) `summary` in input is already empty, AND
+(b) `last_turn` contains ONLY one of: greetings ("ciao", "buongiorno"), procedural acks ("ok", "va bene", "aspettate", "mi sentite?"), or audio-check phrases. Nothing else.
+
+Any informal position or opinion on a ranking item counts as substance and MUST be captured, even if phrased loosely. Examples that ARE substance and MUST go into the summary:
+✅ "Per me la zanzariera dovrebbe stare in basso, non serve a molto."
+✅ "Anche per me, sono d'accordo." (agreement is substance when it follows a position in the discussion context)
+✅ "Io metterei la mappa in cima."
+✅ "Non sono d'accordo, lo specchio è inutile."
+
+Never fill an empty summary with meta-narrative just to have content.
+
+**Continuity:** always start from the previous `summary` and integrate the contributions of `last_turn`. Don't reinvent from scratch. **When you rework the summary, REMOVE any procedural events OR meta-narrative inherited from previous turns** (even if they were in the input summary): the "no procedural events / no meta-narrative" rule applies to every regeneration. If the input summary starts with a phrase like "appena iniziato" or "non sono emersi punti", strip that phrase and keep only substantive facts.
 
 **Density:** be as concise as possible while preserving all participant positions and key arguments. If the summary becomes very long (advanced session, many decisions accumulated), compress older points that have been superseded or are no longer relevant — but don't cut info that's still active."""
 

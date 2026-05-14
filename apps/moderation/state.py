@@ -8,9 +8,11 @@ from django.core.cache import cache
 
 
 REDIS_KEY_TEMPLATE = "moderation:{session_id}"
-DEFAULT_SUMMARY = (
-    "La discussione è appena iniziata e non sono ancora emersi punti principali."
-)
+# Summary iniziale vuoto. Lasciamo che sia l'LLM a popolarlo quando emerge
+# sostanza nei turni. Una pre-popolazione con meta-narrativa tipo
+# "La discussione è appena iniziata..." veniva poi ancorata dal LLM via
+# regola di continuity del prompt, contaminando i recap successivi.
+DEFAULT_SUMMARY = ""
 
 
 @dataclass
