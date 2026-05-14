@@ -616,6 +616,13 @@ class ModerationService:
             )
             return cls._fallback_llm_output(mode, base_updated_summary, task=task)
 
+        # Diagnostic: log emitted key order to check whether the LLM honours
+        # the schema ordering specified in the prompt (CoT-via-ordering check).
+        logger.info(
+            "[MODERATION][LLM][KEY_ORDER] mode=%s keys=%s",
+            mode, list(parsed.keys()),
+        )
+
         updated_summary = parsed.get("updated_summary", summary_in)
         message_to_say = parsed.get("message_to_say")
         reason = parsed.get("reason", "unknown")
@@ -848,6 +855,11 @@ class ModerationService:
                 raw_output, str(e)
             )
             return cls._fallback_forced_conclusion(summary_in, conclusion_reason, task=task)
+
+        logger.info(
+            "[MODERATION][LLM][KEY_ORDER] mode=forced_conclusion keys=%s",
+            list(parsed.keys()),
+        )
 
         logger.info(
             "[MODERATION][LLM][CONCLUSION_RESPONSE] message=%r",
