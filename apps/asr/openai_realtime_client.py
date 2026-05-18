@@ -41,7 +41,6 @@ logger = logging.getLogger(__name__)
 
 
 REALTIME_URL = "wss://api.openai.com/v1/realtime?intent=transcription"
-REALTIME_BETA_HEADER = "realtime=v1"
 
 
 @dataclass
@@ -201,9 +200,13 @@ class OpenAIRealtimeTranscriptionClient:
             self._stopped_event.set()
 
     async def _main(self) -> None:
+        # GA API (since 2026-05-18): no more OpenAI-Beta header, session
+        # update uses `session.update` event type with `session.type` =
+        # "transcription" and nested audio.input.{format,transcription,
+        # turn_detection} structure. Beta shape returns
+        # `beta_api_shape_disabled`.
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "OpenAI-Beta": REALTIME_BETA_HEADER,
         }
 
         try:
@@ -214,25 +217,33 @@ class OpenAIRealtimeTranscriptionClient:
             ) as ws:
                 self._ws = ws
 
-                # Configurazione sessione transcription-only
+                # GA shape: session.update with nested audio.input config
                 session_update = {
-                    "type": "transcription_session.update",
+                    "type": "session.update",
                     "session": {
-                        "input_audio_format": "pcm16",
-                        "input_audio_transcription": {
-                            "model": self.model,
-                            "language": self.language,
-                        },
-                        "turn_detection": {
-                            "type": "server_vad",
-                            "threshold": 0.5,
-                            "prefix_padding_ms": 300,
-                            "silence_duration_ms": 500,
+                        "type": "transcription",
+                        "audio": {
+                            "input": {
+                                "format": {
+                                    "type": "audio/pcm",
+                                    "rate": self.sample_rate_hz,
+                                },
+                                "transcription": {
+                                    "model": self.model,
+                                    "language": self.language,
+                                },
+                                "turn_detection": {
+                                    "type": "server_vad",
+                                    "threshold": 0.5,
+                                    "prefix_padding_ms": 300,
+                                    "silence_duration_ms": 500,
+                                },
+                            },
                         },
                     },
                 }
                 await ws.send(json.dumps(session_update))
-                logger.debug("[OPENAI-ASR] transcription_session.update inviato")
+                logger.debug("[OPENAI-ASR] session.update inviato (GA shape)")
 
                 self._connected_event.set()
 
@@ -350,7 +361,12 @@ class OpenAIRealtimeTranscriptionClient:
             logger.warning("[OPENAI-ASR][transcription_failed] event=%s", event)
             return
 
-        if et in ("transcription_session.created", "transcription_session.updated"):
+        if et in (
+            "session.created",
+            "session.updated",
+            "transcription_session.created",
+            "transcription_session.updated",
+        ):
             logger.debug("[OPENAI-ASR][%s] id=%s", et, event.get("session", {}).get("id"))
             return
 
