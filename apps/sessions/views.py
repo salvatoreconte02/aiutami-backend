@@ -171,13 +171,13 @@ class SessionReadyToConcludeView(APIView):
         total_count = qs.count()
         ready_count = qs.filter(ready_to_conclude=True).count()
 
-        # Messaggio accodato per evitare errori "No handler" su consumer WS.
-        # GUARD mod-OFF: in modalità "no moderator" non accodiamo l'annuncio
-        # vocale. Il frontend transita comunque a CONCLUSION via lo
-        # STATE_CHANGED broadcast più sotto (quando tutti i partecipanti
-        # sono pronti). Visto in produzione 2026-05-11: la view accodava
-        # i messaggi "X ha indicato di essere pronto…" / "Tutti hanno
-        # deciso…" anche in mod OFF, contaminando il braccio di controllo.
+        # Mod ON: accoda annuncio vocale del moderatore. La transizione a
+        # CONCLUSION arriva dopo il TTS in _flush_pending_tts_messages
+        # (quando tutti sono pronti, il messaggio ha trigger_conclusion=True).
+        # Mod OFF: skip dell'annuncio vocale (contaminerebbe il braccio di
+        # controllo) ma transizione silenziosa quando tutti sono pronti —
+        # design §5 riga 5 "Conclusion in mod OFF — Skip totale, transizione
+        # silenziosa".
         # Vedi docs/plans/2026-05-07-no-moderator-mode-design.md §6.4.
         if session.state == SessionState.ACTIVE and session.moderator_enabled:
             from apps.tasks.registry import get_task
@@ -199,8 +199,15 @@ class SessionReadyToConcludeView(APIView):
                 "READY_TO_CONCLUDE",
                 trigger_conclusion=result.trigger_conclusion,
             )
-
-        # Transizione a CONCLUSION avviene dopo TTS nel ws_consumer
+        elif (
+            session.state == SessionState.ACTIVE
+            and not session.moderator_enabled
+            and ready_count == total_count
+        ):
+            from django.utils import timezone
+            session.state = SessionState.CONCLUSION
+            session.conclusion_at = timezone.now()
+            session.save(update_fields=["state", "conclusion_at"])
         detail_data = SessionDetailSerializer(
             session,
             context={"request": request},
