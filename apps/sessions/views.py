@@ -204,10 +204,19 @@ class SessionReadyToConcludeView(APIView):
             and not session.moderator_enabled
             and ready_count == total_count
         ):
-            from django.utils import timezone
-            session.state = SessionState.CONCLUSION
-            session.conclusion_at = timezone.now()
-            session.save(update_fields=["state", "conclusion_at"])
+            # Mod-OFF: accodiamo un messaggio "silent" con
+            # trigger_conclusion=True invece di transizionare subito.
+            # _flush_pending_tts_messages (chiamato dal ws_consumer dopo
+            # ogni end_speak in mod-OFF) attende state=IDLE prima di
+            # eseguire la transizione → niente più cut-off di chi sta
+            # parlando. Il TTS viene skippato in mod-OFF dal guard
+            # interno di _flush.
+            enqueue_message(
+                session_id,
+                "",  # contenuto vuoto: in mod-OFF non viene mai parlato
+                "READY_TO_CONCLUDE",
+                trigger_conclusion=True,
+            )
         detail_data = SessionDetailSerializer(
             session,
             context={"request": request},

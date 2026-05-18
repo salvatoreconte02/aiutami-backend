@@ -407,6 +407,13 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
                 cache.delete(cache_key)
             except Exception:
                 pass
+            # Flush pending TTS messages: in mod-OFF la coda contiene
+            # solo messaggi "silent" con trigger_conclusion=True accodati
+            # dalla view ready_to_conclude quando tutti sono pronti.
+            # _flush_pending verifica state=IDLE (vero qui, end_speak
+            # ha appena chiuso il turno) e fa la transizione a CONCLUSION
+            # — senza più cut-off del parlante in corso.
+            await self._flush_pending_tts_messages()
             return
 
         # 3) Entrata nella fase di moderazione: blocco nuovi turni umani
