@@ -382,6 +382,31 @@ class TurnsConsumer(AsyncJsonWebsocketConsumer):
         # via trigger_loop o "tutti pronti").
         # Vedi docs/plans/2026-05-07-no-moderator-mode-design.md §6.4(b).
         if not await self._get_moderator_enabled(self.session_id):
+            # Persist HUMAN_TURN DiscussionEvent: in mod-ON la
+            # persistenza la fa moderation/service.py dentro la pipeline
+            # (saltata qui). Senza, i transcript del braccio di controllo
+            # verrebbero persi e l'analisi tesi sarebbe rotta.
+            cache_key = f"asr:final_segments:{str(self.session_id)}:{int(user.id)}"
+            last_turn_text = await self._collect_asr_transcript_with_wait(cache_key)
+            if not last_turn_text:
+                last_turn_text = (content.get("transcript") or "")
+                last_turn_text = str(last_turn_text).strip()
+            from apps.sessions.event_log import persist_event_async
+            from apps.accounts.utils import display_name_for_user
+            asyncio.create_task(persist_event_async(
+                session_id=self.session_id,
+                event_type="human_turn",
+                speaker_name=display_name_for_user(user),
+                content=last_turn_text or "",
+                metadata={
+                    "duration_s": 0.0,
+                    "empty_transcription": not bool(last_turn_text),
+                },
+            ))
+            try:
+                cache.delete(cache_key)
+            except Exception:
+                pass
             return
 
         # 3) Entrata nella fase di moderazione: blocco nuovi turni umani
