@@ -72,12 +72,7 @@ def generate_intro_message(session_id: str) -> str:
     session = Session.objects.get(id=session_id)
     task = get_task(session.context)
 
-    # --- DEBUG: intro breve (~5s di TTS) per testing. ---
-    # Per ripristinare l'intro completo (~2 min con scenario + ground rules),
-    # commentare il return qui sotto e ri-attivare il blocco originale.
-    return f"Benvenuti {format_participant_names(names)}. Buona discussione."
-
-    # return INTRO_MESSAGE_TEMPLATE.format(
-    #     nomi=format_participant_names(names),
-    #     tail=task.intro_message_tail(),
-    # )
+    return INTRO_MESSAGE_TEMPLATE.format(
+        nomi=format_participant_names(names),
+        tail=task.intro_message_tail(),
+    )
