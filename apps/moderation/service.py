@@ -593,7 +593,7 @@ class ModerationService:
                     },
                 ],
                 temperature=0.4,
-                max_tokens=512,
+                max_tokens=2048,
                 response_format={"type": "json_object"},
             )
 
@@ -831,7 +831,7 @@ class ModerationService:
                     {"role": "user", "content": json.dumps(llm_input, ensure_ascii=False)},
                 ],
                 temperature=0.5,  # Leggermente più alta per tono più caldo
-                max_tokens=512,
+                max_tokens=2048,
                 response_format={"type": "json_object"},
             )
 
